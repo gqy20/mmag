@@ -2,20 +2,32 @@
 LLM 适配器 (Anthropic) — 支持单轮对话 + Agentic Tool Use 循环
 """
 
-import asyncio
 import time
-from typing import Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, cast
 
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 from .config import config
 from .logger import get_logger, trace
 from .tools import ToolRegistry
 
+if TYPE_CHECKING:
+    from anthropic.types import (
+        MessageParam,
+        TextBlockParam,
+        ToolResultBlockParam,
+        ToolUseBlockParam,
+    )
+
 log = get_logger(__name__)
 
 # 默认最大工具调用轮次
 DEFAULT_MAX_TOOL_ROUNDS = 10
+
+
+class LLMError(Exception):
+    """LLM 调用失败的领域异常 — 包装 SDK 异常/网络异常供上层决策"""
 
 
 class LLM:
@@ -25,17 +37,18 @@ class LLM:
         kwargs: dict[str, Any] = {"api_key": config.anthropic_api_key}
         if config.anthropic_base_url:
             kwargs["base_url"] = config.anthropic_base_url
-        self.client = Anthropic(**kwargs)
+        # 原生异步 client — SDK 内部用 httpx.AsyncClient，避免 to_thread 线程池开销
+        self.client = AsyncAnthropic(**kwargs)
         self.model = config.anthropic_model
         self.call_count = 0
         log.info(
             "LLM 初始化完成 | 模型: %s | API: %s", self.model, config.anthropic_base_url or "官方"
         )
 
-    # ---- 单轮对话（保持向后兼容）----
+    # ---- 单轮对话 ----
 
     async def chat(self, messages: list[dict], system: str = "", max_tokens: int = 1024) -> str:
-        """普通对话（无工具）
+        """无工具的普通对话 — 也是 agent_loop 在 tools 为空时的降级入口
 
         注意: StepFun 等兼容 API 可能返回 ThinkingBlock (思考过程)，
         需要过滤掉，只取 TextBlock 的文本内容。
@@ -50,15 +63,15 @@ class LLM:
             }
             if system:
                 kwargs["system"] = system
-            response = await asyncio.to_thread(self.client.messages.create, **kwargs)
-            texts = _extract_text_blocks(response)
+            response = await self.client.messages.create(**kwargs)
+            texts = _parse_response(response).texts
             elapsed = time.monotonic() - t0
             log.debug("%s LLM 单轮调用 (%.3fs, %d 字符输出)", trace.prefix(), elapsed, len(texts))
             return texts if texts else "(模型返回为空)"
         except Exception as e:
             elapsed = time.monotonic() - t0
-            log.error("%s LLM 调用失败 (%.3fs): %s", trace.prefix(), elapsed, e)
-            return f"⚠️ LLM 服务暂时不可用: {e}"
+            log.error("%s LLM 调用失败 (%.3fs): %s", trace.prefix(), elapsed, e, exc_info=True)
+            raise LLMError(str(e)) from e
 
     async def chat_with_system(
         self, system_prompt: str, user_message: str, max_tokens: int = 1024
@@ -125,7 +138,7 @@ class LLM:
                 if system:
                     kwargs["system"] = system
 
-                response = await asyncio.to_thread(self.client.messages.create, **kwargs)
+                response = await self.client.messages.create(**kwargs)
             except Exception as e:
                 elapsed = time.monotonic() - round_t0
                 log.error(
@@ -135,34 +148,14 @@ class LLM:
                     max_rounds,
                     elapsed,
                     e,
+                    exc_info=True,
                 )
-                return f"⚠️ LLM 服务暂时不可用: {e}"
+                raise LLMError(f"Round {round_i} LLM 调用失败: {e}") from e
 
-            # ---- 解析响应 ----
-            text_parts = []
-            tool_calls = []
-
-            for block in response.content:
-                block_type = getattr(block, "type", None)
-
-                if block_type == "thinking":
-                    continue
-
-                elif block_type == "text":
-                    if hasattr(block, "text") and block.text.strip():
-                        text_parts.append(block.text)
-
-                elif block_type == "tool_use":
-                    tc_input = {}
-                    if hasattr(block, "input") and block.input:
-                        tc_input = dict(block.input)
-                    tool_calls.append(
-                        {
-                            "id": getattr(block, "id", f"toolu_{round_i}"),
-                            "name": getattr(block, "name", ""),
-                            "input": tc_input,
-                        }
-                    )
+            # ---- 解析响应 (用 _parse_response 统一处理 thinking/text/tool_use) ----
+            parsed = _parse_response(response)
+            text_parts = parsed.texts
+            tool_calls = parsed.tool_calls
 
             round_elapsed = time.monotonic() - round_t0
 
@@ -194,35 +187,41 @@ class LLM:
             )
 
             # 把 LLM 这一轮的完整响应加入历史（含文本 + 工具调用意图）
-            assistant_content = []
+            # 用 SDK 的 TypedDict 标注，保留裸 dict 形式（runtime 不验证，pylance/mypy 能检查）
+            assistant_content: list[TextBlockParam | ToolUseBlockParam] = []
             if text_parts:
                 assistant_content.append({"type": "text", "text": "\n".join(text_parts)})
             for tc in tool_calls:
                 assistant_content.append(
-                    {
-                        "type": "tool_use",
-                        "id": tc["id"],
-                        "name": tc["name"],
-                        "input": tc["input"],
-                    }
+                    cast(
+                        "ToolUseBlockParam",
+                        {
+                            "type": "tool_use",
+                            "id": tc["id"],
+                            "name": tc["name"],
+                            "input": tc["input"],
+                        },
+                    )
                 )
-            working_messages.append({"role": "assistant", "content": assistant_content})
+            working_messages.append(
+                cast("MessageParam", {"role": "assistant", "content": assistant_content})
+            )
 
             # 逐个执行工具，收集结果
             for tc in tool_calls:
                 result_str = await tool_registry.execute(tc["name"], tc["input"])
-
+                tool_result_content: list[ToolResultBlockParam] = [
+                    cast(
+                        "ToolResultBlockParam",
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tc["id"],
+                            "content": result_str,
+                        },
+                    )
+                ]
                 working_messages.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tc["id"],
-                                "content": result_str,
-                            }
-                        ],
-                    }
+                    cast("MessageParam", {"role": "user", "content": tool_result_content})
                 )
 
         # 达到最大轮次限制
@@ -257,10 +256,36 @@ class LLM:
 # ============================================================
 
 
-def _extract_text_blocks(response) -> str:
-    """从 LLM 响应中提取所有 TextBlock 文本（跳过 ThinkingBlock 等）"""
-    texts = []
+@dataclass
+class ParsedResponse:
+    """LLM 响应的结构化解析结果"""
+
+    texts: list[str] = field(default_factory=list)  # 所有 TextBlock 文本（按顺序）
+    tool_calls: list[dict] = field(default_factory=list)  # 所有 ToolUseBlock
+
+
+def _parse_response(response) -> ParsedResponse:
+    """把 LLM 响应拆成结构化数据
+
+    处理三种 block:
+      - thinking: 思考过程，直接跳过
+      - text: 收集 .text（去空）
+      - tool_use: 收集 (id, name, input)
+
+    用 getattr 校验 type 是因为 block 是 SDK 的 Pydantic 联合类型，类型分支由 type 字段决定。
+    其他字段 (text, id, name, input) 在 type 匹配后是 SDK 强保证的，可直接读。
+    """
+    parsed = ParsedResponse()
     for block in response.content:
-        if hasattr(block, "text") and getattr(block, "type", None) == "text":
-            texts.append(block.text)
-    return "\n".join(texts).strip()
+        block_type = getattr(block, "type", None)
+
+        if block_type == "thinking":
+            continue
+        elif block_type == "text":
+            if block.text.strip():
+                parsed.texts.append(block.text)
+        elif block_type == "tool_use":
+            parsed.tool_calls.append(
+                {"id": block.id, "name": block.name, "input": dict(block.input)}
+            )
+    return parsed

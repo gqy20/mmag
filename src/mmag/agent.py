@@ -11,7 +11,7 @@ import time
 
 from .client import MMClient
 from .config import _log_config_loading, config
-from .llm import LLM
+from .llm import LLM, LLMError
 from .logger import get_logger, trace
 from .mcp_bridge import MCPClientBridge
 from .memory import Memory
@@ -412,13 +412,19 @@ class Agent:
             tag,
             len(context["messages"]),
         )
-        response = await self.llm.agent_loop(
-            messages=context["messages"],
-            system=context["system"],
-            tools=self.tool_registry.get_schema_list(),
-            tool_registry=self.tool_registry,
-            max_rounds=max_rounds,
-        )
+        try:
+            response = await self.llm.agent_loop(
+                messages=context["messages"],
+                system=context["system"],
+                tools=self.tool_registry.get_schema_list(),
+                tool_registry=self.tool_registry,
+                max_rounds=max_rounds,
+            )
+        except LLMError as e:
+            # LLM 调用失败 (网络/SDK异常) — 给用户友好提示 + log 留底
+            log.error("%s [%s] LLM 调用失败: %s", trace.prefix(), tag, e, exc_info=True)
+            response = "⚠️ LLM 服务暂时不可用，请稍后再试。"
+
         elapsed = time.monotonic() - t0
         log.info(
             "%s [%s] Agent Loop 返回 (%.1fs, %d 字符): %s",
@@ -428,8 +434,8 @@ class Agent:
             len(response),
             response[:150],
         )
-        if not response or response.startswith("⚠️"):
-            log.warning("%s [%s] LLM 返回异常或为空: %s", trace.prefix(), tag, response[:100])
+        if not response:
+            log.warning("%s [%s] LLM 返回为空", trace.prefix(), tag)
         else:
             result = await self.reply(post, response)
             log.info("%s [%s] 回复已发送 post_id=%s", trace.prefix(), tag, result)
