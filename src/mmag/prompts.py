@@ -6,7 +6,6 @@ from pathlib import Path
 
 import yaml
 
-from .config import config
 from .logger import get_logger
 
 log = get_logger(__name__)
@@ -24,7 +23,7 @@ class PromptManager:
         if not self.path.exists():
             log.warning("提示词文件不存在: %s，使用内置默认值", self.path)
             return
-        with open(self.path, "r", encoding="utf-8") as f:
+        with open(self.path, encoding="utf-8") as f:
             self._templates = yaml.safe_load(f) or {}
         log.info("已加载 %d 个提示词模板", len(self._templates))
 

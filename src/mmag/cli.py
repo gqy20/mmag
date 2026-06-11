@@ -4,18 +4,19 @@ CLI 入口
 
 import asyncio
 
-from .config import config
-from .logger import init_logging, get_logger
 from .agent import Agent
+from .config import config
+from .logger import get_logger, init_logging
 
 log = get_logger(__name__)
 
 
 async def main():
-    # 统一日志初始化（控制台 + 可选文件）
+    # 统一日志初始化（控制台 + 按日期分文件 + 自动清理）
     init_logging(
         level=config.log_level,
-        log_file=config.log_file or None,
+        log_dir=config.log_dir or None,
+        retain_days=config.log_retention_days,
     )
 
     agent = Agent()

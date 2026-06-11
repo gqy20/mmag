@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from .logger import get_logger, trace
 
@@ -43,7 +46,9 @@ class ToolRegistry:
         if tool.name in self._tools:
             log.warning("工具 '%s' 已存在，将被覆盖", tool.name)
         self._tools[tool.name] = tool
-        log.info("工具已注册: %s (%d 参数)", tool.name, len(tool.input_schema.get("properties", {})))
+        log.info(
+            "工具已注册: %s (%d 参数)", tool.name, len(tool.input_schema.get("properties", {}))
+        )
 
     def get_all(self) -> list[Tool]:
         """获取所有已注册的工具"""
@@ -82,8 +87,12 @@ class ToolRegistry:
             return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
 
         t0 = time.monotonic()
-        log.info("%s 调用工具: %s(%s)", trace.prefix(), name,
-                 json.dumps(input_data, ensure_ascii=False)[:200])
+        log.info(
+            "%s 调用工具: %s(%s)",
+            trace.prefix(),
+            name,
+            json.dumps(input_data, ensure_ascii=False)[:200],
+        )
 
         try:
             result = tool.handler(**input_data)
@@ -100,14 +109,20 @@ class ToolRegistry:
                 result_str = json.dumps({"result": result}, ensure_ascii=False, default=str)
 
             elapsed = time.monotonic() - t0
-            log.info("%s 工具完成: %s (%.3fs, 结果 %d 字符)",
-                     trace.prefix(), name, elapsed, len(result_str))
+            log.info(
+                "%s 工具完成: %s (%.3fs, 结果 %d 字符)",
+                trace.prefix(),
+                name,
+                elapsed,
+                len(result_str),
+            )
             return result_str
 
         except Exception as e:
             elapsed = time.monotonic() - t0
-            log.error("%s 工具 '%s' 执行失败 (%.3fs): %s",
-                      trace.prefix(), name, elapsed, e, exc_info=True)
+            log.error(
+                "%s 工具 '%s' 执行失败 (%.3fs): %s", trace.prefix(), name, elapsed, e, exc_info=True
+            )
             return json.dumps(
                 {"error": f"工具执行错误: {type(e).__name__}: {e}"},
                 ensure_ascii=False,
@@ -126,8 +141,8 @@ def build_builtin_tools(mm_client, memory) -> list[Tool]:
         Tool(
             name="get_posts",
             description=(
-                "获取频道最近的消息历史。"
-                "用于回顾讨论内容、总结对话、查找特定信息。"
+                "获取频道最近的消息历史。用于回顾讨论内容、总结对话、查找特定信息。"
+                "优先从本地缓存读取（实时性好），缓存不足时自动从服务器拉取。"
             ),
             input_schema={
                 "type": "object",
@@ -145,15 +160,12 @@ def build_builtin_tools(mm_client, memory) -> list[Tool]:
                 "required": ["channel_id"],
             },
             handler=lambda channel_id, limit=30: _format_posts(
-                mm_client.get_posts(channel_id, min(limit, 100))
+                _get_posts_cached(mm_client, memory, channel_id, min(limit, 100))
             ),
         ),
         Tool(
             name="search_knowledge",
-            description=(
-                "搜索团队知识库中的信息。"
-                "用于查找之前记录的决策、流程、约定等知识。"
-            ),
+            description=("搜索团队知识库中的信息。用于查找之前记录的决策、流程、约定等知识。"),
             input_schema={
                 "type": "object",
                 "properties": {
@@ -180,8 +192,7 @@ def build_builtin_tools(mm_client, memory) -> list[Tool]:
         Tool(
             name="get_channel_info",
             description=(
-                "获取频道的详细信息，包括名称、类型、成员数等。"
-                "用于了解当前所在频道的基本信息。"
+                "获取频道的详细信息，包括名称、类型、成员数等。用于了解当前所在频道的基本信息。"
             ),
             input_schema={
                 "type": "object",
@@ -193,9 +204,7 @@ def build_builtin_tools(mm_client, memory) -> list[Tool]:
                 },
                 "required": ["channel_id"],
             },
-            handler=lambda channel_id: _format_channel(
-                mm_client.get_channel(channel_id)
-            ),
+            handler=lambda channel_id: _format_channel(mm_client.get_channel(channel_id)),
         ),
         Tool(
             name="save_knowledge",
@@ -222,15 +231,12 @@ def build_builtin_tools(mm_client, memory) -> list[Tool]:
                 },
                 "required": ["channel_id", "key", "value"],
             },
-            handler=lambda channel_id, key, value: _save_knowledge(
-                memory, channel_id, key, value
-            ),
+            handler=lambda channel_id, key, value: _save_knowledge(memory, channel_id, key, value),
         ),
         Tool(
             name="get_user_profile",
             description=(
-                "查看用户的画像信息，包括活跃度、专业领域、偏好等。"
-                "用于了解团队成员的背景和特点。"
+                "查看用户的画像信息，包括活跃度、专业领域、偏好等。用于了解团队成员的背景和特点。"
             ),
             input_schema={
                 "type": "object",
@@ -264,11 +270,13 @@ def _format_posts(posts: list[dict]) -> dict:
 
     formatted = []
     for p in posts[-50:]:  # 最多返回 50 条
-        formatted.append({
-            "user": p.get("username", "?"),
-            "message": (p.get("message") or "")[:500],
-            "time": p.get("create_at", ""),
-        })
+        formatted.append(
+            {
+                "user": p.get("username", "?"),
+                "message": (p.get("message") or "")[:500],
+                "time": p.get("create_at", ""),
+            }
+        )
 
     return {"count": len(formatted), "messages": formatted}
 
@@ -280,11 +288,13 @@ def _format_knowledge(results: list[dict]) -> dict:
 
     items = []
     for r in results:
-        items.append({
-            "key": r["key"],
-            "value": r["value"],
-            "confidence": r.get("_score", r.get("confidence", 0)),
-        })
+        items.append(
+            {
+                "key": r["key"],
+                "value": r["value"],
+                "confidence": r.get("_score", r.get("confidence", 0)),
+            }
+        )
 
     return {"count": len(items), "items": items}
 
@@ -296,7 +306,9 @@ def _format_channel(ch: dict) -> dict:
         "name": ch.get("name", ""),
         "display_name": ch.get("display_name", ""),
         "type": ch.get("type", ""),
-        "type_label": {"O": "公开", "P": "私有", "D": "私聊"}.get(ch.get("type", ""), ch.get("type", "")),
+        "type_label": {"O": "公开", "P": "私有", "D": "私聊"}.get(
+            ch.get("type", ""), ch.get("type", "")
+        ),
     }
 
 
@@ -307,14 +319,79 @@ def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:
 
 
 def _format_profile(profile: dict, username: str) -> dict:
-    """格式化用户画像"""
+    """格式化用户画像（含自动推断的话题/时段/风格）"""
+    import json
+
     if not profile:
-        return {"username": username, "note": "暂无画像信息"}
+        return {"username": username, "note": "暂无画像信息，该用户尚未发言或画像未建立"}
+
+    import contextlib
+
+    # 解析 JSON 字段
+    topics = []
+    if profile.get("topics"):
+        with contextlib.suppress(Exception):
+            topics = json.loads(profile["topics"])
+
+    active_hours_raw = {}
+    if profile.get("active_hours"):
+        with contextlib.suppress(Exception):
+            active_hours_raw = json.loads(profile["active_hours"])
+
+    # 取最活跃的 Top 3 时段
+    top_hours = sorted(active_hours_raw.items(), key=lambda x: x[1], reverse=True)[:3]
+    peak_hours = [f"{h}({c}次)" for h, c in top_hours] if top_hours else []
 
     return {
         "username": username,
         "message_count": profile.get("message_count", 0),
-        "expertise": profile.get("expertise", "未知"),
+        "topics": topics[-10:] if topics else [],  # 最近话题
+        "active_hours": peak_hours,
         "style": profile.get("style", "未知"),
-        "notes": profile.get("notes", ""),
+        "first_seen": profile.get("first_seen", ""),
+        "last_interaction": profile.get("last_interaction", ""),
     }
+
+
+# ============================================================
+# 缓存优先的消息获取
+# ============================================================
+
+
+def _get_posts_cached(mm_client, memory, channel_id: str, limit: int) -> list[dict]:
+    """获取频道消息：本地缓存优先，不足时 fallback 到 REST API
+
+    策略:
+      1. 先查 SQLite message_cache（_on_posted 实时写入的）
+      2. 缓存数量 >= 需求的 60% → 直接返回缓存（避免每次都打 API）
+      3. 缓存不足 → 从 REST API 拉取，并回填到缓存
+      4. 缓存为空 → 直接走 REST API
+    """
+    # 尝试从本地缓存读取
+    cached = memory.get_recent_messages(channel_id, limit=limit)
+    cache_threshold = max(int(limit * 0.6), 3)  # 至少 3 条或需求的 60%
+
+    if len(cached) >= cache_threshold:
+        log.info(
+            "get_posts: 命中本地缓存 (需要 %d 条, 缓存 %d 条)",
+            limit,
+            len(cached),
+        )
+        return cached
+
+    # 缓存不足，走 REST API
+    log.info(
+        "get_posts: 缓存不足 (需 %d 条, 缓存 %d 条), 回退 REST API",
+        limit,
+        len(cached),
+    )
+    rest_posts = mm_client.get_posts(channel_id, limit=limit)
+
+    # 将 REST 结果回填到本地缓存（加速下次查询）
+    if rest_posts:
+        for p in rest_posts:
+            p["channel_id"] = channel_id  # 确保有 channel_id
+            memory.cache_message(p)
+        log.debug("get_posts: 已回填 %d 条消息到本地缓存", len(rest_posts))
+
+    return rest_posts if rest_posts else cached

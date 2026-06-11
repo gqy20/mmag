@@ -22,9 +22,23 @@ else:
 def _log_config_loading():
     """打印关键配置项，方便调试"""
     keys = [
-        "MM_URL", "MM_TOKEN", "MM_TEAM_ID", "MM_CHANNEL_ID",
-        "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
-        "BOT_NAME", "LISTEN_PROBABILITY", "LOG_LEVEL",
+        "MM_URL",
+        "MM_TOKEN",
+        "MM_TEAM_ID",
+        "MM_CHANNEL_ID",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "BOT_NAME",
+        "LISTEN_PROBABILITY",
+        "LOG_LEVEL",
+        "LOG_DIR",
+        "LOG_RETENTION_DAYS",
+        "MEMORY_CACHE_MAX",
+        "MEMORY_SUMMARY_INTERVAL",
+        "MEMORY_COMPACTION_KEEP",
+        "MEMORY_SUMMARY_BATCH",
+        "MEMORY_CONTEXT_WINDOW",
     ]
     log.info("═══ 配置加载 ═══")
     for k in keys:
@@ -39,6 +53,7 @@ def _log_config_loading():
 @dataclass
 class Config:
     """从 .env 加载配置"""
+
     # Mattermost
     mm_url: str = os.getenv("MM_URL", "http://localhost:8065").rstrip("/")
     mm_token: str = os.getenv("MM_TOKEN", "")
@@ -58,11 +73,29 @@ class Config:
     typing_delay_max: float = float(os.getenv("TYPING_DELAY_MAX", "3"))
     memory_db_path: str = os.getenv("MEMORY_DB_PATH", "./agent_memory.db")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
-    log_file: str = os.getenv("LOG_FILE", "")  # 日志文件路径（空则不写文件）
+    log_dir: str = os.getenv("LOG_DIR", "logs")  # 日志目录（空则不写文件）
+    log_retention_days: int = int(os.getenv("LOG_RETENTION_DAYS", "30"))  # 日志保留天数
+    # ── 记忆系统 (Layer 1 + Layer 2) ──
+    memory_cache_max: int = int(
+        os.getenv("MEMORY_CACHE_MAX", "100000")
+    )  # 每频道缓存消息上限 (约70MB)
+    memory_summary_interval: int = int(
+        os.getenv("MEMORY_SUMMARY_INTERVAL", "100")
+    )  # 每 N 条触发一次摘要
+    memory_compaction_keep: int = int(
+        os.getenv("MEMORY_COMPACTION_KEEP", "80000")
+    )  # 超限清理后保留条数 (80%)
+    memory_summary_batch: int = int(os.getenv("MEMORY_SUMMARY_BATCH", "50"))  # LLM 摘要每批消息数
+    memory_context_window: int = int(
+        os.getenv("MEMORY_CONTEXT_WINDOW", "100")
+    )  # 摘要时注入的前序消息数量（保持上下文连贯）
 
     @property
     def ws_url(self) -> str:
-        return self.mm_url.replace("http://", "ws://").replace("https://", "wss://") + "/api/v4/websocket"
+        return (
+            self.mm_url.replace("http://", "ws://").replace("https://", "wss://")
+            + "/api/v4/websocket"
+        )
 
     @property
     def api_base(self) -> str:

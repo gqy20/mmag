@@ -2,7 +2,7 @@
 Mattermost REST API 客户端
 """
 
-from typing import Any, Optional
+from typing import Any
 
 import requests
 
@@ -20,7 +20,7 @@ class MMClient:
         self.session.headers.update(config.headers)
         self._users: dict[str, dict] = {}  # user_id → user info
         self._channels: dict[str, dict] = {}  # channel_id → channel info
-        self._me: Optional[dict] = None
+        self._me: dict | None = None
 
     def _get(self, path: str, **params) -> Any:
         resp = self.session.get(f"{config.api_base}{path}", params=params)
@@ -55,12 +55,15 @@ class MMClient:
                 self._channels[channel_id] = self._get(f"/channels/{channel_id}")
             except Exception:
                 self._channels[channel_id] = {
-                    "id": channel_id, "name": channel_id[:8], "display_name": channel_id[:8],
+                    "id": channel_id,
+                    "name": channel_id[:8],
+                    "display_name": channel_id[:8],
                 }
         return self._channels[channel_id]
 
-    def send_post(self, channel_id: str, message: str,
-                  root_id: str = "", props: Optional[dict] = None) -> Optional[str]:
+    def send_post(
+        self, channel_id: str, message: str, root_id: str = "", props: dict | None = None
+    ) -> str | None:
         """发送消息到频道"""
         payload: dict[str, Any] = {
             "channel_id": channel_id,

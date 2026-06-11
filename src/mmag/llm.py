@@ -3,9 +3,8 @@ LLM 适配器 (Anthropic) — 支持单轮对话 + Agentic Tool Use 循环
 """
 
 import asyncio
-import json
 import time
-from typing import Any, Optional
+from typing import Any
 
 from anthropic import Anthropic
 
@@ -29,13 +28,13 @@ class LLM:
         self.client = Anthropic(**kwargs)
         self.model = config.anthropic_model
         self.call_count = 0
-        log.info("LLM 初始化完成 | 模型: %s | API: %s",
-                 self.model, config.anthropic_base_url or "官方")
+        log.info(
+            "LLM 初始化完成 | 模型: %s | API: %s", self.model, config.anthropic_base_url or "官方"
+        )
 
     # ---- 单轮对话（保持向后兼容）----
 
-    async def chat(self, messages: list[dict], system: str = "",
-                   max_tokens: int = 1024) -> str:
+    async def chat(self, messages: list[dict], system: str = "", max_tokens: int = 1024) -> str:
         """普通对话（无工具）
 
         注意: StepFun 等兼容 API 可能返回 ThinkingBlock (思考过程)，
@@ -54,16 +53,16 @@ class LLM:
             response = await asyncio.to_thread(self.client.messages.create, **kwargs)
             texts = _extract_text_blocks(response)
             elapsed = time.monotonic() - t0
-            log.debug("%s LLM 单轮调用 (%.3fs, %d 字符输出)",
-                       trace.prefix(), elapsed, len(texts))
+            log.debug("%s LLM 单轮调用 (%.3fs, %d 字符输出)", trace.prefix(), elapsed, len(texts))
             return texts if texts else "(模型返回为空)"
         except Exception as e:
             elapsed = time.monotonic() - t0
             log.error("%s LLM 调用失败 (%.3fs): %s", trace.prefix(), elapsed, e)
             return f"⚠️ LLM 服务暂时不可用: {e}"
 
-    async def chat_with_system(self, system_prompt: str, user_message: str,
-                                max_tokens: int = 1024) -> str:
+    async def chat_with_system(
+        self, system_prompt: str, user_message: str, max_tokens: int = 1024
+    ) -> str:
         """带系统提示词的对话快捷方法"""
         return await self.chat(
             messages=[{"role": "user", "content": user_message}],
@@ -104,8 +103,13 @@ class LLM:
         working_messages = list(messages)  # 拷贝，避免污染原始消息
         loop_t0 = time.monotonic()
 
-        log.info("%s Agent Loop 开始 | 消息数=%d 工具数=%d 最大轮次=%d",
-                 trace.prefix(), len(working_messages), len(tools_schema), max_rounds)
+        log.info(
+            "%s Agent Loop 开始 | 消息数=%d 工具数=%d 最大轮次=%d",
+            trace.prefix(),
+            len(working_messages),
+            len(tools_schema),
+            max_rounds,
+        )
 
         for round_i in range(1, max_rounds + 1):
             self.call_count += 1
@@ -121,13 +125,17 @@ class LLM:
                 if system:
                     kwargs["system"] = system
 
-                response = await asyncio.to_thread(
-                    self.client.messages.create, **kwargs
-                )
+                response = await asyncio.to_thread(self.client.messages.create, **kwargs)
             except Exception as e:
                 elapsed = time.monotonic() - round_t0
-                log.error("%s Round %d/%d LLM 调用失败 (%.3fs): %s",
-                          trace.prefix(), round_i, max_rounds, elapsed, e)
+                log.error(
+                    "%s Round %d/%d LLM 调用失败 (%.3fs): %s",
+                    trace.prefix(),
+                    round_i,
+                    max_rounds,
+                    elapsed,
+                    e,
+                )
                 return f"⚠️ LLM 服务暂时不可用: {e}"
 
             # ---- 解析响应 ----
@@ -148,11 +156,13 @@ class LLM:
                     tc_input = {}
                     if hasattr(block, "input") and block.input:
                         tc_input = dict(block.input)
-                    tool_calls.append({
-                        "id": getattr(block, "id", f"toolu_{round_i}"),
-                        "name": getattr(block, "name", ""),
-                        "input": tc_input,
-                    })
+                    tool_calls.append(
+                        {
+                            "id": getattr(block, "id", f"toolu_{round_i}"),
+                            "name": getattr(block, "name", ""),
+                            "input": tc_input,
+                        }
+                    )
 
             round_elapsed = time.monotonic() - round_t0
 
@@ -162,8 +172,12 @@ class LLM:
                 total_elapsed = time.monotonic() - loop_t0
                 log.info(
                     "%s Round %d/%d → 纯文本回复 (%.3fs) | 总耗时 %.3fs | 输出 %d 字符",
-                    trace.prefix(), round_i, max_rounds, round_elapsed,
-                    total_elapsed, len(final_text),
+                    trace.prefix(),
+                    round_i,
+                    max_rounds,
+                    round_elapsed,
+                    total_elapsed,
+                    len(final_text),
                 )
                 return final_text if final_text else "(模型返回为空)"
 
@@ -171,8 +185,12 @@ class LLM:
             tool_names = [tc["name"] for tc in tool_calls]
             log.info(
                 "%s Round %d/%d → %d 个工具调用 [%s] (%.3fs)",
-                trace.prefix(), round_i, max_rounds, len(tool_calls),
-                ", ".join(tool_names), round_elapsed,
+                trace.prefix(),
+                round_i,
+                max_rounds,
+                len(tool_calls),
+                ", ".join(tool_names),
+                round_elapsed,
             )
 
             # 把 LLM 这一轮的完整响应加入历史（含文本 + 工具调用意图）
@@ -180,31 +198,41 @@ class LLM:
             if text_parts:
                 assistant_content.append({"type": "text", "text": "\n".join(text_parts)})
             for tc in tool_calls:
-                assistant_content.append({
-                    "type": "tool_use",
-                    "id": tc["id"],
-                    "name": tc["name"],
-                    "input": tc["input"],
-                })
+                assistant_content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tc["id"],
+                        "name": tc["name"],
+                        "input": tc["input"],
+                    }
+                )
             working_messages.append({"role": "assistant", "content": assistant_content})
 
             # 逐个执行工具，收集结果
             for tc in tool_calls:
                 result_str = await tool_registry.execute(tc["name"], tc["input"])
 
-                working_messages.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": tc["id"],
-                        "content": result_str,
-                    }],
-                })
+                working_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tc["id"],
+                                "content": result_str,
+                            }
+                        ],
+                    }
+                )
 
         # 达到最大轮次限制
         total_elapsed = time.monotonic() - loop_t0
-        log.warning("%s Agent Loop 达到最大轮次 %d (总耗时 %.3fs)，强制结束",
-                     trace.prefix(), max_rounds, total_elapsed)
+        log.warning(
+            "%s Agent Loop 达到最大轮次 %d (总耗时 %.3fs)，强制结束",
+            trace.prefix(),
+            max_rounds,
+            total_elapsed,
+        )
         # 取最后一轮的文本部分作为最终回复
         last_texts = []
         for msg in reversed(working_messages):
@@ -212,7 +240,11 @@ class LLM:
                 content = msg.get("content", [])
                 if isinstance(content, list):
                     for c in content:
-                        if isinstance(c, dict) and c.get("type") == "text" and c.get("text", "").strip():
+                        if (
+                            isinstance(c, dict)
+                            and c.get("type") == "text"
+                            and c.get("text", "").strip()
+                        ):
                             last_texts.append(c["text"])
                 elif isinstance(content, str) and content.strip():
                     last_texts.append(content)

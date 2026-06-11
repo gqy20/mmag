@@ -3,15 +3,15 @@
 """
 
 import asyncio
+import contextlib
 import json
 import random
 import time
-from typing import Optional
 
 import websockets
 
-from .config import config, _log_config_loading
 from .client import MMClient
+from .config import _log_config_loading, config
 from .llm import LLM
 from .logger import get_logger, trace
 from .memory import Memory
@@ -43,19 +43,19 @@ class Agent:
         self.running = False
 
         # 频道级状态
-        self.working_memory: dict[str, list] = {}   # 频道 → 最近消息窗口
+        self.working_memory: dict[str, list] = {}  # 频道 → 最近消息窗口
 
         # Bot 身份 (启动时获取)
         self.bot_user_id = ""
         self.bot_username = ""
 
     # ---- 官方 WebSocket 协议状态 ----
-    _conn_id: str = ""              # 服务端分配的 connection_id (用于断线续传)
-    _server_seq: int = 0           # 服务端事件序列号 (用于检测丢包)
-    _client_seq: int = 1           # 客户端请求序列号
-    _connect_fail_count: int = 0    # 连接失败计数 (用于指数退避)
-    _last_err_code: Optional[str] = None  # 上次断开错误码
-    _ping_task: Optional[asyncio.Task] = None  # 心跳任务
+    _conn_id: str = ""  # 服务端分配的 connection_id (用于断线续传)
+    _server_seq: int = 0  # 服务端事件序列号 (用于检测丢包)
+    _client_seq: int = 1  # 客户端请求序列号
+    _connect_fail_count: int = 0  # 连接失败计数 (用于指数退避)
+    _last_err_code: str | None = None  # 上次断开错误码
+    _ping_task: asyncio.Task | None = None  # 心跳任务
 
     async def start(self):
         """启动 Agent — 按 Mattermost 官方 WebSocket 协议实现"""
@@ -80,7 +80,11 @@ class Agent:
         log.info("[2/5] 检查 LLM 配置...")
         log.info(f"       模型: {config.anthropic_model}")
         log.info(f"       API:  {config.anthropic_base_url or '默认 (api.anthropic.com)'}")
-        key_preview = f"{config.anthropic_api_key[:8]}...{config.anthropic_api_key[-4:]}" if config.anthropic_api_key else "(未设置!)"
+        key_preview = (
+            f"{config.anthropic_api_key[:8]}...{config.anthropic_api_key[-4:]}"
+            if config.anthropic_api_key
+            else "(未设置!)"
+        )
         log.info(f"       Key:  {key_preview}")
         if not config.anthropic_api_key:
             log.error("       ❌ ANTHROPIC_API_KEY 未设置! 请检查 .env")
@@ -97,7 +101,9 @@ class Agent:
                 ch_info = self.mm.get_channel(config.mm_channel_id)
                 if ch_info and "name" in ch_info:
                     channels_to_load.append(ch_info)
-                    log.info(f"       📍 指定频道: {ch_info.get('display_name', config.mm_channel_id[:8])}")
+                    log.info(
+                        f"       📍 指定频道: {ch_info.get('display_name', config.mm_channel_id[:8])}"
+                    )
 
             # 其次: 按 Team 加载所有频道
             elif config.mm_team_id:
@@ -119,7 +125,9 @@ class Agent:
                     p["username"] = self.mm.get_username(p.get("user_id", ""))
                     self.working_memory[ch_id].append(p)
                 total_msgs += len(posts)
-                log.info(f"       📂 {ch.get('display_name', ch_id[:8]):<15} {len(posts):>3} 条消息")
+                log.info(
+                    f"       📂 {ch.get('display_name', ch_id[:8]):<15} {len(posts):>3} 条消息"
+                )
             if channels_to_load:
                 log.info(f"       ✅ 共 {len(channels_to_load)} 个频道, {total_msgs} 条消息已缓存")
         except Exception as e:
@@ -131,10 +139,10 @@ class Agent:
         self.running = True  # 必须在进入循环前设置!
 
         # 重连参数 (参考 webapp/platform/client/src/websocket.ts)
-        MIN_RETRY_S = 3          # 最小重试间隔
-        MAX_RETRY_S = 300        # 最大重试间隔 (5分钟)
-        JITTER_RANGE_S = 2       # 抖动范围
-        MAX_FAILS_BEFORE_BACKOFF = 7  # 超过此次数开始指数退避
+        min_retry_s = 3  # 最小重试间隔
+        max_retry_s = 300  # 最大重试间隔 (5分钟)
+        jitter_range_s = 2  # 抖动范围
+        max_fails_before_backoff = 7  # 超过此次数开始指数退避
 
         while self.running:
             try:
@@ -149,7 +157,7 @@ class Agent:
                 if params:
                     ws_url += "?" + "&".join(params)
 
-                log.info(f"       → {ws_url[:80]}{'...' if len(ws_url)>80 else ''}")
+                log.info(f"       → {ws_url[:80]}{'...' if len(ws_url) > 80 else ''}")
 
                 async with websockets.connect(
                     ws_url,
@@ -182,19 +190,19 @@ class Agent:
                     log.info(f"       📨 Hello | id={self._conn_id[:12]}... v{server_ver}")
 
                     # Step 2: 发送认证 (官方: onopen 时立即发)
-                    auth_msg = json.dumps({
-                        "action": "authentication_challenge",
-                        "seq": self._client_seq,
-                        "data": {"token": config.mm_token},
-                    })
+                    auth_msg = json.dumps(
+                        {
+                            "action": "authentication_challenge",
+                            "seq": self._client_seq,
+                            "data": {"token": config.mm_token},
+                        }
+                    )
                     self._client_seq += 1
                     await ws.send(auth_msg)
                     log.info("       🔑 认证请求已发送")
 
                     # Step 3: 启动心跳 (官方: 每30秒 ping)
-                    self._ping_task = asyncio.create_task(
-                        self._ping_loop(ws), name="ws-ping"
-                    )
+                    self._ping_task = asyncio.create_task(self._ping_loop(ws), name="ws-ping")
 
                     # 阶段 5: 进入事件循环
                     log.info("[5/5] 🎯 进入事件监听循环...")
@@ -217,38 +225,247 @@ class Agent:
             finally:
                 if self._ping_task and not self._ping_task.done():
                     self._ping_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await self._ping_task
-                    except asyncio.CancelledError:
-                        pass
 
             # ── 指数退避重连 (官方算法) ──
             if not self.running:
                 break
 
-            retry_s = MIN_RETRY_S
-            if self._connect_fail_count > MAX_FAILS_BEFORE_BACKOFF:
-                retry_s = min(MIN_RETRY_S * self._connect_fail_count ** 2, MAX_RETRY_S)
-            retry_s += random.random() * JITTER_RANGE_S  # jitter
+            retry_s = min_retry_s
+            if self._connect_fail_count > max_fails_before_backoff:
+                retry_s = min(min_retry_s * self._connect_fail_count**2, max_retry_s)
+            retry_s += random.random() * jitter_range_s  # jitter
             log.info(f"       ⏳ {retry_s:.1f}s 后重连 (第{self._connect_fail_count}次)...")
             await asyncio.sleep(retry_s)
 
     async def _ping_loop(self, ws):
         """心跳循环 — 参考 webapp 官方实现 (每30秒 ping)"""
-        PING_INTERVAL_S = 30
-        PING_TIMEOUT_S = 65  # 服务器 ping 超时 = 60s + 5s buffer
+        ping_interval_s = 30
         try:
             while True:
-                await asyncio.sleep(PING_INTERVAL_S)
-                ping_msg = json.dumps({
-                    "action": "ping",
-                    "seq": self._client_seq,
-                })
+                await asyncio.sleep(ping_interval_s)
+                ping_msg = json.dumps(
+                    {
+                        "action": "ping",
+                        "seq": self._client_seq,
+                    }
+                )
                 self._client_seq += 1
                 await ws.send(ping_msg)
                 log.debug("       💓 ping sent")
         except (asyncio.CancelledError, websockets.ConnectionClosed):
             pass
+
+    async def _compact_channel_cache(self, channel_id: str):
+        """Layer 1→Layer 2 双阈值管理
+
+        两个独立动作:
+          A. 定期摘要（每 ~100 条消息）: 只读最近一批消息做摘要，
+             原始消息保留在 message_cache 中不删除。
+          B. 容量清理（超过 1000 条时）: 弹出最旧的 ~200 条，
+             先做摘要再删除，将缓存控制在 800-1000 范围。
+
+        用户意图: "原始信息依然保留1000条，不过是100条会生成一个摘要罢了"
+        """
+        cfg = self.config
+        summary_interval = cfg.memory_summary_interval
+        max_cache_size = cfg.memory_cache_max
+        compaction_keep = cfg.memory_compaction_keep
+        summary_batch = cfg.memory_summary_batch
+
+        t0 = time.monotonic()
+        count = self.memory.get_channel_cache_count(channel_id)
+
+        # ── 动作 A: 定期摘要（每 ~100 条）──
+        # 用 count // summary_interval 判断是否到达摘要节点
+        if count > 0 and count % summary_interval == 0:
+            log.info(
+                "%s [摘要] channel=%s 第 %d 条 → 触发定期摘要",
+                trace.prefix(),
+                channel_id[:12],
+                count,
+            )
+            # 取当前批次 + 前序上下文（当前批次之前的 N 条消息）
+            peek_count = summary_interval + cfg.memory_context_window
+            wider_batch = self.memory.peek_recent_messages(channel_id, limit=peek_count)
+            if wider_batch:
+                # 分割：前半部分是上下文，后半部分是待摘要的当前批次
+                ctx = (
+                    wider_batch[:-summary_interval] if len(wider_batch) > summary_interval else None
+                )
+                recent_batch = wider_batch[-summary_interval:]
+
+                all_summaries = []
+                for bs in range(0, len(recent_batch), summary_batch):
+                    batch = recent_batch[bs : bs + summary_batch]
+                    summary = await self._summarize_message_batch(
+                        batch, channel_id, context_messages=ctx
+                    )
+                    if summary:
+                        all_summaries.append(summary)
+
+                if all_summaries:
+                    combined = "\n\n---\n\n".join(all_summaries)
+                    participants = list(
+                        {m.get("username", "?") for m in recent_batch if m.get("username")}
+                    )
+                    key_points = []
+                    for m in recent_batch[-20:]:
+                        msg = (m.get("message") or "").strip()
+                        if len(msg) > 15 and not msg.startswith(("http", "@")):
+                            key_points.append(f"[{m.get('username', '?')}] {msg[:120]}")
+
+                    self.memory.save_conversation_segment(
+                        channel_id=channel_id,
+                        topic=(
+                            f"定期摘要 #{count // summary_interval} "
+                            f"(msg {count - summary_interval + 1}-{count})"
+                        ),
+                        summary=combined,
+                        participants=participants,
+                        key_points=key_points[-10:],
+                    )
+                    elapsed = time.monotonic() - t0
+                    log.info(
+                        "%s [摘要] 完成 | %d 批 | %.1fs | 缓存仍 %d 条",
+                        trace.prefix(),
+                        len(all_summaries),
+                        elapsed,
+                        self.memory.get_channel_cache_count(channel_id),
+                    )
+
+        # ── 动作 B: 容量清理（>1000 条时弹出最旧的）──
+        if count > max_cache_size:
+            log.info(
+                "%s [清理] channel=%s %d 条 > 上限 %d → 开始容量清理",
+                trace.prefix(),
+                channel_id[:12],
+                count,
+                max_cache_size,
+            )
+            old_messages = self.memory.pop_old_messages(channel_id, keep=compaction_keep)
+            if not old_messages:
+                return
+
+            # 获取紧接在被弹出消息之后的消息作为上下文（保持连贯性）
+            context_msgs = self.memory.peek_recent_messages(
+                channel_id, limit=cfg.memory_context_window
+            )
+
+            all_summaries = []
+            for batch_start in range(0, len(old_messages), summary_batch):
+                batch = old_messages[batch_start : batch_start + summary_batch]
+                summary = await self._summarize_message_batch(
+                    batch, channel_id, context_messages=context_msgs
+                )
+                if summary:
+                    all_summaries.append(summary)
+
+            if all_summaries:
+                combined_summary = "\n\n---\n\n".join(all_summaries)
+                participants = list(
+                    {m.get("username", "?") for m in old_messages if m.get("username")}
+                )
+                key_points = []
+                for m in old_messages[-20:]:
+                    msg = (m.get("message") or "").strip()
+                    if len(msg) > 15 and not msg.startswith(("http", "@")):
+                        key_points.append(f"[{m.get('username', '?')}] {msg[:120]}")
+
+                self.memory.save_conversation_segment(
+                    channel_id=channel_id,
+                    topic=f"容量清理-{time.strftime('%Y-%m-%d_%H%M')} ({len(old_messages)}条)",
+                    summary=combined_summary,
+                    participants=participants,
+                    key_points=key_points[-10:],
+                )
+                elapsed = time.monotonic() - t0
+                remaining = self.memory.get_channel_cache_count(channel_id)
+                log.info(
+                    "%s [清理] 完成 | 摘要 %d 批 | %.1fs | 缓存剩余 %d 条",
+                    trace.prefix(),
+                    len(all_summaries),
+                    elapsed,
+                    remaining,
+                )
+
+    async def _summarize_message_batch(
+        self,
+        messages: list[dict],
+        channel_id: str,
+        context_messages: list[dict] | None = None,
+    ) -> str:
+        """调用 LLM 对一批消息做结构化摘要（支持注入前序上下文）
+
+        Args:
+            messages: 当前要摘要的消息批次
+            channel_id: 频道 ID
+            context_messages: 前序消息（用于保持上下文连贯），LLM 会参考这些
+                             信息来理解当前批次的对话背景，但只对 messages 输出摘要
+        """
+        cfg = self.config
+
+        # ── 格式化前序上下文（如果有）──
+        context_text = ""
+        if context_messages:
+            ctx_lines = []
+            for m in context_messages[-cfg.memory_context_window :]:
+                user = m.get("username", "?")
+                msg = (m.get("message") or "").strip()[:200]
+                ctx_lines.append(f"  {user}: {msg}")
+            context_text = (
+                "\n【前序对话背景（仅供参考，理解上下文用，不需要重复摘要）】\n"
+                + "\n".join(ctx_lines)
+                + "\n"
+            )
+
+        # ── 格式化当前批次 ──
+        lines = []
+        for m in messages:
+            user = m.get("username", "?")
+            msg = (m.get("message") or "").strip()
+            ts = m.get("create_at", "")
+            time_str = ""
+            if ts:
+                try:
+                    from datetime import datetime
+
+                    dt = datetime.fromtimestamp(ts if ts < 1e12 else ts / 1000.0)
+                    time_str = dt.strftime("%H:%M")
+                except Exception:
+                    pass
+            lines.append(f"[{time_str}] {user}: {msg[:300]}")
+
+        conversation_text = "\n".join(lines)
+
+        prompt = (
+            "请对以下团队对话记录做简洁的结构化摘要。\n"
+            "要求:\n"
+            "1. 用 2-3 句话概括这段时间讨论的核心主题和结论\n"
+            "2. 如果有明确的决策或行动项，单独列出\n"
+            "3. 省略闲聊和无关内容\n"
+            "4. 直接输出摘要，不要加前缀说明\n"
+            f"{context_text}\n"
+            f"\n【当前待摘要对话 ({len(messages)} 条)】\n{conversation_text}"
+        )
+
+        try:
+            result = await self.llm.chat_with_system(
+                system_prompt=(
+                    "你是一个对话摘要助手。你的任务是将团队聊天记录压缩为"
+                    "精炼的结构化摘要，保留关键信息和决策，去除冗余。"
+                    "如果提供了前序对话背景，请用它来理解上下文，但只对"
+                    "当前待摘要的对话部分输出摘要。"
+                ),
+                user_message=prompt,
+                max_tokens=1024,
+            )
+            return result
+        except Exception as e:
+            log.error("%s [压缩] LLM 摘要失败: %s", trace.prefix(), e)
+            return f"(摘要失败: {e})"
+            return f"(摘要失败: {e})"
 
     async def _handle_ws_message(self, raw: str, ws):
         """
@@ -286,12 +503,13 @@ class Agent:
         self._server_seq = msg_seq + 1
 
         # ── 分发事件 ──
-        async def _noop(_m, _w): pass
+        async def _noop(_m, _w):
+            pass
 
         handler_map = {
             "posted": self._on_posted,
-            "post_edited": _noop,       # TODO
-            "post_deleted": _noop,      # TODO
+            "post_edited": _noop,  # TODO
+            "post_deleted": _noop,  # TODO
             "typing": _noop,
             "reaction_added": _noop,
             "reaction_removed": _noop,
@@ -329,7 +547,6 @@ class Agent:
           3. 纯 post ID 字符串 (旧版或精简模式，需 REST API 补全)
         """
         data = event.get("data", {})
-        broadcast = event.get("broadcast", {})
         raw_post = data.get("post")
 
         if not raw_post:
@@ -349,7 +566,7 @@ class Agent:
                     post = self.mm._get(f"/posts/{raw_post}")
                     if not post:
                         return
-            except (json.JSONDecodeError, Exception) as e:
+            except (json.JSONDecodeError, Exception):
                 # 不是有效 JSON，当作 post ID 处理
                 try:
                     post = self.mm._get(f"/posts/{raw_post}")
@@ -401,17 +618,26 @@ class Agent:
         # 缓存消息
         self.memory.cache_message(post)
 
+        # Layer 1→2 双阈值管理（定期摘要 + 容量清理）
+        # 每条消息都检查，内部有 guard 避免无效操作
+        count = self.memory.get_channel_cache_count(channel_id)
+        if count > 0 and (
+            count % config.memory_summary_interval == 0 or count > config.memory_cache_max
+        ):
+            await self._compact_channel_cache(channel_id)
+
         # 更新工作内存
         if channel_id not in self.working_memory:
             self.working_memory[channel_id] = []
         self.working_memory[channel_id].append(post)
         # 保持窗口大小
         if len(self.working_memory[channel_id]) > config.max_context_messages * 2:
-            self.working_memory[channel_id] = \
-                self.working_memory[channel_id][-config.max_context_messages:]
+            self.working_memory[channel_id] = self.working_memory[channel_id][
+                -config.max_context_messages :
+            ]
 
-        # 更新用户画像
-        self.memory.update_user_profile(user_id, post["username"], {"notes": "活跃"})
+        # 更新用户画像（从消息行为自动推断话题/时段/风格）
+        self.memory.update_profile_from_message(user_id, post["username"], post)
 
         # 开启交互追踪
         trace.new()
@@ -425,7 +651,8 @@ class Agent:
 
         # ====== @提及 必回 ======
         bot_mentions = [
-            f"@{self.bot_username}", f"@{config.bot_name.lower()}",
+            f"@{self.bot_username}",
+            f"@{config.bot_name.lower()}",
             f"@{config.bot_display_name.lower()}",
         ]
         if any(m in message.lower() for m in bot_mentions):
@@ -458,12 +685,30 @@ class Agent:
 
         # 高概率触发词
         high_trigger = [
-            "报错", "错误", "bug", "失败", "不行", "不行吗",
-            "帮忙", "帮我看", "怎么看", "怎么办",
-            "为什么", "怎么", "如何", "?", "？",
-            "部署", "上线", "发布", "回滚",
-            "谁知道", "有人吗", "怎么弄",
-            config.bot_name, config.bot_display_name,
+            "报错",
+            "错误",
+            "bug",
+            "失败",
+            "不行",
+            "不行吗",
+            "帮忙",
+            "帮我看",
+            "怎么看",
+            "怎么办",
+            "为什么",
+            "怎么",
+            "如何",
+            "?",
+            "？",
+            "部署",
+            "上线",
+            "发布",
+            "回滚",
+            "谁知道",
+            "有人吗",
+            "怎么弄",
+            config.bot_name,
+            config.bot_display_name,
         ]
         if any(w in message.lower() for w in high_trigger):
             return True
@@ -474,10 +719,7 @@ class Agent:
             return True
 
         # 概率旁听
-        if random.random() < config.listen_probability:
-            return True
-
-        return False
+        return random.random() < config.listen_probability
 
     async def _respond_to_mention(self, post: dict):
         """响应 @提及（支持 Agentic Tool Use）"""
@@ -485,8 +727,11 @@ class Agent:
         log.info("%s [mention] 构建上下文...", trace.prefix())
         await self.typing_indicator(post["channel_id"])
         context = self._build_context(post, mention=True)
-        log.info("%s [mention] 调用 Agent Loop (上下文 %d 条消息)...",
-                 trace.prefix(), len(context["messages"]))
+        log.info(
+            "%s [mention] 调用 Agent Loop (上下文 %d 条消息)...",
+            trace.prefix(),
+            len(context["messages"]),
+        )
         response = await self.llm.agent_loop(
             messages=context["messages"],
             system=context["system"],
@@ -495,11 +740,15 @@ class Agent:
             max_rounds=5,
         )
         elapsed = time.monotonic() - t0
-        log.info("%s [mention] Agent Loop 返回 (%.1fs, %d 字符): %s",
-                 trace.prefix(), elapsed, len(response), response[:150])
+        log.info(
+            "%s [mention] Agent Loop 返回 (%.1fs, %d 字符): %s",
+            trace.prefix(),
+            elapsed,
+            len(response),
+            response[:150],
+        )
         if not response or response.startswith("⚠️"):
-            log.warning("%s [mention] LLM 返回异常或为空: %s",
-                        trace.prefix(), response[:100])
+            log.warning("%s [mention] LLM 返回异常或为空: %s", trace.prefix(), response[:100])
         else:
             result = await self.reply(post, response)
             log.info("%s [mention] 回复已发送 post_id=%s", trace.prefix(), result)
@@ -511,8 +760,11 @@ class Agent:
         log.info("%s [chat] 构建上下文...", trace.prefix())
         await self.typing_indicator(post["channel_id"])
         context = self._build_context(post)
-        log.info("%s [chat] 调用 Agent Loop (上下文 %d 条消息)...",
-                 trace.prefix(), len(context["messages"]))
+        log.info(
+            "%s [chat] 调用 Agent Loop (上下文 %d 条消息)...",
+            trace.prefix(),
+            len(context["messages"]),
+        )
         response = await self.llm.agent_loop(
             messages=context["messages"],
             system=context["system"],
@@ -521,11 +773,15 @@ class Agent:
             max_rounds=3,  # 旁听场景限制轮次，避免过度响应
         )
         elapsed = time.monotonic() - t0
-        log.info("%s [chat] Agent Loop 返回 (%.1fs, %d 字符): %s",
-                 trace.prefix(), elapsed, len(response), response[:150])
+        log.info(
+            "%s [chat] Agent Loop 返回 (%.1fs, %d 字符): %s",
+            trace.prefix(),
+            elapsed,
+            len(response),
+            response[:150],
+        )
         if not response or response.startswith("⚠️"):
-            log.warning("%s [chat] LLM 返回异常或为空: %s",
-                        trace.prefix(), response[:100])
+            log.warning("%s [chat] LLM 返回异常或为空: %s", trace.prefix(), response[:100])
         else:
             result = await self.reply(post, response)
             log.info("%s [chat] 回复已发送 post_id=%s", trace.prefix(), result)
@@ -538,14 +794,15 @@ class Agent:
         ch_name = ch_info.get("display_name", channel_id[:8])
 
         # 系统提示词（纯人格，不包含工具信息 — 工具通过 SDK tools 参数传递）
-        system = prompts.get("system_prompt",
+        system = prompts.get(
+            "system_prompt",
             bot_name=config.bot_display_name,
             bot_username=self.bot_username,
         )
 
         # 消息历史
         window = self.working_memory.get(channel_id, [])
-        recent = window[-config.max_context_messages:]
+        recent = window[-config.max_context_messages :]
 
         # 格式化为 LLM messages
         messages = []
@@ -556,16 +813,20 @@ class Agent:
             if role == "assistant":
                 messages.append({"role": role, "content": content})
             else:
-                messages.append({
-                    "role": role,
-                    "content": f"{name}: {content}",
-                })
+                messages.append(
+                    {
+                        "role": role,
+                        "content": f"{name}: {content}",
+                    }
+                )
 
         # 加入当前消息
-        messages.append({
-            "role": "user",
-            "content": f"{post['username']}: {post['message']}",
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": f"{post['username']}: {post['message']}",
+            }
+        )
 
         # 额外上下文
         channel_ctx = f"当前频道: {ch_name}"
@@ -580,7 +841,7 @@ class Agent:
 
         return {"system": system, "messages": messages, "channel_context": channel_ctx}
 
-    async def typing_indicator(self, channel_id: str, duration: Optional[float] = None):
+    async def typing_indicator(self, channel_id: str, duration: float | None = None):
         """模拟打字指示器 (通过延迟发送来模拟)"""
         if duration is None:
             duration = config.typing_delay_min + random.random() * (
@@ -588,7 +849,7 @@ class Agent:
             )
         await asyncio.sleep(duration)
 
-    async def reply(self, post: dict, message: str) -> Optional[str]:
+    async def reply(self, post: dict, message: str) -> str | None:
         """发送消息到频道 (主聊天流，非线程)，返回 post_id 或 None"""
         if not message:
             log.warning("       reply(): 消息为空，跳过发送")
@@ -608,15 +869,17 @@ class Agent:
             if post_id:
                 self.stats["responses"] += 1
                 # 把自己的回复也缓存起来
-                self.memory.cache_message({
-                    "id": post_id or "",
-                    "channel_id": post["channel_id"],
-                    "user_id": self.bot_user_id,
-                    "message": message,
-                    "create_at": int(time.time() * 1000),
-                    "type": "",
-                    "root_id": "",  # 主流消息无 root_id
-                })
+                self.memory.cache_message(
+                    {
+                        "id": post_id or "",
+                        "channel_id": post["channel_id"],
+                        "user_id": self.bot_user_id,
+                        "message": message,
+                        "create_at": int(time.time() * 1000),
+                        "type": "",
+                        "root_id": "",  # 主流消息无 root_id
+                    }
+                )
                 return post_id
             else:
                 log.error(f"       ❌ send_post 返回 None! channel={post['channel_id'][:8]}")
@@ -636,12 +899,17 @@ class Agent:
             channel_id = post["channel_id"]
             window = self.working_memory.get(channel_id, [])
             if len(window) >= 10:
-                log.info("%s [memory] 到达知识提取阈值 (总回复=%d, 窗口=%d条)",
-                         trace.prefix(), self.stats["responses"], len(window))
-                texts = [f"{m.get('username','?')}: {m.get('message','')[:200]}" for m in window[-15:]]
+                log.info(
+                    "%s [memory] 到达知识提取阈值 (总回复=%d, 窗口=%d条)",
+                    trace.prefix(),
+                    self.stats["responses"],
+                    len(window),
+                )
+                texts = [
+                    f"{m.get('username', '?')}: {m.get('message', '')[:200]}" for m in window[-15:]
+                ]
                 # 后续可以在这里调用 LLM 提取知识
-                log.debug("%s [memory] 待提取文本预览: %s",
-                          trace.prefix(), "; ".join(texts[:3]))
+                log.debug("%s [memory] 待提取文本预览: %s", trace.prefix(), "; ".join(texts[:3]))
 
     async def stop(self):
         """停止 Agent"""

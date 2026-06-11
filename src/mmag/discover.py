@@ -20,7 +20,6 @@ from pathlib import Path
 
 import requests
 
-
 # ── 路径 ──
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -40,8 +39,16 @@ def load_env(env_file: Path | None = None) -> dict[str, str]:
             k, _, v = line.partition("=")
             env[k.strip()] = v.strip().strip('"').strip("'")
     # 系统环境变量作为 fallback
-    for key in ("MM_URL", "MM_TOKEN", "MM_TEAM_ID", "MM_CHANNEL_ID",
-                "BOT_NAME", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"):
+    for key in (
+        "MM_URL",
+        "MM_TOKEN",
+        "MM_TEAM_ID",
+        "MM_CHANNEL_ID",
+        "BOT_NAME",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+    ):
         if key not in env and os.getenv(key):
             env[key] = os.getenv(key, "")
     return env
@@ -54,10 +61,12 @@ class MMDiscoverer:
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        })
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+        )
         self._me: dict | None = None
 
     # ── 底层请求 ──
@@ -109,7 +118,9 @@ class MMDiscoverer:
         print("║       Mattermost 环境探测器                           ║")
         print("╚══════════════════════════════════════════════════════╝")
         print(f"  服务器: {self.base_url}")
-        print(f"  Bot:   @{me['username']} ({me['first_name'] or ''} {me['last_name'] or ''})".strip())
+        print(
+            f"  Bot:   @{me['username']} ({me['first_name'] or ''} {me['last_name'] or ''})".strip()
+        )
         print(f"  用户ID: {me['id']}")
         print()
 
@@ -120,13 +131,13 @@ class MMDiscoverer:
         print("┌──────────────────────────────────────────────────────┐")
         print("│  Teams (团队)                                        │")
         print("├──────────┬──────────┬───────────────────────────────┤")
-        print(f'  {"显示名":<12s} │ {"Name":<10s} │ {"Team ID":<30s}')
+        print(f"  {'显示名':<12s} │ {'Name':<10s} │ {'Team ID':<30s}")
         print("├──────────┼──────────┼───────────────────────────────┤")
         for t in teams:
             tid = t["id"]
             marker = " ⭐" if tid == highlight_team_id else ""
             name = t["display_name"] or t["name"]
-            print(f'  {name:<12s} │ {t["name"]:<10s} │ {tid}{marker}')
+            print(f"  {name:<12s} │ {t['name']:<10s} │ {tid}{marker}")
         print("└──────────┴──────────┴───────────────────────────────┘")
         print()
 
@@ -137,7 +148,9 @@ class MMDiscoverer:
         print("┌────────────────────────────────────────────────────────────────────┐")
         print("│  Channels (频道)                                                   │")
         print("├──────────────┬──────────┬────────────────┬────┬──────────────────┤")
-        print(f'  {"显示名":<16s} │ {"Name":<10s} │ {"Channel ID":<16s} │ {"T":>2s} │ {"消息数":>6s}          │')
+        print(
+            f"  {'显示名':<16s} │ {'Name':<10s} │ {'Channel ID':<16s} │ {'T':>2s} │ {'消息数':>6s}          │"
+        )
         print("├──────────────┼──────────┼────────────────┼────┼──────────────────┤")
         for ch in channels:
             cid = ch["id"]
@@ -151,9 +164,11 @@ class MMDiscoverer:
                 msg_count = len(posts_data.get("order", []))
             except Exception:
                 msg_count = "?"
-            print(f'  {name:<16s} │ {ch.get("name","?"):<10s} │ {cid}{marker:<{16+len(marker)}s} │ {type_label:>2s} │ {str(msg_count):>6s}          │')
+            print(
+                f"  {name:<16s} │ {ch.get('name', '?'):<10s} │ {cid}{marker:<{16 + len(marker)}s} │ {type_label:>2s} │ {str(msg_count):>6s}          │"
+            )
         print("└──────────────┴──────────┴────────────────┴────┴──────────────────┘")
-        print('  T = 类型 (O=Open公开, P=Private私有, D=Direct私聊)')
+        print("  T = 类型 (O=Open公开, P=Private私有, D=Direct私聊)")
         print()
 
     def print_users_summary(self, teams: list[dict]):
@@ -162,9 +177,9 @@ class MMDiscoverer:
         print("┌──────────────────────────────────────────────────┐")
         print("│  关键用户                                         │")
         print("├──────────┬───────────────────────────────────────┤")
-        print(f'  {"用户名":<12s} │ {"User ID":<32s} │ 说明')
+        print(f"  {'用户名':<12s} │ {'User ID':<32s} │ 说明")
         print("├──────────┼───────────────────────────────────────┤")
-        print(f'  @{me["username"]:<11s} │ {me["id"]:<32s} │ Bot (你)')
+        print(f"  @{me['username']:<11s} │ {me['id']:<32s} │ Bot (你)")
         # 尝试找管理员/其他活跃用户
         seen = {me["id"]}
         for team in teams[:2]:
@@ -177,14 +192,19 @@ class MMDiscoverer:
                     seen.add(uid)
                     u = self.get_user(uid)
                     role = "管理员" if "system_admin" in m.get("roles", "") else ""
-                    print(f'  @{u["username"]:<11s} │ {uid:<32s} │ {role}'.rstrip())
+                    print(f"  @{u['username']:<11s} │ {uid:<32s} │ {role}".rstrip())
             except Exception:
                 pass
         print("└──────────┴───────────────────────────────────────┘")
         print()
 
-    def print_env_suggestion(self, teams: list[dict], channels: list[dict],
-                             current_team_id: str = "", current_channel_id: str = ""):
+    def print_env_suggestion(
+        self,
+        teams: list[dict],
+        channels: list[dict],
+        current_team_id: str = "",
+        current_channel_id: str = "",
+    ):
         """打印 .env 建议配置"""
         print("┌─────────────────────────────────────────────────────────────┐")
         print("│  .env 配置建议                                              │")
@@ -233,9 +253,9 @@ class MMDiscoverer:
             print(f"    MM_TEAM_ID    = {current_team_id or '(未设置)'}")
             print(f"    MM_CHANNEL_ID = {current_channel_id or '(未设置)'}")
             if rec_team and rec_team != current_team_id:
-                print(f"    ⚠️  Team ID 不匹配!")
+                print("    ⚠️  Team ID 不匹配!")
             if rec_channel and rec_channel != current_channel_id:
-                print(f"    ⚠️  Channel ID 不匹配!")
+                print("    ⚠️  Channel ID 不匹配!")
             print()
 
         print("└─────────────────────────────────────────────────────────────┘")
@@ -268,16 +288,16 @@ def update_env_file(team_id: str, channel_id: str, target_file: Path | None = No
     # 如果原来没有这两个字段，追加到合适位置
     if not updated_team:
         insert_idx = 0
-        for i, l in enumerate(new_lines):
-            if l.strip().startswith("MM_TOKEN="):
+        for i, line in enumerate(new_lines):
+            if line.strip().startswith("MM_TOKEN="):
                 insert_idx = i + 1
                 break
         new_lines.insert(insert_idx, f"MM_TEAM_ID={team_id}")
 
     if not updated_channel:
         insert_idx = 0
-        for i, l in enumerate(new_lines):
-            if l.strip().startswith("MM_TEAM_ID="):
+        for i, line in enumerate(new_lines):
+            if line.strip().startswith("MM_TEAM_ID="):
                 insert_idx = i + 1
                 break
         new_lines.insert(insert_idx, f"MM_CHANNEL_ID={channel_id}")
@@ -298,14 +318,14 @@ def main():
   uv run python -m mmag.discover --team test    # 只看指定 team 的频道
         """,
     )
-    parser.add_argument("--update-env", action="store_true",
-                        help="探测完成后自动更新 .env 中的 MM_TEAM_ID 和 MM_CHANNEL_ID")
-    parser.add_argument("--env", type=str, default="",
-                        help="指定环境文件路径 (默认: .env)")
-    parser.add_argument("--team", type=str, default="",
-                        help="只显示指定 team name 下的频道")
-    parser.add_argument("--json", action="store_true",
-                        help="以 JSON 格式输出结果")
+    parser.add_argument(
+        "--update-env",
+        action="store_true",
+        help="探测完成后自动更新 .env 中的 MM_TEAM_ID 和 MM_CHANNEL_ID",
+    )
+    parser.add_argument("--env", type=str, default="", help="指定环境文件路径 (默认: .env)")
+    parser.add_argument("--team", type=str, default="", help="只显示指定 team name 下的频道")
+    parser.add_argument("--json", action="store_true", help="以 JSON 格式输出结果")
     args = parser.parse_args()
 
     # ── 加载环境 ──
