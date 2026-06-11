@@ -36,7 +36,9 @@ ANTHROPIC_MODEL=step-3.7-flash # 模型名称
 # Agent
 BOT_NAME=小智                  # Bot 名称
 LISTEN_PROBABILITY=0.15        # 主动旁听概率 (0~1)
-MAX_CONTEXT_MESSAGES=30        # 上下文窗口大小
+MAX_CONTEXT_MESSAGES=100       # 上下文窗口消息数 (传给 LLM 的最近 N 条)
+MAX_CONTEXT_CHARS=10000        # 上下文窗口总字符上限 (按 token 粗估)
+MEMORY_CONTEXT_WINDOW=100      # 记忆压缩 / 摘要时的回看窗口
 ```
 
 > **不知道 Team/Channel ID？** 先运行 `make discover` 自动探测。

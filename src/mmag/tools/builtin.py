@@ -19,6 +19,17 @@ log = get_logger(__name__)
 
 
 # ============================================================
+# 工具参数上限（schema description / handler / 格式化 共享同一份数字）
+# 改这里,所有相关地方同步更新
+# ============================================================
+
+GET_POSTS_DEFAULT_LIMIT = 30       # 不传 limit 时的默认消息数
+GET_POSTS_MAX_LIMIT = 100          # 一次最多拉多少条
+SEARCH_KNOWLEDGE_DEFAULT_LIMIT = 5  # 不传 limit 时的默认知识条目数
+SEARCH_KNOWLEDGE_MAX_LIMIT = 10    # 一次最多返回多少条
+
+
+# ============================================================
 # 公共入口
 # ============================================================
 
@@ -59,14 +70,14 @@ def _make_get_posts_tool(mm_client, memory) -> Tool:
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "获取消息数量 (默认 30, 最大 100)",
-                    "default": 30,
+                    "description": f"获取消息数量 (默认 {GET_POSTS_DEFAULT_LIMIT}, 最大 {GET_POSTS_MAX_LIMIT})",
+                    "default": GET_POSTS_DEFAULT_LIMIT,
                 },
             },
             "required": ["channel_id"],
         },
-        handler=lambda channel_id, limit=30: _format_posts(
-            _get_posts_cached(mm_client, memory, channel_id, min(limit, 100))
+        handler=lambda channel_id, limit=GET_POSTS_DEFAULT_LIMIT: _format_posts(
+            _get_posts_cached(mm_client, memory, channel_id, min(limit, GET_POSTS_MAX_LIMIT))
         ),
     )
 
@@ -88,14 +99,14 @@ def _make_search_knowledge_tool(memory) -> Tool:
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "返回结果数量上限 (默认 5)",
-                    "default": 5,
+                    "description": f"返回结果数量上限 (默认 {SEARCH_KNOWLEDGE_DEFAULT_LIMIT}, 最大 {SEARCH_KNOWLEDGE_MAX_LIMIT})",
+                    "default": SEARCH_KNOWLEDGE_DEFAULT_LIMIT,
                 },
             },
             "required": ["channel_id", "query"],
         },
-        handler=lambda channel_id, query, limit=5: _format_knowledge(
-            memory.get_relevant_knowledge(channel_id, query, min(limit, 10))
+        handler=lambda channel_id, query, limit=SEARCH_KNOWLEDGE_DEFAULT_LIMIT: _format_knowledge(
+            memory.get_relevant_knowledge(channel_id, query, min(limit, SEARCH_KNOWLEDGE_MAX_LIMIT))
         ),
     )
 
@@ -221,21 +232,23 @@ async def _analyze_link_handler(memory, url: str) -> dict:
 
 
 def _format_posts(posts: list[dict]) -> dict:
-    """格式化消息列表为结构化输出"""
+    """格式化消息列表为结构化输出
+
+    输入数量已由 handler 的 `min(limit, GET_POSTS_MAX_LIMIT)` 卡死,这里不再截断。
+    """
     if not posts:
         return {"count": 0, "messages": []}
 
-    formatted = []
-    for p in posts[-50:]:  # 最多返回 50 条
-        formatted.append(
-            {
-                "user": p.get("username", "?"),
-                "message": (p.get("message") or "")[:500],
-                "time": p.get("create_at", ""),
-            }
-        )
+    messages = [
+        {
+            "user": p.get("username", "?"),
+            "message": (p.get("message") or "")[:500],
+            "time": p.get("create_at", ""),
+        }
+        for p in posts
+    ]
 
-    return {"count": len(formatted), "messages": formatted}
+    return {"count": len(messages), "messages": messages}
 
 
 def _format_knowledge(results: list[dict]) -> dict:
