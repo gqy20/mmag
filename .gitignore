@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+.venv/
+venv/
+
+# uv
+uv.lock
+
+# 环境配置 (敏感信息)
+.env
+.env1
+.env2
+.env3
+.env.*
+
+# 运行时数据
+agent_memory.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
