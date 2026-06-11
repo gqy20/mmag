@@ -14,6 +14,7 @@ from .client import MMClient
 from .config import _log_config_loading, config
 from .llm import LLM
 from .logger import get_logger, trace
+from .mcp_bridge import MCPClientBridge
 from .memory import Memory
 from .prompts import prompts
 from .tools import ToolRegistry, build_builtin_tools
@@ -36,6 +37,9 @@ class Agent:
         for t in builtin_tools:
             self.tool_registry.register(t)
         log.info(f"工具系统就绪: {len(builtin_tools)} 个内置工具")
+
+        # MCP 外部工具桥接（读取 .mcp.json，连接外部 Server）
+        self.mcp_bridge = MCPClientBridge(self.tool_registry)
 
         # 运行状态
         self.start_time = time.time()
@@ -90,6 +94,23 @@ class Agent:
             log.error("       ❌ ANTHROPIC_API_KEY 未设置! 请检查 .env")
             self.running = False
             return
+
+        # 阶段 2.5: 连接 MCP 外部工具 Server
+        log.info("[2.5/5] 加载 MCP 外部工具...")
+        try:
+            mcp_count = await self.mcp_bridge.load_and_connect()
+            if mcp_count > 0:
+                total_mcp_tools = sum(
+                    1 for t in self.tool_registry.list_tools() if t.name.startswith("mcp_")
+                )
+                log.info(
+                    f"       ✅ MCP 已连接 {mcp_count} 个 Server, "
+                    f"注册 {total_mcp_tools} 个外部工具"
+                )
+            else:
+                log.info("       ⏭️ 无 MCP 配置 (.mcp.json 不存在或为空)")
+        except Exception as e:
+            log.warning("       ⚠️ MCP 加载失败（不影响运行）: %s", e)
 
         # 阶段 3: 预加载频道消息到缓存
         log.info("[3/5] 预加载频道消息...")
@@ -1003,5 +1024,8 @@ class Agent:
     async def stop(self):
         """停止 Agent"""
         self.running = False
+        # 关闭 MCP 外部连接
+        if hasattr(self, "mcp_bridge"):
+            await self.mcp_bridge.close_all()
         self.memory.close()
         log.info("Agent 已停止")

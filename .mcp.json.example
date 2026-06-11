@@ -1,0 +1,1 @@
+{"mcpServers": {"web-search-prime": {"command": "npx", "args": ["-y", "@anthropic-ai/mcp-server-web-search"], "type": "stdio"}, "web-reader": {"command": "npx", "args": ["-y", "@anthropic-ai/mcp-server-web-reader"], "type": "stdio"}, "filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/mmag_workspace"], "type": "stdio"}}}
