@@ -116,12 +116,21 @@ class MMClient:
             log.error(f"发送 ephemeral 失败: {e}")
 
     def get_posts(self, channel_id: str, limit: int = 30) -> list[dict]:
-        """获取频道最近消息"""
+        """获取频道最近消息(limit 不分页,一次性)"""
+        return self.get_posts_page(channel_id, page=0, per_page=limit)
+
+    def get_posts_page(self, channel_id: str, page: int = 0, per_page: int = 200) -> list[dict]:
+        """分页获取频道消息 — Mattermost 原生 page/per_page, 用于 backfill 历史
+
+        Returns: 该页的消息列表(按 order 数组顺序,最新在前)
+        """
         try:
-            data = self._get(f"/channels/{channel_id}/posts", per_page=limit)
+            data = self._get(
+                f"/channels/{channel_id}/posts", page=page, per_page=per_page
+            )
             order = data.get("order", [])
             posts = data.get("posts", {})
             return [posts[pid] for pid in order if pid in posts]
         except Exception as e:
-            log.error(f"获取消息失败: {e}")
+            log.error(f"分页获取消息失败 (page={page}): {e}")
             return []

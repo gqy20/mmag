@@ -2,12 +2,14 @@
 记忆压缩器 — 长期记忆层 (Layer 1→Layer 2) 管理
 
 负责:
-  - 定期摘要 (每 N 条消息触发一次, 原始消息保留)
-  - 容量清理 (缓存超过上限时弹出旧消息, 先摘要再删)
+  - 定期摘要 (每 N 条消息触发一次, 原始消息永久保留在 message_log)
   - 摘要结果以**线程回复**形式发到频道 (不污染主流)
 
+注意: message_log 是永久存储,不再做"弹出旧消息"这类容量清理。
+      摘要功能是把对话凝练成 conversation_segments,供 LLM 长期参考。
+
 设计动机 (从 agent.py 拆出):
-  - 摘要/清理是异步后台任务, 不该阻塞消息处理
+  - 摘要是异步后台任务, 不该阻塞消息处理
   - 涉及 LLM 调用、数据库写入、Mattermost 发帖三套逻辑, 单独成类更易测试
   - 修复原代码中 319-345 行的重复执行 bug (同一份摘要会保存两次到 segment)
 
@@ -58,38 +60,35 @@ class MemoryCompactor:
         self.llm = llm
         self.mm = mm_client
         self.config = config
+        # 每频道消息计数器 — 累计到 summary_interval 触发摘要后归零
+        # 比 COUNT(*) 整个 message_log 表快得多,且与"消息是否真的存储"无关
+        self._msg_counter: dict[str, int] = {}
 
     # ============================================================
     # 公共入口
     # ============================================================
 
     async def maybe_compact(self, channel_id: str) -> None:
-        """每条消息后调用 — 内部按阈值判断是否触发摘要/清理
+        """每条消息后调用 — 内部按阈值判断是否触发摘要
 
-        触发条件 (任一满足):
-          - 消息总数 % summary_interval == 0  →  定期摘要
-          - 消息总数 > cache_max               →  容量清理
+        触发条件:
+          - 本频道累计消息数 % summary_interval == 0  →  定期摘要
         """
-        count = self.memory.get_channel_cache_count(channel_id)
-        if count <= 0:
-            return
+        self._msg_counter[channel_id] = self._msg_counter.get(channel_id, 0) + 1
+        count = self._msg_counter[channel_id]
 
-        needs_summary = count % self.config.memory_summary_interval == 0
-        needs_cleanup = count > self.config.memory_cache_max
-
-        if needs_summary:
+        if count > 0 and count % self.config.memory_summary_interval == 0:
             await self._periodic_summary(channel_id, count)
-        if needs_cleanup:
-            await self._capacity_cleanup(channel_id, count)
 
     # ============================================================
     # 动作 A: 定期摘要
     # ============================================================
 
     async def _periodic_summary(self, channel_id: str, count: int) -> None:
-        """每 ~summary_interval 条消息触发一次 (不删原消息)"""
+        """每 ~summary_interval 条消息触发一次 (不删原消息,原消息永久保留)"""
         summary_interval = self.config.memory_summary_interval
-        summary_batch = self.config.memory_summary_batch
+        # 摘要批次大小 = context_window (一次 LLM 处理的合理上限)
+        summary_batch = self.config.memory_context_window
 
         log.info(
             "%s [摘要] channel=%s 第 %d 条 → 触发定期摘要",
@@ -145,94 +144,10 @@ class MemoryCompactor:
 
         elapsed = time.monotonic() - t0
         log.info(
-            "%s [摘要] 完成 | %d 批 | %.1fs | 缓存仍 %d 条",
+            "%s [摘要] 完成 | %d 批 | %.1fs",
             trace.prefix(),
             len(all_summaries),
             elapsed,
-            self.memory.get_channel_cache_count(channel_id),
-        )
-
-    # ============================================================
-    # 动作 B: 容量清理
-    # ============================================================
-
-    async def _capacity_cleanup(self, channel_id: str, count: int) -> None:
-        """缓存超过上限时弹出旧消息 (先摘要再删)"""
-        max_cache_size = self.config.memory_cache_max
-        compaction_keep = self.config.memory_compaction_keep
-        summary_batch = self.config.memory_summary_batch
-
-        log.info(
-            "%s [清理] channel=%s %d 条 > 上限 %d → 开始容量清理",
-            trace.prefix(),
-            channel_id[:12],
-            count,
-            max_cache_size,
-        )
-
-        t0 = time.monotonic()
-
-        old_messages = self.memory.pop_old_messages(channel_id, keep=compaction_keep)
-        if not old_messages:
-            return
-
-        # 获取紧接在被弹出消息之后的消息作为上下文
-        context_msgs = self.memory.peek_recent_messages(
-            channel_id, limit=self.config.memory_context_window
-        )
-
-        all_summaries = []
-        for batch_start in range(0, len(old_messages), summary_batch):
-            batch = old_messages[batch_start : batch_start + summary_batch]
-            summary = await self._summarize_message_batch(
-                batch, channel_id, context_messages=context_msgs
-            )
-            if summary:
-                all_summaries.append(summary)
-
-        if not all_summaries:
-            return
-
-        combined_summary = "\n\n---\n\n".join(all_summaries)
-        participants = list({m.get("username", "?") for m in old_messages if m.get("username")})
-
-        # 提取最后 20 条中的关键决策作为 key_points
-        key_points = []
-        for m in old_messages[-20:]:
-            msg = (m.get("message") or "").strip()
-            if len(msg) > 15 and not msg.startswith(("http", "@")):
-                key_points.append(f"[{m.get('username', '?')}] {msg[:120]}")
-        key_points = key_points[-10:]
-
-        topic = f"容量清理-{time.strftime('%Y-%m-%d_%H%M')} ({len(old_messages)}条)"
-
-        # 持久化
-        self.memory.save_conversation_segment(
-            channel_id=channel_id,
-            topic=topic,
-            summary=combined_summary,
-            participants=participants,
-            key_points=key_points,
-        )
-
-        # 线程回复 (挂载在缓存中最新一条消息下)
-        latest_msgs = self.memory.peek_recent_messages(channel_id, limit=1)
-        anchor_id = latest_msgs[0].get("id", "") if latest_msgs else ""
-        await self._post_summary_thread(
-            channel_id=channel_id,
-            root_id=anchor_id,
-            title=f"🗂️ {topic}",
-            content=combined_summary,
-        )
-
-        elapsed = time.monotonic() - t0
-        remaining = self.memory.get_channel_cache_count(channel_id)
-        log.info(
-            "%s [清理] 完成 | 摘要 %d 批 | %.1fs | 缓存剩余 %d 条",
-            trace.prefix(),
-            len(all_summaries),
-            elapsed,
-            remaining,
         )
 
     # ============================================================

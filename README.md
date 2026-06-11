@@ -38,7 +38,8 @@ BOT_NAME=小智                  # Bot 名称
 LISTEN_PROBABILITY=0.15        # 主动旁听概率 (0~1)
 MAX_CONTEXT_MESSAGES=100       # 上下文窗口消息数 (传给 LLM 的最近 N 条)
 MAX_CONTEXT_CHARS=10000        # 上下文窗口总字符上限 (按 token 粗估)
-MEMORY_CONTEXT_WINDOW=100      # 记忆压缩 / 摘要时的回看窗口
+MEMORY_SUMMARY_INTERVAL=100    # 每 N 条消息触发一次定期摘要
+MEMORY_CONTEXT_WINDOW=100      # 摘要时注入的前序上下文消息数
 ```
 
 > **不知道 Team/Channel ID？** 先运行 `make discover` 自动探测。
@@ -128,10 +129,10 @@ Bot 具备跨会话持久记忆：
 
 | 类型 | 存储内容 | 说明 |
 |------|----------|------|
-| **消息缓存** | 原始消息 | 短期，构建上下文窗口 |
+| **消息日志** | 原始消息 + FTS5 索引 | 永久，启动时 backfill 补全历史，供 LLM 检索/回顾 |
 | **用户画像** | 专业领域、偏好风格 | 跟踪每个用户的特征 |
 | **团队知识** | 关键事实 + 置信度 | 从对话中提取并积累 |
-| **对话摘要** | 话题摘要 + 要点 | 长期，定期压缩 |
+| **对话摘要** | 话题摘要 + 要点 | 长期，定期压缩（不删原消息） |
 
 数据存储在本地 SQLite (`agent_memory.db`)。
 
@@ -152,6 +153,7 @@ Bot 具备跨会话持久记忆：
 
 - **WebSocket 协议**：完整实现 Mattermost 官方协议（握手认证、序列号校验、30s 心跳、指数退避重连）
 - **断线续传**：通过 `connection_id` + `sequence_number` 实现断线后恢复
+- **消息永久存储**：`message_log` 表只增不删，启动时 backfill 补全 Mattermost 端所有历史；FTS5 虚表（unicode61）支持中英文 BM25 全文检索
 - **LLM 适配**：`AsyncAnthropic` 原生异步客户端（SDK 内置 `max_retries=2`）；Agentic Tool Use 循环 + ThinkingBlock 自动过滤
 - **LLM 兼容**：通过 `ANTHROPIC_BASE_URL` 支持 StepFun 等兼容接口；调用失败抛 `LLMError` 由 agent 层转成用户友好提示
 
