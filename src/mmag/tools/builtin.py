@@ -48,6 +48,7 @@ def _make_get_posts_tool(mm_client, memory) -> Tool:
         description=(
             "获取频道最近的消息历史。用于回顾讨论内容、总结对话、查找特定信息。"
             "优先从本地缓存读取（实时性好），缓存不足时自动从服务器拉取。"
+            "返回的消息中可能含 URL — 如需 URL 对应页面的真实内容，请用 analyze_link 抓取。"
         ),
         input_schema={
             "type": "object",
