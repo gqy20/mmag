@@ -25,6 +25,13 @@ def channel_type_label(channel_type: str) -> str:
     return CHANNEL_TYPE_LABELS.get(channel_type, channel_type)
 
 
+# Mattermost post props 业务常量
+# 用途: send_post 时通过 props 标记消息类型,前端可据此区分 Bot 消息/摘要
+PROP_FROM_BOT = "from_bot"
+PROP_SUMMARY = "summary"
+PROP_TRUE = "true"
+
+
 class MMClient:
     """Mattermost REST API + 元数据缓存
 
@@ -103,17 +110,6 @@ class MMClient:
         except Exception as e:
             log.error(f"发送消息失败: {e}")
             return None
-
-    def send_ephemeral(self, user_id: str, channel_id: str, message: str):
-        """发送仅对某用户可见的消息 (ephemeral)"""
-        payload = {
-            "user_id": user_id,
-            "post": {"channel_id": channel_id, "message": message},
-        }
-        try:
-            self._post("/posts/ephemeral", json=payload)
-        except Exception as e:
-            log.error(f"发送 ephemeral 失败: {e}")
 
     def get_posts(self, channel_id: str, limit: int = 30) -> list[dict]:
         """获取频道最近消息(limit 不分页,一次性)"""

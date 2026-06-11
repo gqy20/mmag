@@ -165,15 +165,6 @@ def _cleanup_old_logs(log_dir: str, retain_days: int) -> None:
         )
 
 
-def list_log_files(log_dir: str | None = None) -> list[Path]:
-    """列出所有日志文件（用于排查时快速定位）"""
-    effective_dir = log_dir or _DEFAULT_LOG_DIR
-    dir_path = Path(effective_dir)
-    if not dir_path.exists():
-        return []
-    return sorted(dir_path.glob(f"{PKG_NAME}-*.log"), reverse=True)
-
-
 # ============================================================
 # 交互追踪上下文
 # ============================================================

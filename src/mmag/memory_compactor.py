@@ -24,6 +24,7 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from .client import PROP_FROM_BOT, PROP_SUMMARY, PROP_TRUE
 from .logger import get_logger, trace
 
 if TYPE_CHECKING:
@@ -112,7 +113,7 @@ class MemoryCompactor:
         for bs in range(0, len(recent_batch), summary_batch):
             batch = recent_batch[bs : bs + summary_batch]
             summary = await self._summarize_message_batch(batch, channel_id, context_messages=ctx)
-            if summary:
+            if summary is not None:
                 all_summaries.append(summary)
 
         if not all_summaries:
@@ -159,13 +160,16 @@ class MemoryCompactor:
         messages: list[dict],
         channel_id: str,
         context_messages: list[dict] | None = None,
-    ) -> str:
+    ) -> str | None:
         """调用 LLM 对一批消息做结构化摘要 (支持注入前序上下文)
 
         Args:
             messages: 当前要摘要的消息批次
             channel_id: 频道 ID (保留参数, 未来可按频道定制提示)
             context_messages: 前序消息 (LLM 参考, 不会出现在摘要输出里)
+
+        Returns:
+            摘要文本;LLM 失败时返回 None (调用方应跳过,绝不能把错误信息当摘要持久化)
         """
         cfg = self.config
 
@@ -224,8 +228,16 @@ class MemoryCompactor:
             )
             return result
         except Exception as e:
-            log.error("%s [压缩] LLM 摘要失败: %s", trace.prefix(), e)
-            return f"(摘要失败: {e})"
+            # 失败时返回 None — 调用方 (._periodic_summary) 会跳过此批次,
+            # 避免把错误字符串当合法摘要写入 conversation_segments 污染长期记忆
+            log.error(
+                "%s [压缩] LLM 摘要失败 (channel=%s batch_size=%d): %s",
+                trace.prefix(),
+                channel_id[:12],
+                len(messages),
+                e,
+            )
+            return None
 
     # ============================================================
     # 内部: 发摘要到频道线程
@@ -250,7 +262,7 @@ class MemoryCompactor:
                 channel_id=channel_id,
                 message=message,
                 root_id=root_id,
-                props={"from_bot": "true", "summary": "true"},
+                props={PROP_FROM_BOT: PROP_TRUE, PROP_SUMMARY: PROP_TRUE},
             )
             if post_id:
                 log.info(

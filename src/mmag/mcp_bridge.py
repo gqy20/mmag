@@ -186,73 +186,92 @@ class MCPClientBridge:
         from mcp.client.stdio import StdioServerParameters, stdio_client
 
         # ── 建立连接 ──
-        session: Any | None = None
-
-        if item.type == "stdio":
-            cfg = item.raw_config
-            params = StdioServerParameters(
-                command=cfg.get("command", ""),
-                args=[str(a) for a in cfg.get("args", []) if isinstance(a, str)],
-                env={
-                    **os.environ,
-                    **{
-                        k: v
-                        for k, v in cfg.get("env", {}).items()
-                        if isinstance(k, str) and isinstance(v, str)
-                    },
-                },
-            )
-            client = stdio_client(params)
-            session = await client.__aenter__()
-
-        elif item.type in ("http", "streamable-http"):
-            url = item.raw_config.get("url", "")
-            headers = item.raw_config.get("headers", {})
-            # 过滤掉 Authorization 等 header 中可能未解析的 ${VAR}
-            resolved_headers = {
-                k: v for k, v in headers.items() if isinstance(k, str) and isinstance(v, str)
-            }
-            client = sse_client(url, headers=resolved_headers)
-            session = await client.__aenter__()
-
-        else:
-            log.warning("MCP Server '%s': 不支持的传输类型 '%s'", item.name, item.type)
-            return 0
-
-        self._sessions[item.name] = session
-
-        # ── 拉取工具列表 ──
+        # client 是 context manager;一旦 __aenter__() 成功就必须配对 __aexit__(),
+        # 否则 stdio 子进程 / HTTP 连接会泄漏
+        client: Any | None = None
         try:
-            result = await session.list_tools()
-            tools = result.tools
-        except Exception as e:
-            log.warning("MCP Server '%s' 获取工具列表失败: %s", item.name, e)
-            await session.__aexit__(None, None, None)
-            del self._sessions[item.name]
-            return 0
-
-        # ── 注册到 ToolRegistry ──
-        registered = 0
-        for tool in tools:
-            tool_name = f"mcp_{item.name}_{tool.name}"
-            input_schema = tool.inputSchema or {}
-
-            # 包装 handler: 将调用转发到远程 MCP Server
-            handler = self._make_handler(session, tool.name, item.name)
-
-            from .tools import Tool
-
-            self.registry.register(
-                Tool(
-                    name=tool_name,
-                    description=tool.description or f"[MCP:{item.name}] {tool.name}",
-                    input_schema=input_schema,
-                    handler=handler,
+            if item.type == "stdio":
+                cfg = item.raw_config
+                params = StdioServerParameters(
+                    command=cfg.get("command", ""),
+                    args=[str(a) for a in cfg.get("args", []) if isinstance(a, str)],
+                    env={
+                        **os.environ,
+                        **{
+                            k: v
+                            for k, v in cfg.get("env", {}).items()
+                            if isinstance(k, str) and isinstance(v, str)
+                        },
+                    },
                 )
-            )
-            registered += 1
+                client = stdio_client(params)
+                session = await client.__aenter__()
 
-        return registered
+            elif item.type in ("http", "streamable-http"):
+                url = item.raw_config.get("url", "")
+                headers = item.raw_config.get("headers", {})
+                # 过滤掉 Authorization 等 header 中可能未解析的 ${VAR}
+                resolved_headers = {
+                    k: v
+                    for k, v in headers.items()
+                    if isinstance(k, str) and isinstance(v, str)
+                }
+                client = sse_client(url, headers=resolved_headers)
+                session = await client.__aenter__()
+
+            else:
+                log.warning("MCP Server '%s': 不支持的传输类型 '%s'", item.name, item.type)
+                return 0
+
+            self._sessions[item.name] = session
+
+            # ── 拉取工具列表 ──
+            try:
+                result = await session.list_tools()
+                tools = result.tools
+            except Exception as e:
+                log.warning("MCP Server '%s' 获取工具列表失败: %s", item.name, e)
+                return 0
+
+            # ── 注册到 ToolRegistry ──
+            registered = 0
+            for tool in tools:
+                tool_name = f"mcp_{item.name}_{tool.name}"
+                input_schema = tool.inputSchema or {}
+
+                # 包装 handler: 将调用转发到远程 MCP Server
+                handler = self._make_handler(session, tool.name, item.name)
+
+                from .tools import Tool
+
+                self.registry.register(
+                    Tool(
+                        name=tool_name,
+                        description=tool.description or f"[MCP:{item.name}] {tool.name}",
+                        input_schema=input_schema,
+                        handler=handler,
+                    )
+                )
+                registered += 1
+
+            # 成功路径:client 所有权转给 _sessions,后续由 close_all 统一关闭
+            client = None
+            return registered
+
+        except BaseException:
+            # __aenter__ 成功但 list_tools / register 之前任意步骤失败:
+            # 必须显式关闭 client 释放 stdio 子进程 / HTTP 连接
+            if client is not None:
+                try:
+                    await client.__aexit__(None, None, None)
+                except Exception as cleanup_err:
+                    log.warning(
+                        "MCP Server '%s' 失败时清理 client 异常: %s",
+                        item.name,
+                        cleanup_err,
+                    )
+            self._sessions.pop(item.name, None)
+            raise
 
     @staticmethod
     def _make_handler(session: Any, tool_name: str, server_name: str):

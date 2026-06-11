@@ -110,13 +110,5 @@ class Config:
             + "/api/v4/websocket"
         )
 
-    @property
-    def api_base(self) -> str:
-        return f"{self.mm_url}/api/v4"
-
-    @property
-    def headers(self) -> dict:
-        return {"Authorization": f"Bearer {self.mm_token}", "Content-Type": "application/json"}
-
 
 config = Config()

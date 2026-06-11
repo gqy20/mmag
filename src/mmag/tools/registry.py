@@ -32,8 +32,6 @@ class Tool:
     description: str
     input_schema: dict[str, Any]
     handler: Callable[..., Any]
-    # 是否将执行结果反馈给用户（某些内部工具不需要）
-    visible: bool = True
 
 
 class ToolRegistry:
@@ -79,15 +77,6 @@ class ToolRegistry:
             }
             for t in self._tools.values()
         ]
-
-    def get_descriptions(self) -> str:
-        """生成工具描述文本（用于注入 system prompt）"""
-        lines = []
-        for t in self._tools.values():
-            params = ", ".join(t.input_schema.get("properties", {}).keys())
-            desc = t.description
-            lines.append(f"- **{t.name}**({params}): {desc}")
-        return "\n".join(lines)
 
     async def execute(self, name: str, input_data: dict[str, Any]) -> str:
         """

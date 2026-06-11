@@ -509,7 +509,9 @@ def _get_posts_cached(mm_client, memory, channel_id: str, limit: int) -> list[di
         for p in rest_posts:
             p["channel_id"] = channel_id  # 确保有 channel_id
             p["username"] = mm_client.get_username(p.get("user_id", ""))
-            memory.log_message(p)
+            if not memory.log_message(p):
+                # 回填失败不致命,但要让运维可见
+                log.warning("get_posts 回填 message_log 失败 (id=%s)", p.get("id", "")[:12])
         log.debug("get_posts: 已回填 %d 条消息到本地缓存", len(rest_posts))
 
     return rest_posts if rest_posts else cached

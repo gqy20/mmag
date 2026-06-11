@@ -279,7 +279,14 @@ class Memory:
             self._conn.commit()
             return True
         except Exception as e:
-            log.debug(f"log_message 失败: {e}")
+            # 升级为 error: 静默吞掉会导致消息/索引永久丢失,运维侧无信号
+            log.error(
+                "log_message 失败 (id=%s channel=%s): %s",
+                post_id[:12] if post_id else "?",
+                (post.get("channel_id") or "?")[:12],
+                e,
+                exc_info=True,
+            )
             return False
 
     def get_recent_messages(self, channel_id: str, limit: int = 30) -> list[dict]:
@@ -953,27 +960,6 @@ class Memory:
             (channel_id,),
         ).fetchone()
         return row["summary"] if row else ""
-
-    # ---- 清理 ----
-
-    def clear_all(self):
-        """清空短期对话数据（保留用户画像和团队知识）
-
-        删除: message_log (消息日志), conversation_segments (对话段),
-              open_items (待办), url_cache (链接分析缓存), message_log_fts (FTS 索引)
-        保留: user_profiles (用户画像), team_knowledge (团队知识库) — 这些是长期数据
-        """
-        for table in [
-            "message_log",
-            "message_log_fts",
-            "message_log_fts_map",
-            "conversation_segments",
-            "open_items",
-            "url_cache",
-        ]:
-            self._conn.execute(f"DELETE FROM {table}")
-        self._conn.commit()
-        log.info("短期对话数据已清空（用户画像/团队知识已保留）")
 
     def close(self):
         if self._conn:

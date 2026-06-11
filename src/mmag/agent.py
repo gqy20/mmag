@@ -9,7 +9,7 @@ import json
 import random
 import time
 
-from .client import MMClient
+from .client import PROP_FROM_BOT, PROP_TRUE, MMClient
 from .config import _log_config_loading, config
 from .llm import LLM, LLMError
 from .logger import get_logger, trace
@@ -44,7 +44,7 @@ class Agent:
 
         # 运行状态
         self.start_time = time.time()
-        self.stats = {"messages": 0, "responses": 0}
+        self.stats = {"messages": 0, "responses": 0, "dropped_messages": 0}
         self.running = False
 
         # 频道级状态
@@ -60,6 +60,13 @@ class Agent:
             llm=self.llm,
             mm_client=self.mm,
             config=self.config,
+        )
+
+        # 主动旁听触发器 (从 prompts.yml 加载, 改词不用改代码)
+        self._triggers = prompts.get_section(
+            "triggers",
+            bot_name=config.bot_name,
+            bot_display_name=config.bot_display_name,
         )
 
         # WebSocket 客户端 (启动时构造, 调用 ws.run() 进入事件循环)
@@ -254,6 +261,9 @@ class Agent:
                 p["username"] = self.mm.get_username(p.get("user_id", ""))
                 if self.memory.log_message(p):
                     new_count += 1
+                else:
+                    # 失败可能是 (已存在 / 字段缺失 / DB 写失败) — 全部计入 dropped
+                    self.stats["dropped_messages"] += 1
 
             if stop or len(posts) < per_page:
                 break
@@ -342,7 +352,8 @@ class Agent:
         post["username"] = self.mm.get_username(user_id)
 
         # 缓存消息
-        self.memory.log_message(post)
+        if not self.memory.log_message(post):
+            self.stats["dropped_messages"] += 1
 
         # Layer 1→2 双阈值管理（定期摘要 + 容量清理）— 委托给 MemoryCompactor
         # 每条消息都检查，compactor 内部有 guard 避免无效操作
@@ -401,43 +412,23 @@ class Agent:
             trace.clear()
 
     async def _should_respond(self, post: dict) -> bool:
-        """判断是否应该主动回复"""
+        """判断是否应该主动回复 — 触发词/问句/概率三层判定
+
+        触发词与问句尾缀从 triggers.yml 加载,改配置不用动代码。
+        """
         message = post["message"]
 
         # 高概率触发词
-        high_trigger = [
-            "报错",
-            "错误",
-            "bug",
-            "失败",
-            "不行",
-            "不行吗",
-            "帮忙",
-            "帮我看",
-            "怎么看",
-            "怎么办",
-            "为什么",
-            "怎么",
-            "如何",
-            "?",
-            "？",
-            "部署",
-            "上线",
-            "发布",
-            "回滚",
-            "谁知道",
-            "有人吗",
-            "怎么弄",
-            config.bot_name,
-            config.bot_display_name,
-        ]
-        if any(w in message.lower() for w in high_trigger):
+        if self._triggers["high_triggers"] and any(
+            w in message.lower() for w in self._triggers["high_triggers"]
+        ):
             return True
 
         # 问句检测
-        stripped = message.rstrip(" \t。！？.,!?")
-        if stripped.endswith(("?", "？", "吗", "呢", "吧")):
-            return True
+        if self._triggers["question_suffixes"]:
+            stripped = message.rstrip(self._triggers["strip_trailing"])
+            if stripped.endswith(tuple(self._triggers["question_suffixes"])):
+                return True
 
         # 概率旁听
         return random.random() < config.listen_probability
@@ -591,12 +582,12 @@ class Agent:
             post_id = self.mm.send_post(
                 channel_id=post["channel_id"],
                 message=message,
-                props={"from_bot": "true"},
+                props={PROP_FROM_BOT: PROP_TRUE},
             )
             if post_id:
                 self.stats["responses"] += 1
                 # 把自己的回复也缓存起来
-                self.memory.log_message(
+                if not self.memory.log_message(
                     {
                         "id": post_id or "",
                         "channel_id": post["channel_id"],
@@ -607,7 +598,8 @@ class Agent:
                         "type": "",
                         "root_id": "",  # 主流消息无 root_id
                     }
-                )
+                ):
+                    self.stats["dropped_messages"] += 1
                 return post_id
             else:
                 log.error(f"       ❌ send_post 返回 None! channel={post['channel_id'][:8]}")
@@ -617,13 +609,36 @@ class Agent:
             return None
 
     async def stop(self):
-        """停止 Agent"""
+        """停止 Agent — 按顺序释放资源,任一失败不影响后续清理"""
         self.running = False
-        # 关闭 WebSocket (解除 ws.run() 阻塞)
+
+        # 1) 关闭 WebSocket (解除 ws.run() 阻塞)
         if getattr(self, "ws", None) is not None:
-            await self.ws.close()
-        # 关闭 MCP 外部连接
+            try:
+                await self.ws.close()
+            except Exception as e:
+                log.error("ws.close 失败: %s", e, exc_info=True)
+
+        # 2) 关闭 MCP 外部连接 (会注销注入的 mcp_* 工具)
         if hasattr(self, "mcp_bridge"):
-            await self.mcp_bridge.close_all()
-        self.memory.close()
+            try:
+                await self.mcp_bridge.close_all()
+            except Exception as e:
+                log.error("mcp_bridge.close_all 失败: %s", e, exc_info=True)
+
+        # 3) 关闭 url_analyzer 的全局 httpx 客户端 (避免 Agent 退出后残留连接池)
+        try:
+            from .url_analyzer import close_client
+
+            await close_client()
+        except Exception as e:
+            log.error("url_analyzer.close_client 失败: %s", e, exc_info=True)
+
+        # 4) 关闭 SQLite 连接 (最后 — 前面步骤可能还需要读 message_log)
+        if hasattr(self, "memory"):
+            try:
+                self.memory.close()
+            except Exception as e:
+                log.error("memory.close 失败: %s", e, exc_info=True)
+
         log.info("Agent 已停止")
