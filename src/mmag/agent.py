@@ -1,5 +1,5 @@
 """
-核心 Agent — WebSocket 事件循环 + 消息处理
+核心 Agent — WebSocket 事件循环 + 消息处理 (支持 Agentic Tool Use)
 """
 
 import asyncio
@@ -16,18 +16,26 @@ from .client import MMClient
 from .llm import LLM
 from .memory import Memory
 from .prompts import prompts
+from .tools import ToolRegistry, build_builtin_tools
 
 log = logging.getLogger("agent")
 
 
 class Agent:
-    """Mattermost AI Agent 主类"""
+    """Mattermost AI Agent 主类 — 支持 Agentic Tool Use"""
 
     def __init__(self):
         self.config = config
         self.mm = MMClient()
         self.llm = LLM()
         self.memory = Memory(config.memory_db_path)
+
+        # 工具注册系统
+        self.tool_registry = ToolRegistry()
+        builtin_tools = build_builtin_tools(self.mm, self.memory)
+        for t in builtin_tools:
+            self.tool_registry.register(t)
+        log.info(f"工具系统就绪: {len(builtin_tools)} 个内置工具")
 
         # 运行状态
         self.start_time = time.time()
@@ -458,16 +466,19 @@ class Agent:
         return False
 
     async def _respond_to_mention(self, post: dict):
-        """响应 @提及"""
+        """响应 @提及（支持 Agentic Tool Use）"""
         log.info(f"       📤 [@提及回复] 构建上下文...")
         await self.typing_indicator(post["channel_id"])
         context = self._build_context(post, mention=True)
-        log.info(f"       📤 [@提及回复] 调用 LLM (上下文 {len(context['messages'])} 条消息)...")
-        response = await self.llm.chat(
+        log.info(f"       📤 [@提及回复] 调用 Agent Loop (上下文 {len(context['messages'])} 条消息)...")
+        response = await self.llm.agent_loop(
             messages=context["messages"],
             system=context["system"],
+            tools=self.tool_registry.get_schema_list(),
+            tool_registry=self.tool_registry,
+            max_rounds=5,
         )
-        log.info(f"       📤 LLM 返回 ({len(response)} 字符): {response[:200]}")
+        log.info(f"       📤 Agent Loop 返回 ({len(response)} 字符): {response[:200]}")
         if not response or response.startswith("⚠️"):
             log.warning(f"       ⚠️ LLM 返回异常或为空: {response[:100]}")
         else:
@@ -477,16 +488,19 @@ class Agent:
         self._save_interaction(post, response)
 
     async def _respond_chat(self, post: dict):
-        """响应普通对话/旁听"""
+        """响应普通对话/旁听（支持 Agentic Tool Use）"""
         log.info(f"       📤 [对话回复] 构建上下文...")
         await self.typing_indicator(post["channel_id"])
         context = self._build_context(post)
-        log.info(f"       📤 [对话回复] 调用 LLM (上下文 {len(context['messages'])} 条消息)...")
-        response = await self.llm.chat(
+        log.info(f"       📤 [对话回复] 调用 Agent Loop (上下文 {len(context['messages'])} 条消息)...")
+        response = await self.llm.agent_loop(
             messages=context["messages"],
             system=context["system"],
+            tools=self.tool_registry.get_schema_list(),
+            tool_registry=self.tool_registry,
+            max_rounds=3,  # 旁听场景限制轮次，避免过度响应
         )
-        log.info(f"       📤 LLM 返回 ({len(response)} 字符): {response[:200]}")
+        log.info(f"       📤 Agent Loop 返回 ({len(response)} 字符): {response[:200]}")
         if not response or response.startswith("⚠️"):
             log.warning(f"       ⚠️ LLM 返回异常或为空: {response[:100]}")
         else:
@@ -501,7 +515,7 @@ class Agent:
         ch_info = self.mm.get_channel(channel_id)
         ch_name = ch_info.get("display_name", channel_id[:8])
 
-        # 系统提示词
+        # 系统提示词（纯人格，不包含工具信息 — 工具通过 SDK tools 参数传递）
         system = prompts.get("system_prompt",
             bot_name=config.bot_display_name,
             bot_username=self.bot_username,
