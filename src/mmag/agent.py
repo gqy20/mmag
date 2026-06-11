@@ -1,14 +1,13 @@
 """
-核心 Agent — WebSocket 事件循环 + 消息处理 (支持 Agentic Tool Use)
+核心 Agent — 消息处理 + 响应编排 (支持 Agentic Tool Use)
+
+WebSocket 连接管理已拆分到 ws_client.py, 记忆压缩拆分到 memory_compactor.py
 """
 
 import asyncio
-import contextlib
 import json
 import random
 import time
-
-import websockets
 
 from .client import MMClient
 from .config import _log_config_loading, config
@@ -16,8 +15,10 @@ from .llm import LLM
 from .logger import get_logger, trace
 from .mcp_bridge import MCPClientBridge
 from .memory import Memory
+from .memory_compactor import MemoryCompactor
 from .prompts import prompts
 from .tools import ToolRegistry, build_builtin_tools
+from .ws_client import WebSocketClient
 
 log = get_logger(__name__)
 
@@ -53,13 +54,16 @@ class Agent:
         self.bot_user_id = ""
         self.bot_username = ""
 
-    # ---- 官方 WebSocket 协议状态 ----
-    _conn_id: str = ""  # 服务端分配的 connection_id (用于断线续传)
-    _server_seq: int = 0  # 服务端事件序列号 (用于检测丢包)
-    _client_seq: int = 1  # 客户端请求序列号
-    _connect_fail_count: int = 0  # 连接失败计数 (用于指数退避)
-    _last_err_code: str | None = None  # 上次断开错误码
-    _ping_task: asyncio.Task | None = None  # 心跳任务
+        # 记忆压缩器 (长期记忆层管理)
+        self.compactor = MemoryCompactor(
+            memory=self.memory,
+            llm=self.llm,
+            mm_client=self.mm,
+            config=self.config,
+        )
+
+        # WebSocket 客户端 (启动时构造, 调用 ws.run() 进入事件循环)
+        self.ws: WebSocketClient | None = None
 
     async def start(self):
         """启动 Agent — 按 Mattermost 官方 WebSocket 协议实现"""
@@ -155,446 +159,41 @@ class Agent:
             log.warning(f"       ⚠️ 预加载频道失败: {e}")
             log.warning("       (不影响运行，将使用空上下文启动)")
 
-        # 阶段 4+5: WebSocket 连接 + 事件循环 (官方协议)
+        # 阶段 4+5: 启动 WebSocket 客户端 (封装了连接/握手/心跳/重连)
         log.info("[4/5] 建立 WebSocket 连接 (官方协议)...")
         self.running = True  # 必须在进入循环前设置!
 
-        # 重连参数 (参考 webapp/platform/client/src/websocket.ts)
-        min_retry_s = 3  # 最小重试间隔
-        max_retry_s = 300  # 最大重试间隔 (5分钟)
-        jitter_range_s = 2  # 抖动范围
-        max_fails_before_backoff = 7  # 超过此次数开始指数退避
-
-        while self.running:
-            try:
-                # 构建带断线续传参数的 URL (官方做法)
-                ws_url = config.ws_url
-                params = []
-                if self._conn_id:
-                    params.append(f"connection_id={self._conn_id}")
-                    params.append(f"sequence_number={self._server_seq}")
-                if self._last_err_code:
-                    params.append(f"disconnect_err_code={self._last_err_code}")
-                if params:
-                    ws_url += "?" + "&".join(params)
-
-                log.info(f"       → {ws_url[:80]}{'...' if len(ws_url) > 80 else ''}")
-
-                async with websockets.connect(
-                    ws_url,
-                    additional_headers={"Authorization": f"Bearer {config.mm_token}"},
-                    open_timeout=10,
-                    ping_interval=None,  # 我们自己管理心跳
-                    ping_timeout=None,
-                ) as ws:
-                    log.info("       ✅ WebSocket 已连接")
-
-                    # ── 官方握手流程 ──
-                    # Step 1: 收 Hello (服务器首条推送)
-                    hello = json.loads(await ws.recv())
-                    if hello.get("event") != "hello":
-                        log.warning(f"       ⚠️ 首条非 hello: {hello.get('event', '?')}")
-
-                    new_conn_id = hello.get("data", {}).get("connection_id", "")
-                    server_ver = hello.get("data", {}).get("server_version", "?")
-
-                    # 如果 conn_id 变了说明是长时间断线或服务端重启
-                    if self._conn_id and self._conn_id != new_conn_id:
-                        log.warning("       ⚠️ connection_id 变化，可能有遗漏消息")
-
-                    self._conn_id = new_conn_id
-                    # 官方做法: hello 的 seq 之后紧接着就是下一个事件
-                    self._server_seq = hello.get("seq", 0) + 1
-                    self._client_seq = 1
-                    self._connect_fail_count = 0
-                    self._last_err_code = None
-                    log.info(f"       📨 Hello | id={self._conn_id[:12]}... v{server_ver}")
-
-                    # Step 2: 发送认证 (官方: onopen 时立即发)
-                    auth_msg = json.dumps(
-                        {
-                            "action": "authentication_challenge",
-                            "seq": self._client_seq,
-                            "data": {"token": config.mm_token},
-                        }
-                    )
-                    self._client_seq += 1
-                    await ws.send(auth_msg)
-                    log.info("       🔑 认证请求已发送")
-
-                    # Step 3: 启动心跳 (官方: 每30秒 ping)
-                    self._ping_task = asyncio.create_task(self._ping_loop(ws), name="ws-ping")
-
-                    # 阶段 5: 进入事件循环
-                    log.info("[5/5] 🎯 进入事件监听循环...")
-                    log.info(f"       旁听概率: {config.listen_probability:.0%}")
-                    log.info(f"       上下文窗口: {config.max_context_messages} 条")
-                    log.info("       纯自然语言驱动，无命令")
-                    log.info("")
-                    log.info("────── Agent 就绪，等待消息 ──────")
-
-                    try:
-                        async for raw_msg in ws:
-                            await self._handle_ws_message(raw_msg, ws)
-                    except websockets.ConnectionClosed as e:
-                        log.warning(f"       🔌 WebSocket 断开: code={e.code}")
-                        self._last_err_code = str(e.code)
-
-            except Exception as e:
-                log.error(f"       ❌ 连接异常: {e}", exc_info=True)
-                self._connect_fail_count += 1
-            finally:
-                if self._ping_task and not self._ping_task.done():
-                    self._ping_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await self._ping_task
-
-            # ── 指数退避重连 (官方算法) ──
-            if not self.running:
-                break
-
-            retry_s = min_retry_s
-            if self._connect_fail_count > max_fails_before_backoff:
-                retry_s = min(min_retry_s * self._connect_fail_count**2, max_retry_s)
-            retry_s += random.random() * jitter_range_s  # jitter
-            log.info(f"       ⏳ {retry_s:.1f}s 后重连 (第{self._connect_fail_count}次)...")
-            await asyncio.sleep(retry_s)
-
-    async def _ping_loop(self, ws):
-        """心跳循环 — 参考 webapp 官方实现 (每30秒 ping)"""
-        ping_interval_s = 30
-        try:
-            while True:
-                await asyncio.sleep(ping_interval_s)
-                ping_msg = json.dumps(
-                    {
-                        "action": "ping",
-                        "seq": self._client_seq,
-                    }
-                )
-                self._client_seq += 1
-                await ws.send(ping_msg)
-                log.debug("       💓 ping sent")
-        except (asyncio.CancelledError, websockets.ConnectionClosed):
-            pass
-
-    async def _compact_channel_cache(self, channel_id: str):
-        """Layer 1→Layer 2 双阈值管理
-
-        两个独立动作:
-          A. 定期摘要（每 ~100 条消息）: 只读最近一批消息做摘要，
-             原始消息保留在 message_cache 中不删除。
-          B. 容量清理（超过上限时）: 弹出最旧的 N 条，
-             先做摘要再删除，将缓存控制在安全范围。
-
-        摘要完成后会以**线程回复**形式发到频道（不污染主聊天流）。
-        """
-        cfg = self.config
-        summary_interval = cfg.memory_summary_interval
-        max_cache_size = cfg.memory_cache_max
-        compaction_keep = cfg.memory_compaction_keep
-        summary_batch = cfg.memory_summary_batch
-
-        t0 = time.monotonic()
-        count = self.memory.get_channel_cache_count(channel_id)
-
-        # ── 动作 A: 定期摘要（每 ~100 条）──
-        if count > 0 and count % summary_interval == 0:
-            log.info(
-                "%s [摘要] channel=%s 第 %d 条 → 触发定期摘要",
-                trace.prefix(),
-                channel_id[:12],
-                count,
-            )
-            # 取当前批次 + 前序上下文
-            peek_count = summary_interval + cfg.memory_context_window
-            wider_batch = self.memory.peek_recent_messages(channel_id, limit=peek_count)
-            if wider_batch:
-                ctx = (
-                    wider_batch[:-summary_interval] if len(wider_batch) > summary_interval else None
-                )
-                recent_batch = wider_batch[-summary_interval:]
-
-                all_summaries = []
-                for bs in range(0, len(recent_batch), summary_batch):
-                    batch = recent_batch[bs : bs + summary_batch]
-                    summary = await self._summarize_message_batch(
-                        batch, channel_id, context_messages=ctx
-                    )
-                    if summary:
-                        all_summaries.append(summary)
-
-                if all_summaries:
-                    combined = "\n\n---\n\n".join(all_summaries)
-                    participants = list(
-                        {m.get("username", "?") for m in recent_batch if m.get("username")}
-                    )
-                    topic = (
-                        f"定期摘要 #{count // summary_interval} "
-                        f"(msg {count - summary_interval + 1}-{count})"
-                    )
-
-                    self.memory.save_conversation_segment(
-                        channel_id=channel_id,
-                        topic=topic,
-                        summary=combined,
-                        participants=participants,
-                        key_points=[],
-                    )
-
-                    # 发送线程回复到频道
-                    last_post_id = recent_batch[-1].get("id", "") if recent_batch else ""
-                    await self._post_summary_thread(
-                        channel_id=channel_id,
-                        root_id=last_post_id,
-                        title=f"📋 {topic}",
-                        content=combined,
-                    )
-
-                    elapsed = time.monotonic() - t0
-                    log.info(
-                        "%s [摘要] 完成 | %d 批 | %.1fs | 缓存仍 %d 条",
-                        trace.prefix(),
-                        len(all_summaries),
-                        elapsed,
-                        self.memory.get_channel_cache_count(channel_id),
-                    )
-
-        # ── 动作 B: 容量清理（超过上限时）──
-        if count > max_cache_size:
-            log.info(
-                "%s [清理] channel=%s %d 条 > 上限 %d → 开始容量清理",
-                trace.prefix(),
-                channel_id[:12],
-                count,
-                max_cache_size,
-            )
-            old_messages = self.memory.pop_old_messages(channel_id, keep=compaction_keep)
-            if not old_messages:
-                return
-
-            # 获取紧接在被弹出消息之后的消息作为上下文
-            context_msgs = self.memory.peek_recent_messages(
-                channel_id, limit=cfg.memory_context_window
-            )
-
-            all_summaries = []
-            for batch_start in range(0, len(old_messages), summary_batch):
-                batch = old_messages[batch_start : batch_start + summary_batch]
-                summary = await self._summarize_message_batch(
-                    batch, channel_id, context_messages=context_msgs
-                )
-                if summary:
-                    all_summaries.append(summary)
-
-            if all_summaries:
-                combined_summary = "\n\n---\n\n".join(all_summaries)
-                participants = list(
-                    {m.get("username", "?") for m in old_messages if m.get("username")}
-                )
-                topic = f"容量清理-{time.strftime('%Y-%m-%d_%H%M')} ({len(old_messages)}条)"
-
-                self.memory.save_conversation_segment(
-                    channel_id=channel_id,
-                    topic=topic,
-                    summary=combined_summary,
-                    participants=participants,
-                    key_points=[],
-                )
-
-                # 发送线程回复到频道（挂载在缓存中最新一条消息下）
-                latest_msgs = self.memory.peek_recent_messages(channel_id, limit=1)
-                anchor_id = latest_msgs[0].get("id", "") if latest_msgs else ""
-                await self._post_summary_thread(
-                    channel_id=channel_id,
-                    root_id=anchor_id,
-                    title=f"🗂️ {topic}",
-                    content=combined_summary,
-                )
-
-                elapsed = time.monotonic() - t0
-                remaining = self.memory.get_channel_cache_count(channel_id)
-                log.info(
-                    "%s [清理] 完成 | 摘要 %d 批 | %.1fs | 缓存剩余 %d 条",
-                    trace.prefix(),
-                    len(all_summaries),
-                    elapsed,
-                    remaining,
-                )
-
-            if all_summaries:
-                combined_summary = "\n\n---\n\n".join(all_summaries)
-                participants = list(
-                    {m.get("username", "?") for m in old_messages if m.get("username")}
-                )
-                key_points = []
-                for m in old_messages[-20:]:
-                    msg = (m.get("message") or "").strip()
-                    if len(msg) > 15 and not msg.startswith(("http", "@")):
-                        key_points.append(f"[{m.get('username', '?')}] {msg[:120]}")
-
-                self.memory.save_conversation_segment(
-                    channel_id=channel_id,
-                    topic=f"容量清理-{time.strftime('%Y-%m-%d_%H%M')} ({len(old_messages)}条)",
-                    summary=combined_summary,
-                    participants=participants,
-                    key_points=key_points[-10:],
-                )
-                elapsed = time.monotonic() - t0
-                remaining = self.memory.get_channel_cache_count(channel_id)
-                log.info(
-                    "%s [清理] 完成 | 摘要 %d 批 | %.1fs | 缓存剩余 %d 条",
-                    trace.prefix(),
-                    len(all_summaries),
-                    elapsed,
-                    remaining,
-                )
-
-    async def _summarize_message_batch(
-        self,
-        messages: list[dict],
-        channel_id: str,
-        context_messages: list[dict] | None = None,
-    ) -> str:
-        """调用 LLM 对一批消息做结构化摘要（支持注入前序上下文）
-
-        Args:
-            messages: 当前要摘要的消息批次
-            channel_id: 频道 ID
-            context_messages: 前序消息（用于保持上下文连贯），LLM 会参考这些
-                             信息来理解当前批次的对话背景，但只对 messages 输出摘要
-        """
-        cfg = self.config
-
-        # ── 格式化前序上下文（如果有）──
-        context_text = ""
-        if context_messages:
-            ctx_lines = []
-            for m in context_messages[-cfg.memory_context_window :]:
-                user = m.get("username", "?")
-                msg = (m.get("message") or "").strip()[:200]
-                ctx_lines.append(f"  {user}: {msg}")
-            context_text = (
-                "\n【前序对话背景（仅供参考，理解上下文用，不需要重复摘要）】\n"
-                + "\n".join(ctx_lines)
-                + "\n"
-            )
-
-        # ── 格式化当前批次 ──
-        lines = []
-        for m in messages:
-            user = m.get("username", "?")
-            msg = (m.get("message") or "").strip()
-            ts = m.get("create_at", "")
-            time_str = ""
-            if ts:
-                try:
-                    from datetime import datetime
-
-                    dt = datetime.fromtimestamp(ts if ts < 1e12 else ts / 1000.0)
-                    time_str = dt.strftime("%H:%M")
-                except Exception:
-                    pass
-            lines.append(f"[{time_str}] {user}: {msg[:300]}")
-
-        conversation_text = "\n".join(lines)
-
-        prompt = (
-            "请对以下团队对话记录做简洁的结构化摘要。\n"
-            "要求:\n"
-            "1. 用 2-3 句话概括这段时间讨论的核心主题和结论\n"
-            "2. 如果有明确的决策或行动项，单独列出\n"
-            "3. 省略闲聊和无关内容\n"
-            "4. 直接输出摘要，不要加前缀说明\n"
-            f"{context_text}\n"
-            f"\n【当前待摘要对话 ({len(messages)} 条)】\n{conversation_text}"
+        self.ws = WebSocketClient(
+            url=config.ws_url,
+            token=config.mm_token,
+            on_event=self._on_ws_event,
+            on_response=self._on_ws_response,
         )
 
-        try:
-            result = await self.llm.chat_with_system(
-                system_prompt=(
-                    "你是一个对话摘要助手。你的任务是将团队聊天记录压缩为"
-                    "精炼的结构化摘要，保留关键信息和决策，去除冗余。"
-                    "如果提供了前序对话背景，请用它来理解上下文，但只对"
-                    "当前待摘要的对话部分输出摘要。"
-                ),
-                user_message=prompt,
-                max_tokens=1024,
-            )
-            return result
-        except Exception as e:
-            log.error("%s [压缩] LLM 摘要失败: %s", trace.prefix(), e)
-            return f"(摘要失败: {e})"
+        # 阶段 5: 提示就绪
+        log.info("[5/5] 🎯 进入事件监听循环...")
+        log.info(f"       旁听概率: {config.listen_probability:.0%}")
+        log.info(f"       上下文窗口: {config.max_context_messages} 条")
+        log.info("       纯自然语言驱动，无命令")
+        log.info("")
+        log.info("────── Agent 就绪，等待消息 ──────")
 
-    async def _post_summary_thread(self, channel_id: str, root_id: str, title: str, content: str):
-        """将摘要以线程回复形式发送到频道
+        # 阻塞运行 (内部自动重连), 直到 stop() 调 ws.close()
+        await self.ws.run()
 
-        线程消息不会出现在主聊天流中，用户需要点开才能看到。
-        这样既让团队可见知识沉淀，又不打扰正常对话。
+
+    async def _on_ws_event(self, msg: dict):
+        """WebSocket 服务端事件回调 (由 ws_client 在 JSON 解析 + 序列号校验后调用)
+
+        协议区分两种消息 (见 websocket_client.go Listen()):
+          1. **Event** (服务端推送): 有 `event` 字段, 带递增 `seq` — 走到这里
+          2. **Response** (请求回复): 有 `seq_reply` 字段 — 走 _on_ws_response
+
+        ws_client 已经做了 JSON 解析 + 序列号校验/告警, 这里只做事件类型分发。
         """
-        # 截断过长的摘要（Mattermost 单条消息限制 ~4MB，但实际显示体验上 4000 字符为宜）
-        max_len = 4000
-        if len(content) > max_len:
-            content = content[:max_len] + "\n\n...(摘要已截断)"
-
-        message = f"### {title}\n\n{content}"
-
-        try:
-            post_id = self.mm.send_post(
-                channel_id=channel_id,
-                message=message,
-                root_id=root_id,
-                props={"from_bot": "true", "summary": "true"},
-            )
-            if post_id:
-                log.info(
-                    "%s [摘要线程] 已发送 → %s (root=%s)",
-                    trace.prefix(),
-                    post_id[:12],
-                    root_id[:12] if root_id else "(主流)",
-                )
-            else:
-                log.warning("%s [摘要线程] send_post 返回 None", trace.prefix())
-        except Exception as e:
-            log.error("%s [摘要线程] 发送失败: %s", trace.prefix(), e)
-
-    async def _handle_ws_message(self, raw: str, ws):
-        """
-        处理单条 WebSocket 消息。
-
-        官方协议区分两种消息类型 (见 websocket_client.go Listen()):
-          1. **Event** (服务端推送): 有 `event` 字段，带递增 `seq`
-          2. **Response** (请求回复): 有 `seq_reply` 字段，有 `status`
-
-        客户端必须校验序列号，发现不连续则说明丢包。
-        """
-        try:
-            msg = json.loads(raw)
-        except json.JSONDecodeError:
-            log.debug(f"       ⚠️ 无法解析 JSON: {raw[:80]}")
-            return
-
-        # ── 区分 Response vs Event (官方核心逻辑) ──
-        if "seq_reply" in msg:
-            # 这是某个请求的响应 (如认证结果、ping 回复等)
-            self._on_response(msg)
-            return
-
-        # 这是服务端事件流
         etype = msg.get("event", "")
 
-        # ── 序列号校验 (官方: 发现不连续则重连) ──
-        msg_seq = msg.get("seq", -1)
-        if msg_seq != self._server_seq:
-            log.warning(
-                f"       ⚠️ 序列号不连续! 期望={self._server_seq} 实际={msg_seq}"
-                f" (可能丢失 {msg_seq - self._server_seq} 条事件)"
-            )
-            # 注意: 不直接断开，而是记录并继续（Bot 场景容忍少量丢包）
-        self._server_seq = msg_seq + 1
-
-        # ── 分发事件 ──
-        async def _noop(_m, _w):
+        async def _noop(_m):
             pass
 
         handler_map = {
@@ -612,12 +211,12 @@ class Agent:
         }
         handler = handler_map.get(etype)
         if handler:
-            await handler(msg, ws)
+            await handler(msg)
         elif etype not in ("hello",):
             log.debug(f"       [未处理事件] {etype}")
 
-    def _on_response(self, msg: dict):
-        """处理 WebSocket 响应 (认证结果等)"""
+    def _on_ws_response(self, msg: dict):
+        """WebSocket 客户端请求响应回调 (认证结果 / ping 回复等)"""
         seq_reply = msg.get("seq_reply", 0)
         status = msg.get("status", "?")
         err = msg.get("error")
@@ -629,7 +228,7 @@ class Agent:
         else:
             log.debug(f"       响应 (seq={seq_reply}): status={status}")
 
-    async def _on_posted(self, event: dict, ws):
+    async def _on_posted(self, event: dict):
         """处理 posted 事件 — 核心消息处理入口
 
         data.post 的格式有三种可能 (官方源码 webSocketEventJSON):
@@ -709,13 +308,9 @@ class Agent:
         # 缓存消息
         self.memory.cache_message(post)
 
-        # Layer 1→2 双阈值管理（定期摘要 + 容量清理）
-        # 每条消息都检查，内部有 guard 避免无效操作
-        count = self.memory.get_channel_cache_count(channel_id)
-        if count > 0 and (
-            count % config.memory_summary_interval == 0 or count > config.memory_cache_max
-        ):
-            await self._compact_channel_cache(channel_id)
+        # Layer 1→2 双阈值管理（定期摘要 + 容量清理）— 委托给 MemoryCompactor
+        # 每条消息都检查，compactor 内部有 guard 避免无效操作
+        await self.compactor.maybe_compact(channel_id)
 
         # 更新工作内存
         if channel_id not in self.working_memory:
@@ -1024,6 +619,9 @@ class Agent:
     async def stop(self):
         """停止 Agent"""
         self.running = False
+        # 关闭 WebSocket (解除 ws.run() 阻塞)
+        if getattr(self, "ws", None) is not None:
+            await self.ws.close()
         # 关闭 MCP 外部连接
         if hasattr(self, "mcp_bridge"):
             await self.mcp_bridge.close_all()
