@@ -8,7 +8,9 @@ import sqlite3
 import time
 from typing import Optional
 
-log = logging.getLogger("agent")
+from .logger import get_logger
+
+log = get_logger(__name__)
 
 
 class Memory:

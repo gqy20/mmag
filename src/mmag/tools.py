@@ -11,11 +11,13 @@
 from __future__ import annotations
 
 import json
-import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-log = logging.getLogger("agent")
+from .logger import get_logger, trace
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -39,9 +41,9 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         """注册一个工具"""
         if tool.name in self._tools:
-            log.warning(f"工具 '{tool.name}' 已存在，将被覆盖")
+            log.warning("工具 '%s' 已存在，将被覆盖", tool.name)
         self._tools[tool.name] = tool
-        log.debug(f"工具已注册: {tool.name}")
+        log.info("工具已注册: %s (%d 参数)", tool.name, len(tool.input_schema.get("properties", {})))
 
     def get_all(self) -> list[Tool]:
         """获取所有已注册的工具"""
@@ -76,7 +78,12 @@ class ToolRegistry:
         """
         tool = self._tools.get(name)
         if not tool:
+            log.warning("%s 未知工具: %s", trace.prefix(), name)
             return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
+
+        t0 = time.monotonic()
+        log.info("%s 调用工具: %s(%s)", trace.prefix(), name,
+                 json.dumps(input_data, ensure_ascii=False)[:200])
 
         try:
             result = tool.handler(**input_data)
@@ -86,14 +93,21 @@ class ToolRegistry:
 
             # 统一序列化为 JSON 字符串
             if isinstance(result, (dict, list)):
-                return json.dumps(result, ensure_ascii=False, default=str)
+                result_str = json.dumps(result, ensure_ascii=False, default=str)
             elif isinstance(result, str):
-                return result
+                result_str = result
             else:
-                return json.dumps({"result": result}, ensure_ascii=False, default=str)
+                result_str = json.dumps({"result": result}, ensure_ascii=False, default=str)
+
+            elapsed = time.monotonic() - t0
+            log.info("%s 工具完成: %s (%.3fs, 结果 %d 字符)",
+                     trace.prefix(), name, elapsed, len(result_str))
+            return result_str
 
         except Exception as e:
-            log.error(f"工具 '{name}' 执行失败: {e}")
+            elapsed = time.monotonic() - t0
+            log.error("%s 工具 '%s' 执行失败 (%.3fs): %s",
+                      trace.prefix(), name, elapsed, e, exc_info=True)
             return json.dumps(
                 {"error": f"工具执行错误: {type(e).__name__}: {e}"},
                 ensure_ascii=False,

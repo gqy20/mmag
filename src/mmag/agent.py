@@ -4,7 +4,6 @@
 
 import asyncio
 import json
-import logging
 import random
 import time
 from typing import Optional
@@ -14,11 +13,12 @@ import websockets
 from .config import config, _log_config_loading
 from .client import MMClient
 from .llm import LLM
+from .logger import get_logger, trace
 from .memory import Memory
 from .prompts import prompts
 from .tools import ToolRegistry, build_builtin_tools
 
-log = logging.getLogger("agent")
+log = get_logger(__name__)
 
 
 class Agent:
@@ -413,7 +413,15 @@ class Agent:
         # 更新用户画像
         self.memory.update_user_profile(user_id, post["username"], {"notes": "活跃"})
 
-        log.info(f"[{post['username']}] {message[:80]}")
+        # 开启交互追踪
+        trace.new()
+        trace.set_context(
+            channel=channel_id[:12],
+            user=post["username"],
+            msg_type="mention",  # 默认，下面会根据触发类型更新
+        )
+
+        log.info("%s [%s] %s", trace.prefix(), post["username"], message[:80])
 
         # ====== @提及 必回 ======
         bot_mentions = [
@@ -421,22 +429,28 @@ class Agent:
             f"@{config.bot_display_name.lower()}",
         ]
         if any(m in message.lower() for m in bot_mentions):
-            log.info("       → 触发: @提及")
+            trace.set_context(msg_type="mention")
+            log.info("%s → 触发: @提及", trace.prefix())
             await self._respond_to_mention(post)
+            trace.clear()
             return
 
         # ====== DM 私聊必回 ======
         ch_info = self.mm.get_channel(channel_id)
         if ch_info.get("type") == "D":
-            log.info("       → 触发: DM 私聊")
+            trace.set_context(msg_type="dm")
+            log.info("%s → 触发: DM 私聊", trace.prefix())
             await self._respond_chat(post)
+            trace.clear()
             return
 
         # ====== 智能旁听 ======
         should = await self._should_respond(post)
         if should:
-            log.info("       → 触发: 主动旁听")
+            trace.set_context(msg_type="listen")
+            log.info("%s → 触发: 主动旁听", trace.prefix())
             await self._respond_chat(post)
+            trace.clear()
 
     async def _should_respond(self, post: dict) -> bool:
         """判断是否应该主动回复"""
@@ -467,10 +481,12 @@ class Agent:
 
     async def _respond_to_mention(self, post: dict):
         """响应 @提及（支持 Agentic Tool Use）"""
-        log.info(f"       📤 [@提及回复] 构建上下文...")
+        t0 = time.monotonic()
+        log.info("%s [mention] 构建上下文...", trace.prefix())
         await self.typing_indicator(post["channel_id"])
         context = self._build_context(post, mention=True)
-        log.info(f"       📤 [@提及回复] 调用 Agent Loop (上下文 {len(context['messages'])} 条消息)...")
+        log.info("%s [mention] 调用 Agent Loop (上下文 %d 条消息)...",
+                 trace.prefix(), len(context["messages"]))
         response = await self.llm.agent_loop(
             messages=context["messages"],
             system=context["system"],
@@ -478,21 +494,25 @@ class Agent:
             tool_registry=self.tool_registry,
             max_rounds=5,
         )
-        log.info(f"       📤 Agent Loop 返回 ({len(response)} 字符): {response[:200]}")
+        elapsed = time.monotonic() - t0
+        log.info("%s [mention] Agent Loop 返回 (%.1fs, %d 字符): %s",
+                 trace.prefix(), elapsed, len(response), response[:150])
         if not response or response.startswith("⚠️"):
-            log.warning(f"       ⚠️ LLM 返回异常或为空: {response[:100]}")
+            log.warning("%s [mention] LLM 返回异常或为空: %s",
+                        trace.prefix(), response[:100])
         else:
-            log.info(f"       📤 发送回复到频道...")
             result = await self.reply(post, response)
-            log.info(f"       ✅ 回复发送完成: post_id={result}")
+            log.info("%s [mention] 回复已发送 post_id=%s", trace.prefix(), result)
         self._save_interaction(post, response)
 
     async def _respond_chat(self, post: dict):
         """响应普通对话/旁听（支持 Agentic Tool Use）"""
-        log.info(f"       📤 [对话回复] 构建上下文...")
+        t0 = time.monotonic()
+        log.info("%s [chat] 构建上下文...", trace.prefix())
         await self.typing_indicator(post["channel_id"])
         context = self._build_context(post)
-        log.info(f"       📤 [对话回复] 调用 Agent Loop (上下文 {len(context['messages'])} 条消息)...")
+        log.info("%s [chat] 调用 Agent Loop (上下文 %d 条消息)...",
+                 trace.prefix(), len(context["messages"]))
         response = await self.llm.agent_loop(
             messages=context["messages"],
             system=context["system"],
@@ -500,13 +520,15 @@ class Agent:
             tool_registry=self.tool_registry,
             max_rounds=3,  # 旁听场景限制轮次，避免过度响应
         )
-        log.info(f"       📤 Agent Loop 返回 ({len(response)} 字符): {response[:200]}")
+        elapsed = time.monotonic() - t0
+        log.info("%s [chat] Agent Loop 返回 (%.1fs, %d 字符): %s",
+                 trace.prefix(), elapsed, len(response), response[:150])
         if not response or response.startswith("⚠️"):
-            log.warning(f"       ⚠️ LLM 返回异常或为空: {response[:100]}")
+            log.warning("%s [chat] LLM 返回异常或为空: %s",
+                        trace.prefix(), response[:100])
         else:
-            log.info(f"       📤 发送回复到频道...")
             result = await self.reply(post, response)
-            log.info(f"       ✅ 回复发送完成: post_id={result}")
+            log.info("%s [chat] 回复已发送 post_id=%s", trace.prefix(), result)
         self._save_interaction(post, response)
 
     def _build_context(self, post: dict, mention: bool = False) -> dict:
@@ -614,9 +636,12 @@ class Agent:
             channel_id = post["channel_id"]
             window = self.working_memory.get(channel_id, [])
             if len(window) >= 10:
+                log.info("%s [memory] 到达知识提取阈值 (总回复=%d, 窗口=%d条)",
+                         trace.prefix(), self.stats["responses"], len(window))
                 texts = [f"{m.get('username','?')}: {m.get('message','')[:200]}" for m in window[-15:]]
                 # 后续可以在这里调用 LLM 提取知识
-                pass
+                log.debug("%s [memory] 待提取文本预览: %s",
+                          trace.prefix(), "; ".join(texts[:3]))
 
     async def stop(self):
         """停止 Agent"""

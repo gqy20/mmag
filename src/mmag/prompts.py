@@ -2,14 +2,14 @@
 提示词管理
 """
 
-import logging
 from pathlib import Path
 
 import yaml
 
 from .config import config
+from .logger import get_logger
 
-log = logging.getLogger("agent")
+log = get_logger(__name__)
 
 
 class PromptManager:
@@ -22,11 +22,11 @@ class PromptManager:
 
     def _load(self):
         if not self.path.exists():
-            log.warning(f"提示词文件不存在: {self.path}，使用内置默认值")
+            log.warning("提示词文件不存在: %s，使用内置默认值", self.path)
             return
         with open(self.path, "r", encoding="utf-8") as f:
             self._templates = yaml.safe_load(f) or {}
-        log.info(f"已加载 {len(self._templates)} 个提示词模板")
+        log.info("已加载 %d 个提示词模板", len(self._templates))
 
     def get(self, name: str, **kwargs) -> str:
         template = self._templates.get(name, "")
@@ -35,7 +35,7 @@ class PromptManager:
         try:
             return template.format(**kwargs)
         except KeyError as e:
-            log.warning(f"提示词 '{name}' 缺少变量: {e}")
+            log.warning("提示词 '%s' 缺少变量: %s", name, e)
             return template
 
 

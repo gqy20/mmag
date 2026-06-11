@@ -8,6 +8,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .logger import get_logger
+
+log = get_logger(__name__)
+
 _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 if _ENV_PATH.exists():
     load_dotenv(_ENV_PATH, override=True)
@@ -17,20 +21,18 @@ else:
 
 def _log_config_loading():
     """打印关键配置项，方便调试"""
-    import logging
     keys = [
         "MM_URL", "MM_TOKEN", "MM_TEAM_ID", "MM_CHANNEL_ID",
         "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
         "BOT_NAME", "LISTEN_PROBABILITY", "LOG_LEVEL",
     ]
-    log = logging.getLogger("agent")
     log.info("═══ 配置加载 ═══")
     for k in keys:
         v = os.getenv(k, "")
         if "KEY" in k or "TOKEN" in k:
             v = f"{v[:8]}...{v[-4:]}" if len(v) > 12 else "(未设置)" if not v else "(已设置)"
-        log.info(f"  {k} = {v}")
-    log.info(f"  .env path = {_ENV_PATH} ({'✅ 存在' if _ENV_PATH.exists() else '❌ 不存在'})")
+        log.info("  %s = %s", k, v)
+    log.info("  .env path = %s (%s)", _ENV_PATH, "✅ 存在" if _ENV_PATH.exists() else "❌ 不存在")
     log.info("═══════════════")
 
 
@@ -56,6 +58,7 @@ class Config:
     typing_delay_max: float = float(os.getenv("TYPING_DELAY_MAX", "3"))
     memory_db_path: str = os.getenv("MEMORY_DB_PATH", "./agent_memory.db")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    log_file: str = os.getenv("LOG_FILE", "")  # 日志文件路径（空则不写文件）
 
     @property
     def ws_url(self) -> str:

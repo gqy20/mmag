@@ -4,15 +4,16 @@ LLM 适配器 (Anthropic) — 支持单轮对话 + Agentic Tool Use 循环
 
 import asyncio
 import json
-import logging
+import time
 from typing import Any, Optional
 
 from anthropic import Anthropic
 
 from .config import config
+from .logger import get_logger, trace
 from .tools import ToolRegistry
 
-log = logging.getLogger("agent")
+log = get_logger(__name__)
 
 # 默认最大工具调用轮次
 DEFAULT_MAX_TOOL_ROUNDS = 10
@@ -28,7 +29,8 @@ class LLM:
         self.client = Anthropic(**kwargs)
         self.model = config.anthropic_model
         self.call_count = 0
-        log.info(f"LLM 初始化完成 | 模型: {self.model}")
+        log.info("LLM 初始化完成 | 模型: %s | API: %s",
+                 self.model, config.anthropic_base_url or "官方")
 
     # ---- 单轮对话（保持向后兼容）----
 
@@ -40,6 +42,7 @@ class LLM:
         需要过滤掉，只取 TextBlock 的文本内容。
         """
         self.call_count += 1
+        t0 = time.monotonic()
         try:
             kwargs: dict[str, Any] = {
                 "model": self.model,
@@ -50,9 +53,13 @@ class LLM:
                 kwargs["system"] = system
             response = await asyncio.to_thread(self.client.messages.create, **kwargs)
             texts = _extract_text_blocks(response)
+            elapsed = time.monotonic() - t0
+            log.debug("%s LLM 单轮调用 (%.3fs, %d 字符输出)",
+                       trace.prefix(), elapsed, len(texts))
             return texts if texts else "(模型返回为空)"
         except Exception as e:
-            log.error(f"LLM 调用失败: {e}")
+            elapsed = time.monotonic() - t0
+            log.error("%s LLM 调用失败 (%.3fs): %s", trace.prefix(), elapsed, e)
             return f"⚠️ LLM 服务暂时不可用: {e}"
 
     async def chat_with_system(self, system_prompt: str, user_message: str,
@@ -90,15 +97,19 @@ class LLM:
         """
         # 无工具时降级为普通聊天
         if not tools or not tool_registry:
-            log.debug("agent_loop: 无工具配置，降级为普通聊天")
+            log.debug("%s agent_loop: 无工具配置，降级为普通聊天", trace.prefix())
             return await self.chat(messages, system, max_tokens)
 
         tools_schema = [t for t in tools if isinstance(t, dict)]
         working_messages = list(messages)  # 拷贝，避免污染原始消息
+        loop_t0 = time.monotonic()
+
+        log.info("%s Agent Loop 开始 | 消息数=%d 工具数=%d 最大轮次=%d",
+                 trace.prefix(), len(working_messages), len(tools_schema), max_rounds)
 
         for round_i in range(1, max_rounds + 1):
             self.call_count += 1
-            log.debug(f"agent_loop Round {round_i}/{max_rounds}")
+            round_t0 = time.monotonic()
 
             try:
                 kwargs: dict[str, Any] = {
@@ -114,7 +125,9 @@ class LLM:
                     self.client.messages.create, **kwargs
                 )
             except Exception as e:
-                log.error(f"agent_loop Round {round_i} LLM 调用失败: {e}")
+                elapsed = time.monotonic() - round_t0
+                log.error("%s Round %d/%d LLM 调用失败 (%.3fs): %s",
+                          trace.prefix(), round_i, max_rounds, elapsed, e)
                 return f"⚠️ LLM 服务暂时不可用: {e}"
 
             # ---- 解析响应 ----
@@ -125,7 +138,6 @@ class LLM:
                 block_type = getattr(block, "type", None)
 
                 if block_type == "thinking":
-                    # 思考过程，跳过
                     continue
 
                 elif block_type == "text":
@@ -142,20 +154,28 @@ class LLM:
                         "input": tc_input,
                     })
 
+            round_elapsed = time.monotonic() - round_t0
+
             # ---- 判断是否需要继续循环 ----
             if not tool_calls:
-                # 无工具调用 → 纯文本回复 → 结束循环
                 final_text = "\n".join(text_parts).strip()
-                log.debug(f"agent_loop Round {round_i}: 纯文本回复 ({len(final_text)} 字符)")
+                total_elapsed = time.monotonic() - loop_t0
+                log.info(
+                    "%s Round %d/%d → 纯文本回复 (%.3fs) | 总耗时 %.3fs | 输出 %d 字符",
+                    trace.prefix(), round_i, max_rounds, round_elapsed,
+                    total_elapsed, len(final_text),
+                )
                 return final_text if final_text else "(模型返回为空)"
 
             # ---- 有工具调用 → 执行 → 注入结果 → 继续下一轮 ----
-            log.debug(
-                f"agent_loop Round {round_i}: "
-                f"{len(tool_calls)} 个工具调用 {[tc['name'] for tc in tool_calls]}"
+            tool_names = [tc["name"] for tc in tool_calls]
+            log.info(
+                "%s Round %d/%d → %d 个工具调用 [%s] (%.3fs)",
+                trace.prefix(), round_i, max_rounds, len(tool_calls),
+                ", ".join(tool_names), round_elapsed,
             )
 
-            # 先把 LLM 这一轮的完整响应加入历史（含文本 + 工具调用意图）
+            # 把 LLM 这一轮的完整响应加入历史（含文本 + 工具调用意图）
             assistant_content = []
             if text_parts:
                 assistant_content.append({"type": "text", "text": "\n".join(text_parts)})
@@ -170,25 +190,21 @@ class LLM:
 
             # 逐个执行工具，收集结果
             for tc in tool_calls:
-                tool_name = tc["name"]
-                tool_id = tc["id"]
-                tool_input = tc["input"]
+                result_str = await tool_registry.execute(tc["name"], tc["input"])
 
-                log.debug(f"  执行工具: {tool_name}({json.dumps(tool_input, ensure_ascii=False)})")
-                result_str = await tool_registry.execute(tool_name, tool_input)
-
-                # 将工具结果作为 user 消息注入
                 working_messages.append({
                     "role": "user",
                     "content": [{
                         "type": "tool_result",
-                        "tool_use_id": tool_id,
+                        "tool_use_id": tc["id"],
                         "content": result_str,
                     }],
                 })
 
         # 达到最大轮次限制
-        log.warning(f"agent_loop 达到最大轮次 {max_rounds}，强制结束")
+        total_elapsed = time.monotonic() - loop_t0
+        log.warning("%s Agent Loop 达到最大轮次 %d (总耗时 %.3fs)，强制结束",
+                     trace.prefix(), max_rounds, total_elapsed)
         # 取最后一轮的文本部分作为最终回复
         last_texts = []
         for msg in reversed(working_messages):
@@ -216,4 +232,3 @@ def _extract_text_blocks(response) -> str:
         if hasattr(block, "text") and getattr(block, "type", None) == "text":
             texts.append(block.text)
     return "\n".join(texts).strip()
-

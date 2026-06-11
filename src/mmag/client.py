@@ -2,14 +2,14 @@
 Mattermost REST API 客户端
 """
 
-import logging
 from typing import Any, Optional
 
 import requests
 
 from .config import config
+from .logger import get_logger
 
-log = logging.getLogger("agent")
+log = get_logger(__name__)
 
 
 class MMClient:
