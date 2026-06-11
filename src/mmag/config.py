@@ -41,10 +41,7 @@ _FIELD_TO_ENV: dict[str, str] = {
     "log_level": "LOG_LEVEL",
     "log_dir": "LOG_DIR",
     "log_retention_days": "LOG_RETENTION_DAYS",
-    "memory_cache_max": "MEMORY_CACHE_MAX",
     "memory_summary_interval": "MEMORY_SUMMARY_INTERVAL",
-    "memory_compaction_keep": "MEMORY_COMPACTION_KEEP",
-    "memory_summary_batch": "MEMORY_SUMMARY_BATCH",
     "memory_context_window": "MEMORY_CONTEXT_WINDOW",
 }
 # 敏感字段（值要脱敏打印，只显示前后几位）
@@ -98,16 +95,10 @@ class Config:
     log_dir: str = os.getenv("LOG_DIR", "logs")  # 日志目录（空则不写文件）
     log_retention_days: int = int(os.getenv("LOG_RETENTION_DAYS", "30"))  # 日志保留天数
     # ── 记忆系统 (Layer 1 + Layer 2) ──
-    memory_cache_max: int = int(
-        os.getenv("MEMORY_CACHE_MAX", "100000")
-    )  # 每频道缓存消息上限 (约70MB)
+    # message_log 永久存储,无容量上限;摘要按消息条数触发
     memory_summary_interval: int = int(
         os.getenv("MEMORY_SUMMARY_INTERVAL", "100")
     )  # 每 N 条触发一次摘要
-    memory_compaction_keep: int = int(
-        os.getenv("MEMORY_COMPACTION_KEEP", "80000")
-    )  # 超限清理后保留条数 (80%)
-    memory_summary_batch: int = int(os.getenv("MEMORY_SUMMARY_BATCH", "50"))  # LLM 摘要每批消息数
     memory_context_window: int = int(
         os.getenv("MEMORY_CONTEXT_WINDOW", "100")
     )  # 摘要时注入的前序消息数量（保持上下文连贯）

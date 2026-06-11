@@ -24,6 +24,7 @@ class Memory:
         self._conn.row_factory = sqlite3.Row
         c = self._conn.cursor()
         # 对话片段
+
         c.execute("""
             CREATE TABLE IF NOT EXISTS conversation_segments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,9 +97,9 @@ class Memory:
             )
             """
         )
-        # 消息历史缓存（短期）
+        # 消息日志（永久,所有历史消息只增不删,供 LLM 检索/回顾）
         c.execute("""
-            CREATE TABLE IF NOT EXISTS message_cache (
+            CREATE TABLE IF NOT EXISTS message_log (
                 id TEXT PRIMARY KEY,
                 channel_id TEXT NOT NULL,
                 user_id TEXT,
@@ -107,6 +108,27 @@ class Memory:
                 create_at REAL,
                 post_type TEXT DEFAULT '',
                 root_id TEXT DEFAULT ''
+            )
+        """)
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_log_ch_time "
+            "ON message_log(channel_id, create_at DESC)"
+        )
+        # FTS5 虚表（独立 storage,不用 content=） — 用于全文检索
+        c.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS message_log_fts USING fts5(
+                message,
+                tokenize = 'unicode61 remove_diacritics 2'
+            )
+            """
+        )
+        # 主表 ↔ FTS 关联表（unicode61 虚表无 rowid 自动关联,需手工维护）
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS message_log_fts_map (
+                rowid INTEGER PRIMARY KEY,
+                message_id TEXT UNIQUE NOT NULL,
+                FOREIGN KEY (message_id) REFERENCES message_log(id) ON DELETE CASCADE
             )
         """)
         # URL 分析结果缓存（GitHub API / 通用网页）
@@ -125,111 +147,321 @@ class Memory:
                 error TEXT
             )
         """)
+        # ---- 一次性迁移:旧 message_cache → message_log (必须在新表都建好之后) ----
+        self._migrate_message_cache_to_log(c)
         self._conn.commit()
         log.info(f"记忆数据库就绪: {self.db_path}")
 
-    # ---- 消息缓存 ----
+    def _migrate_message_cache_to_log(self, c):
+        """一次性迁移:旧 message_cache 表 → 新 message_log + FTS5 索引,完成后 DROP
 
-    def cache_message(self, post: dict):
-        """缓存单条消息到 message_cache 表
+        逻辑:
+          1) 检查 sqlite_master 是否有 message_cache 表
+          2) INSERT OR IGNORE INTO message_log FROM message_cache(原数据进新表)
+          3) 给每条 message 写 FTS5 索引 + 关联表
+          4) DROP message_cache
+        全程单事务,失败回滚不污染。
+        """
+        exists = c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_cache'"
+        ).fetchone()
+        if not exists:
+            return  # 新库,跳过
+
+        log.info("检测到旧 message_cache 表,开始迁移到 message_log...")
+        try:
+            count_row = c.execute("SELECT COUNT(*) as cnt FROM message_cache").fetchone()
+            old_count = count_row["cnt"] if count_row else 0
+
+            # 1) 主表迁移
+            c.execute(
+                """
+                INSERT OR IGNORE INTO message_log
+                    (id, channel_id, user_id, username, message, create_at, post_type, root_id)
+                SELECT id, channel_id, user_id, username, message, create_at, post_type, root_id
+                FROM message_cache
+                """
+            )
+            # 2) 重建 FTS5 索引(独立 storage,需逐条插入)
+            rows = c.execute(
+                "SELECT id, message FROM message_log "
+                "WHERE id NOT IN (SELECT message_id FROM message_log_fts_map)"
+            ).fetchall()
+            for r in rows:
+                # CJK 预分词 (跟 log_message 写入路径保持一致, 否则搜索不命中)
+                fts_text = _cjk_tokenize_for_fts(r["message"] or "")
+                c.execute(
+                    "INSERT INTO message_log_fts(message) VALUES (?)",
+                    (fts_text,),
+                )
+                fts_rowid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+                c.execute(
+                    "INSERT INTO message_log_fts_map(rowid, message_id) VALUES (?, ?)",
+                    (fts_rowid, r["id"]),
+                )
+
+            # 3) DROP 旧表
+            c.execute("DROP TABLE message_cache")
+
+            new_count_row = c.execute("SELECT COUNT(*) as cnt FROM message_log").fetchone()
+            new_count = new_count_row["cnt"] if new_count_row else 0
+            log.info(
+                "迁移完成: 旧 %d 条 → 新 %d 条 (+ %d 新增); FTS 索引 %d 条",
+                old_count,
+                new_count,
+                new_count - old_count,
+                len(rows),
+            )
+        except Exception as e:
+            log.error("message_cache 迁移失败(已回滚): %s", e, exc_info=True)
+            raise
+
+    # ---- 消息日志（永久存储,供检索/回顾）----
+
+    def log_message(self, post: dict) -> bool:
+        """写入一条消息到 message_log,并同步 FTS5 索引。
 
         期望 post 包含完整 username（由调用方在写入前从 MMClient.get_username 补全），
         避免读取时再去走 REST API。
+
+        Returns:
+            True = 新插入, False = 已存在/被丢弃/失败
         """
         msg = post.get("message", "") or ""
         if not msg or len(msg) > 50000:
-            return
+            return False
+
+        post_id = post.get("id", "")
+        if not post_id:
+            return False
+
+        truncated = msg[:10000]
+        create_at_sec = (post.get("create_at", 0) or 0) / 1000.0
+
         try:
+            # 0) 先检查是否已存在(避免依赖 cur.rowcount 的不可靠语义)
+            existing = self._conn.execute(
+                "SELECT 1 FROM message_log WHERE id=?", (post_id,)
+            ).fetchone()
+            if existing:
+                return False  # 已存在,跳过
+
+            # 1) 写主表
             self._conn.execute(
-                """INSERT OR REPLACE INTO message_cache
+                """INSERT INTO message_log
                    (id, channel_id, user_id, username, message, create_at, post_type, root_id)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    post["id"],
+                    post_id,
                     post.get("channel_id", ""),
                     post.get("user_id", ""),
                     post.get("username", ""),
-                    msg[:10000],
-                    (post.get("create_at", 0) or 0) / 1000.0,
+                    truncated,
+                    create_at_sec,
                     post.get("type", ""),
                     post.get("root_id", ""),
                 ),
             )
+
+            # 2) 同步 FTS5 索引(独立 storage 虚表 + 关联表)
+            # CJK 预分词:unicode61 不会自动切分中文,逐字插空格后才能 BM25 匹配
+            fts_text = _cjk_tokenize_for_fts(truncated)
+            self._conn.execute(
+                "INSERT INTO message_log_fts(message) VALUES (?)",
+                (fts_text,),
+            )
+            fts_rowid = self._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            self._conn.execute(
+                "INSERT INTO message_log_fts_map(rowid, message_id) VALUES (?, ?)",
+                (fts_rowid, post_id),
+            )
+
             self._conn.commit()
+            return True
         except Exception as e:
-            log.debug(f"缓存消息失败: {e}")
+            log.debug(f"log_message 失败: {e}")
+            return False
 
     def get_recent_messages(self, channel_id: str, limit: int = 30) -> list[dict]:
+        """获取频道最近 N 条消息(时间正序,旧→新)"""
         rows = self._conn.execute(
-            "SELECT * FROM message_cache WHERE channel_id=? ORDER BY create_at DESC LIMIT ?",
+            "SELECT * FROM message_log WHERE channel_id=? ORDER BY create_at DESC LIMIT ?",
             (channel_id, limit),
         ).fetchall()
         return [dict(r) for r in reversed(rows)]
 
-    def clear_channel_cache(self, channel_id: str):
-        self._conn.execute("DELETE FROM message_cache WHERE channel_id=?", (channel_id,))
-        self._conn.commit()
+    def peek_recent_messages(
+        self, channel_id: str, limit: int = 100, order: str = "DESC"
+    ) -> list[dict]:
+        """只读获取消息列表(不删除,永久保留)
 
-    def get_channel_cache_count(self, channel_id: str) -> int:
-        """获取某频道缓存的消息总数"""
+        Args:
+            order: 'DESC' = 最新在前(默认), 'ASC' = 最旧在前(摘要用)
+        """
+        if order not in ("DESC", "ASC"):
+            order = "DESC"
+        rows = self._conn.execute(
+            f"SELECT * FROM message_log WHERE channel_id=? "
+            f"ORDER BY create_at {order} LIMIT ?",
+            (channel_id, limit),
+        ).fetchall()
+        # 摘要(ASC)按原序返回,普通(DESC)反转成正序
+        return [dict(r) for r in rows] if order == "ASC" else [dict(r) for r in reversed(rows)]
+
+    def get_latest_message_ts(self, channel_id: str) -> float:
+        """获取该频道本地最新消息的 create_at(秒),无则 0。给 backfill 做增量起点"""
         row = self._conn.execute(
-            "SELECT COUNT(*) as cnt FROM message_cache WHERE channel_id=?",
+            "SELECT MAX(create_at) as ts FROM message_log WHERE channel_id=?",
             (channel_id,),
         ).fetchone()
-        return row["cnt"] if row else 0
+        return float(row["ts"]) if row and row["ts"] else 0.0
 
-    def pop_old_messages(self, channel_id: str, keep: int = 800) -> list[dict]:
-        """取出并删除最旧的消息（保留最新的 keep 条）
+    def search_messages(
+        self,
+        query: str | None = None,
+        channel_id: str | None = None,
+        user_id: str | None = None,
+        before_ts: float | None = None,
+        after_ts: float | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """检索历史消息: 关键词(FTS5 BM25) + 频道/用户/时间 条件过滤
 
-        用于 Layer 1→Layer 2 压缩：将超限的旧消息取出做 LLM 摘要，
-        摘要完成后这些消息就从 message_cache 中移除，释放空间。
+        任意条件都可单独使用。query 留空时退化为纯条件过滤,按 create_at DESC 排序。
 
-        Returns:
-            被取出的消息列表（按时间正序，最旧的在前）
+        Args:
+            query: 关键词(支持中英文 unicode61,空格分词),None/空=不过关键词
+            channel_id: 频道 ID,None=不限
+            user_id: 用户 ID,None=不限
+            before_ts: 起始时间(秒),只看此时间之前的
+            after_ts: 起始时间(秒),只看此时间之后的
+            limit: 返回数量上限
         """
-        # 先查出要删除的最旧消息 ID
-        total = self.get_channel_cache_count(channel_id)
-        if total <= keep:
-            return []
+        # ---- 路径 1: FTS5 关键词检索 ----
+        if query and query.strip():
+            return self._search_messages_fts(
+                query, channel_id, user_id, before_ts, after_ts, limit
+            )
 
-        pop_count = total - keep
+        # ---- 路径 2: 纯条件过滤(无关键词)----
+        clauses = []
+        params: list = []
+        if channel_id:
+            clauses.append("m.channel_id = ?")
+            params.append(channel_id)
+        if user_id:
+            clauses.append("m.user_id = ?")
+            params.append(user_id)
+        if before_ts is not None:
+            clauses.append("m.create_at < ?")
+            params.append(before_ts)
+        if after_ts is not None:
+            clauses.append("m.create_at > ?")
+            params.append(after_ts)
+
+        where = " AND ".join(clauses) if clauses else "1=1"
+        params.append(limit)
         rows = self._conn.execute(
-            "SELECT * FROM message_cache WHERE channel_id=? ORDER BY create_at ASC LIMIT ?",
-            (channel_id, pop_count),
+            f"SELECT m.* FROM message_log m WHERE {where} "
+            f"ORDER BY m.create_at DESC LIMIT ?",
+            params,
         ).fetchall()
-
-        if not rows:
-            return []
-
-        ids_to_delete = [r["id"] for r in rows]
-        placeholders = ",".join("?" * len(ids_to_delete))
-        self._conn.execute(
-            f"DELETE FROM message_cache WHERE id IN ({placeholders})",
-            ids_to_delete,
-        )
-        self._conn.commit()
-
-        log.debug(
-            "消息压缩: channel=%s 弹出 %d 条 (保留 %d 条), 剩余 %d 条",
-            channel_id[:12],
-            len(rows),
-            keep,
-            self.get_channel_cache_count(channel_id),
-        )
         return [dict(r) for r in rows]
 
-    def peek_recent_messages(self, channel_id: str, limit: int = 100) -> list[dict]:
-        """只读获取最近 N 条消息（不删除）
+    def _search_messages_fts(
+        self,
+        query: str,
+        channel_id: str | None,
+        user_id: str | None,
+        before_ts: float | None,
+        after_ts: float | None,
+        limit: int,
+    ) -> list[dict]:
+        """FTS5 BM25 路径 — 走 message_log_fts 虚表"""
+        # CJK 预分词 + 空格切分后,每个 token 加双引号防 FTS5 语法误解析
+        tokenized = _cjk_tokenize_for_fts(query)
+        fts_query = " ".join(f'"{tok}"' for tok in tokenized.split() if tok)
 
-        用于 Layer 2 定期摘要：每累积一定数量消息后，
-        取出最近一批做 LLM 摘要，原始消息保留在缓存中。
-        """
+        clauses = ["message_log_fts MATCH ?"]
+        params: list = [fts_query]
+
+        if channel_id:
+            clauses.append("m.channel_id = ?")
+            params.append(channel_id)
+        if user_id:
+            clauses.append("m.user_id = ?")
+            params.append(user_id)
+        if before_ts is not None:
+            clauses.append("m.create_at < ?")
+            params.append(before_ts)
+        if after_ts is not None:
+            clauses.append("m.create_at > ?")
+            params.append(after_ts)
+
+        where = " AND ".join(clauses)
+        params.append(limit)
+
+        try:
+            rows = self._conn.execute(
+                f"""
+                SELECT m.*, rank
+                FROM message_log m
+                INNER JOIN message_log_fts_map fts_idx ON m.id = fts_idx.message_id
+                INNER JOIN message_log_fts fts ON fts.rowid = fts_idx.rowid
+                WHERE {where}
+                ORDER BY rank
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        except Exception as e:
+            log.debug("FTS5 查询异常, fallback LIKE: %s", e)
+            # 兜底: LIKE 模糊匹配(性能差但能跑)
+            return self._search_messages_like(
+                query, channel_id, user_id, before_ts, after_ts, limit
+            )
+
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["_score"] = d.pop("rank", 0)
+            results.append(d)
+        return results
+
+    def _search_messages_like(
+        self,
+        query: str,
+        channel_id: str | None,
+        user_id: str | None,
+        before_ts: float | None,
+        after_ts: float | None,
+        limit: int,
+    ) -> list[dict]:
+        """FTS5 失败兜底 — 普通 LIKE 全表扫"""
+        clauses = ["m.message LIKE ?"]
+        params: list = [f"%{query}%"]
+
+        if channel_id:
+            clauses.append("m.channel_id = ?")
+            params.append(channel_id)
+        if user_id:
+            clauses.append("m.user_id = ?")
+            params.append(user_id)
+        if before_ts is not None:
+            clauses.append("m.create_at < ?")
+            params.append(before_ts)
+        if after_ts is not None:
+            clauses.append("m.create_at > ?")
+            params.append(after_ts)
+
+        where = " AND ".join(clauses)
+        params.append(limit)
         rows = self._conn.execute(
-            "SELECT * FROM message_cache WHERE channel_id=? ORDER BY create_at DESC LIMIT ?",
-            (channel_id, limit),
+            f"SELECT m.* FROM message_log m WHERE {where} "
+            f"ORDER BY m.create_at DESC LIMIT ?",
+            params,
         ).fetchall()
-        # 返回时间正序（旧的在前）
-        return [dict(r) for r in reversed(rows)]
+        return [dict(r) for r in rows]
 
     # ---- URL 缓存（url_analyzer 写入）----
 
@@ -723,11 +955,18 @@ class Memory:
     def clear_all(self):
         """清空短期对话数据（保留用户画像和团队知识）
 
-        删除: message_cache (消息缓存), conversation_segments (对话段),
-              open_items (待办), url_cache (链接分析缓存)
+        删除: message_log (消息日志), conversation_segments (对话段),
+              open_items (待办), url_cache (链接分析缓存), message_log_fts (FTS 索引)
         保留: user_profiles (用户画像), team_knowledge (团队知识库) — 这些是长期数据
         """
-        for table in ["message_cache", "conversation_segments", "open_items", "url_cache"]:
+        for table in [
+            "message_log",
+            "message_log_fts",
+            "message_log_fts_map",
+            "conversation_segments",
+            "open_items",
+            "url_cache",
+        ]:
             self._conn.execute(f"DELETE FROM {table}")
         self._conn.commit()
         log.info("短期对话数据已清空（用户画像/团队知识已保留）")

@@ -27,6 +27,8 @@ GET_POSTS_DEFAULT_LIMIT = 30       # 不传 limit 时的默认消息数
 GET_POSTS_MAX_LIMIT = 100          # 一次最多拉多少条
 SEARCH_KNOWLEDGE_DEFAULT_LIMIT = 5  # 不传 limit 时的默认知识条目数
 SEARCH_KNOWLEDGE_MAX_LIMIT = 10    # 一次最多返回多少条
+SEARCH_MESSAGES_DEFAULT_LIMIT = 20 # 不传 limit 时的默认消息数
+SEARCH_MESSAGES_MAX_LIMIT = 50     # 一次最多返回多少条
 
 
 # ============================================================
@@ -39,6 +41,7 @@ def build_builtin_tools(mm_client, memory) -> list[Tool]:
 
     tools = [
         _make_get_posts_tool(mm_client, memory),
+        _make_search_messages_tool(memory),
         _make_search_knowledge_tool(memory),
         _make_get_channel_info_tool(mm_client),
         _make_save_knowledge_tool(memory),
@@ -108,6 +111,61 @@ def _make_search_knowledge_tool(memory) -> Tool:
         handler=lambda channel_id, query, limit=SEARCH_KNOWLEDGE_DEFAULT_LIMIT: _format_knowledge(
             memory.get_relevant_knowledge(channel_id, query, min(limit, SEARCH_KNOWLEDGE_MAX_LIMIT))
         ),
+    )
+
+
+def _make_search_messages_tool(memory) -> Tool:
+    return Tool(
+        name="search_messages",
+        description=(
+            "按关键词/时间/用户/频道检索历史消息。"
+            "用于查找'上周 X 说 Y'、'X 之前提过的方案'等回看类问题。"
+            "支持中英文全文搜索 (BM25 排序),时间戳是毫秒 (Mattermost 原生格式)。"
+            "channel_id 留空 = 搜全 team。query 留空 = 纯时间/用户过滤。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词 (支持中英文,留空=不过关键词)",
+                },
+                "channel_id": {
+                    "type": "string",
+                    "description": "频道 ID (留空=搜全 team)",
+                },
+                "user_id": {
+                    "type": "string",
+                    "description": "按用户 ID 过滤 (可选)",
+                },
+                "before_ts": {
+                    "type": "number",
+                    "description": "只看此时间戳(毫秒)之前的消息 (可选)",
+                },
+                "after_ts": {
+                    "type": "number",
+                    "description": "只看此时间戳(毫秒)之后的消息 (可选)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": f"返回数量 (默认 {SEARCH_MESSAGES_DEFAULT_LIMIT}, 最大 {SEARCH_MESSAGES_MAX_LIMIT})",
+                    "default": SEARCH_MESSAGES_DEFAULT_LIMIT,
+                },
+            },
+            "required": [],
+        },
+        handler=lambda query=None, channel_id=None, user_id=None,
+                   before_ts=None, after_ts=None, limit=SEARCH_MESSAGES_DEFAULT_LIMIT:
+            _format_search_results(
+                memory.search_messages(
+                    query=query,
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    before_ts=(before_ts / 1000.0) if before_ts is not None else None,
+                    after_ts=(after_ts / 1000.0) if after_ts is not None else None,
+                    limit=min(limit, SEARCH_MESSAGES_MAX_LIMIT),
+                )
+            ),
     )
 
 
@@ -248,6 +306,24 @@ def _format_posts(posts: list[dict]) -> dict:
         for p in posts
     ]
 
+    return {"count": len(messages), "messages": messages}
+
+
+def _format_search_results(results: list[dict]) -> dict:
+    """格式化 search_messages 检索结果 — 时间戳转毫秒给 LLM (符合 Mattermost 原生格式)"""
+    if not results:
+        return {"count": 0, "messages": [], "note": "未找到匹配消息"}
+
+    messages = [
+        {
+            "channel_id": r.get("channel_id", ""),
+            "user": r.get("username", "?"),
+            "message": (r.get("message") or "")[:500],
+            "time_ms": int((r.get("create_at") or 0) * 1000),
+            "relevance_score": r.get("_score"),  # FTS5 BM25,无 query 时无此字段
+        }
+        for r in results
+    ]
     return {"count": len(messages), "messages": messages}
 
 
@@ -400,13 +476,13 @@ def _format_link_info(info: dict) -> dict:
 
 
 def _get_posts_cached(mm_client, memory, channel_id: str, limit: int) -> list[dict]:
-    """获取频道消息：本地缓存优先，不足时 fallback 到 REST API
+    """获取频道消息：本地 message_log 优先，不足时 fallback 到 REST API
 
     策略:
-      1. 先查 SQLite message_cache（_on_posted 实时写入的）
-      2. 缓存数量 >= 需求的 60% → 直接返回缓存（避免每次都打 API）
-      3. 缓存不足 → 从 REST API 拉取，并回填到缓存
-      4. 缓存为空 → 直接走 REST API
+      1. 先查 SQLite message_log（_on_posted 实时写入的,启动时 backfill 补全）
+      2. 本地数量 >= 需求的 60% → 直接返回（避免每次都打 API）
+      3. 本地不足 → 从 REST API 拉取，并回填到 message_log
+      4. 本地为空 → 直接走 REST API
     """
     # 尝试从本地缓存读取
     cached = memory.get_recent_messages(channel_id, limit=limit)
@@ -433,7 +509,7 @@ def _get_posts_cached(mm_client, memory, channel_id: str, limit: int) -> list[di
         for p in rest_posts:
             p["channel_id"] = channel_id  # 确保有 channel_id
             p["username"] = mm_client.get_username(p.get("user_id", ""))
-            memory.cache_message(p)
+            memory.log_message(p)
         log.debug("get_posts: 已回填 %d 条消息到本地缓存", len(rest_posts))
 
     return rest_posts if rest_posts else cached

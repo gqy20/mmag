@@ -140,20 +140,27 @@ class Agent:
                 log.info("       ⏭️ 未指定 Team/Channel ID，跳过预加载 (将实时获取)")
 
             total_msgs = 0
+            total_new = 0
             for ch in channels_to_load:
                 ch_id = ch["id"]
+                # 1) Backfill: 拉本地最新时间戳之前的历史,补全到 message_log
+                new_count = self._backfill_channel(ch_id)
+                total_new += new_count
+                # 2) 加载最近 max_context_messages 条作为初始上下文
                 posts = self.mm.get_posts(ch_id, limit=config.max_context_messages)
                 self.working_memory[ch_id] = []
                 for p in posts:
                     p["username"] = self.mm.get_username(p.get("user_id", ""))
-                    self.memory.cache_message(p)
+                    self.memory.log_message(p)
                     self.working_memory[ch_id].append(p)
                 total_msgs += len(posts)
                 log.info(
-                    f"       📂 {ch.get('display_name', ch_id[:8]):<15} {len(posts):>3} 条消息"
+                    f"       📂 {ch.get('display_name', ch_id[:8]):<15} {len(posts):>3} 条 (新增 {new_count})"
                 )
             if channels_to_load:
-                log.info(f"       ✅ 共 {len(channels_to_load)} 个频道, {total_msgs} 条消息已缓存")
+                log.info(
+                    f"       ✅ 共 {len(channels_to_load)} 个频道, {total_msgs} 条消息已加载, backfill 新增 {total_new} 条"
+                )
         except Exception as e:
             log.warning(f"       ⚠️ 预加载频道失败: {e}")
             log.warning("       (不影响运行，将使用空上下文启动)")
@@ -212,6 +219,48 @@ class Agent:
             await handler(msg)
         elif etype not in ("hello",):
             log.debug(f"       [未处理事件] {etype}")
+
+    def _backfill_channel(self, channel_id: str) -> int:
+        """从 Mattermost REST 拉取该频道历史,补全到 message_log。
+
+        增量: 用本地最新 create_at 作为 since,只拉本地没有的。
+        限流: 每页之间 sleep 0.1s,避免打爆 MM。
+        幂等: INSERT OR IGNORE,已存在跳过。
+
+        Returns: 本次新增写入的消息数。
+        """
+        import time
+
+        latest_sec = self.memory.get_latest_message_ts(channel_id)
+        # 本地最新时间戳(毫秒),首次启动为 0 = 拉全部
+        latest_ms = int(latest_sec * 1000)
+
+        new_count = 0
+        page = 0
+        per_page = 200
+        while True:
+            posts = self.mm.get_posts_page(channel_id, page=page, per_page=per_page)
+            if not posts:
+                break
+
+            stop = False
+            for p in posts:
+                p_create_at = p.get("create_at", 0) or 0
+                if latest_ms and p_create_at <= latest_ms:
+                    # 拉到本地已有时间,后面更旧不用再拉
+                    stop = True
+                    break
+                p["channel_id"] = channel_id
+                p["username"] = self.mm.get_username(p.get("user_id", ""))
+                if self.memory.log_message(p):
+                    new_count += 1
+
+            if stop or len(posts) < per_page:
+                break
+            page += 1
+            time.sleep(0.1)  # 限流
+
+        return new_count
 
     def _on_ws_response(self, msg: dict):
         """WebSocket 客户端请求响应回调 (认证结果 / ping 回复等)"""
@@ -294,7 +343,7 @@ class Agent:
         post["username"] = self.mm.get_username(user_id)
 
         # 缓存消息
-        self.memory.cache_message(post)
+        self.memory.log_message(post)
 
         # Layer 1→2 双阈值管理（定期摘要 + 容量清理）— 委托给 MemoryCompactor
         # 每条消息都检查，compactor 内部有 guard 避免无效操作
@@ -548,7 +597,7 @@ class Agent:
             if post_id:
                 self.stats["responses"] += 1
                 # 把自己的回复也缓存起来
-                self.memory.cache_message(
+                self.memory.log_message(
                     {
                         "id": post_id or "",
                         "channel_id": post["channel_id"],
