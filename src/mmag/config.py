@@ -31,6 +31,8 @@ def _log_config_loading():
         "ANTHROPIC_MODEL",
         "BOT_NAME",
         "LISTEN_PROBABILITY",
+        "MAX_CONTEXT_MESSAGES",
+        "MAX_CONTEXT_CHARS",
         "LOG_LEVEL",
         "LOG_DIR",
         "LOG_RETENTION_DAYS",
@@ -68,7 +70,12 @@ class Config:
     bot_name: str = os.getenv("BOT_NAME", "小智")
     bot_display_name: str = os.getenv("BOT_DISPLAY_NAME", "小智")
     listen_probability: float = float(os.getenv("LISTEN_PROBABILITY", "0.15"))
-    max_context_messages: int = int(os.getenv("MAX_CONTEXT_MESSAGES", "30"))
+    max_context_messages: int = int(
+        os.getenv("MAX_CONTEXT_MESSAGES", "100")
+    )  # LLM 上下文窗口消息数
+    max_context_chars: int = int(
+        os.getenv("MAX_CONTEXT_CHARS", "10000")
+    )  # LLM 上下文窗口总字符上限
     typing_delay_min: float = float(os.getenv("TYPING_DELAY_MIN", "1"))
     typing_delay_max: float = float(os.getenv("TYPING_DELAY_MAX", "3"))
     memory_db_path: str = os.getenv("MEMORY_DB_PATH", "./agent_memory.db")

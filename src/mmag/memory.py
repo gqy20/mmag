@@ -115,6 +115,22 @@ class Memory:
                 root_id TEXT DEFAULT ''
             )
         """)
+        # URL 分析结果缓存（GitHub API / 通用网页）
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS url_cache (
+                url TEXT PRIMARY KEY,
+                url_hash TEXT NOT NULL,
+                kind TEXT,
+                status TEXT,
+                title TEXT,
+                summary TEXT,
+                content TEXT,
+                metadata TEXT,
+                fetched_at REAL,
+                expires_at REAL,
+                error TEXT
+            )
+        """)
         self._conn.commit()
         log.info(f"记忆数据库就绪: {self.db_path}")
 
@@ -215,6 +231,84 @@ class Memory:
         ).fetchall()
         # 返回时间正序（旧的在前）
         return [dict(r) for r in reversed(rows)]
+
+    # ---- URL 缓存（url_analyzer 写入）----
+
+    # URL 缓存: content 字段上限 (字节)。SQLite TEXT 实际无硬限制, 这里设软上限
+    # 防止某些超大 README (数 MB) 把数据库撑爆。一般仓库 README 都在 200KB 以内。
+    _URL_CACHE_CONTENT_MAX = 2_000_000  # 2 MB
+
+    def cache_url(self, url: str, info: dict, ttl_seconds: int = 3600) -> None:
+        """缓存一个 URL 的分析结果
+
+        info 必须包含: kind, status, title, summary, metadata (dict)
+        可选: error
+        长度守卫: content 字段截断到 2MB (防止巨型 README/页面撑爆数据库)。
+                  summary 字段保持完整 (在 url_analyzer 层不再截断)。
+        错误处理: 任何异常只 log.debug，不向上抛。
+        """
+        if not url or not info:
+            return
+        try:
+            import hashlib
+
+            metadata = info.get("metadata") or {}
+            content = info.get("content") or ""
+            if isinstance(content, str) and len(content) > self._URL_CACHE_CONTENT_MAX:
+                content = content[: self._URL_CACHE_CONTENT_MAX]
+            now = time.time()
+            self._conn.execute(
+                """INSERT OR REPLACE INTO url_cache
+                   (url, url_hash, kind, status, title, summary, content, metadata,
+                    fetched_at, expires_at, error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    url,
+                    hashlib.sha256(url.encode("utf-8")).hexdigest()[:16],
+                    info.get("kind", "unknown"),
+                    info.get("status", "ok"),
+                    (info.get("title") or "")[:500],
+                    (info.get("summary") or "")[:5000],  # 缓存层快速预览上限
+                    content
+                    if isinstance(content, str)
+                    else json.dumps(content, ensure_ascii=False),
+                    json.dumps(metadata, ensure_ascii=False, default=str)[:50000],
+                    now,
+                    now + ttl_seconds,
+                    info.get("error") or "",
+                ),
+            )
+            self._conn.commit()
+        except Exception as e:
+            log.debug(f"缓存 URL 失败: {e}")
+
+    def get_cached_url(self, url: str) -> dict | None:
+        """获取缓存的 URL 分析结果（自动判断过期）
+
+        返回 dict: {kind, status, title, summary, content, metadata, fetched_at, expires_at, error, cached=True}
+        过期或不存在 → 返回 None。
+        错误处理: 任何异常只 log.debug，不向上抛。
+        """
+        if not url:
+            return None
+        try:
+            row = self._conn.execute("SELECT * FROM url_cache WHERE url=?", (url,)).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            if d.get("expires_at", 0) < time.time():
+                # 已过期 — 视为未命中（不主动删除，让下次写入覆盖）
+                return None
+            # 解析 metadata JSON
+            try:
+                d["metadata"] = json.loads(d.get("metadata") or "{}")
+            except Exception:
+                d["metadata"] = {}
+            d["cached"] = True
+            return d
+        except Exception as e:
+            log.debug(f"读取 URL 缓存失败: {e}")
+            return None
 
     # ---- 用户画像（从消息行为自动推断）----
 
@@ -646,7 +740,7 @@ class Memory:
     # ---- 清理 ----
 
     def clear_all(self):
-        for table in ["message_cache", "conversation_segments", "open_items"]:
+        for table in ["message_cache", "conversation_segments", "open_items", "url_cache"]:
             self._conn.execute(f"DELETE FROM {table}")
         self._conn.commit()
         log.info("短期记忆已清空")

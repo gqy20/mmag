@@ -858,7 +858,7 @@ class Agent:
         self._save_interaction(post, response)
 
     def _build_context(self, post: dict, mention: bool = False) -> dict:
-        """构建 LLM 上下文"""
+        """构建 LLM 上下文（受 max_context_messages + max_context_chars 双重限制）"""
         channel_id = post["channel_id"]
         ch_info = self.mm.get_channel(channel_id)
         ch_name = ch_info.get("display_name", channel_id[:8])
@@ -897,6 +897,25 @@ class Agent:
                 "content": f"{post['username']}: {post['message']}",
             }
         )
+
+        # ── 总字符上限裁剪：从旧消息开始丢弃，保留当前消息 ──
+        max_chars = config.max_context_chars
+        if max_chars > 0:
+            total_chars = sum(len(m["content"]) for m in messages)
+            if total_chars > max_chars:
+                # 始终保留最后一条（当前消息），从头部裁剪
+                current_msg = messages.pop()
+                while len(messages) > 1 and sum(
+                    len(m["content"]) for m in messages
+                ) > max_chars - len(current_msg["content"]):
+                    messages.pop(0)
+                messages.append(current_msg)
+                log.debug(
+                    "[上下文] 字符裁剪: %d → %d (上限 %d)",
+                    total_chars,
+                    sum(len(m["content"]) for m in messages),
+                    max_chars,
+                )
 
         # 额外上下文
         channel_ctx = f"当前频道: {ch_name}"
