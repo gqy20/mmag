@@ -147,12 +147,8 @@ def _cleanup_old_logs(log_dir: str, retain_days: int) -> None:
     for f in glob.glob(pattern):
         # 从文件名提取日期部分: mmag-2026-06-11_103549.log → 2026-06-11
         fname = Path(f).stem  # mmag-2026-06-11_103549
-        # 兼容两种格式: 带时间戳 (YYYY-MM-DD_HHMMSS) 和纯日期 (YYYY-MM-DD)
-        date_part = (
-            fname.split("_")[0].split("-", 1)[-1] if "_" in fname else fname.split("-", 1)[-1]
-        )
         # 完整日期: 取 stem 中 PKG_NAME- 后面的全部
-        date_part = fname[len(PKG_NAME) + 1 :]  # "2026-06-11_103549" 或 "2026-06-11"
+        date_part = fname[len(PKG_NAME) + 1 :]  # "2026-06-11_103549"
         file_date = date_part.split("_")[0]  # "2026-06-11"
 
         if file_date < cutoff_str:

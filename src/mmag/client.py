@@ -12,23 +12,45 @@ from .logger import get_logger
 log = get_logger(__name__)
 
 
-class MMClient:
-    """Mattermost REST API + 元数据缓存"""
+# Channel 类型标签（O=Open 公开, P=Private 私有, D=Direct 私聊）
+CHANNEL_TYPE_LABELS: dict[str, str] = {
+    "O": "公开",
+    "P": "私有",
+    "D": "私聊",
+}
 
-    def __init__(self):
+
+def channel_type_label(channel_type: str) -> str:
+    """把 Mattermost channel type 字母转中文标签，未知值原样返回"""
+    return CHANNEL_TYPE_LABELS.get(channel_type, channel_type)
+
+
+class MMClient:
+    """Mattermost REST API + 元数据缓存
+
+    Args:
+        base_url: API 根 URL（默认从 config.mm_url 读）
+        token: Bearer token（默认从 config.mm_token 读）
+    """
+
+    def __init__(self, base_url: str | None = None, token: str | None = None):
+        self.base_url = (base_url or config.mm_url).rstrip("/")
         self.session = requests.Session()
-        self.session.headers.update(config.headers)
+        bearer = token or config.mm_token
+        self.session.headers.update(
+            {"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"}
+        )
         self._users: dict[str, dict] = {}  # user_id → user info
         self._channels: dict[str, dict] = {}  # channel_id → channel info
         self._me: dict | None = None
 
     def _get(self, path: str, **params) -> Any:
-        resp = self.session.get(f"{config.api_base}{path}", params=params)
+        resp = self.session.get(f"{self.base_url}/api/v4{path}", params=params)
         resp.raise_for_status()
         return resp.json()
 
     def _post(self, path: str, **kwargs) -> Any:
-        resp = self.session.post(f"{config.api_base}{path}", **kwargs)
+        resp = self.session.post(f"{self.base_url}/api/v4{path}", **kwargs)
         resp.raise_for_status()
         return resp.json()
 
@@ -92,14 +114,6 @@ class MMClient:
             self._post("/posts/ephemeral", json=payload)
         except Exception as e:
             log.error(f"发送 ephemeral 失败: {e}")
-
-    def send_typing(self, channel_id: str):
-        """通知频道 Bot 正在输入 (通过 REST API 模拟)"""
-        # MM 的 typing 通过 WebSocket 发送，这里我们用一种变通方式：
-        # 发一条 ephemeral 消息然后快速删除不太优雅，
-        # 更好的方式是在 WebSocket 连接上直接发 action
-        # 这里先记录，实际在 Agent 层处理
-        pass
 
     def get_posts(self, channel_id: str, limit: int = 30) -> list[dict]:
         """获取频道最近消息"""

@@ -18,7 +18,9 @@ import os
 import sys
 from pathlib import Path
 
-import requests
+from dotenv import load_dotenv
+
+from .client import MMClient, channel_type_label
 
 # ── 路径 ──
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -26,20 +28,14 @@ ENV_FILE = PROJECT_ROOT / ".env"
 
 
 def load_env(env_file: Path | None = None) -> dict[str, str]:
-    """加载 .env 文件 (优先级最高) > 系统环境变量"""
+    """加载 .env 文件 (优先级最高) > 系统环境变量
+
+    行为与 config.py 一致：使用 python-dotenv 解析，override=True 让 .env 覆盖系统 env
+    """
     target = env_file or ENV_FILE
-    env: dict[str, str] = {}
     if target.exists():
-        for line in target.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            k, _, v = line.partition("=")
-            env[k.strip()] = v.strip().strip('"').strip("'")
-    # 系统环境变量作为 fallback
-    for key in (
+        load_dotenv(target, override=True)
+    keys = (
         "MM_URL",
         "MM_TOKEN",
         "MM_TEAM_ID",
@@ -48,66 +44,37 @@ def load_env(env_file: Path | None = None) -> dict[str, str]:
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_MODEL",
-    ):
-        if key not in env and os.getenv(key):
-            env[key] = os.getenv(key, "")
-    return env
+    )
+    return {k: os.getenv(k, "") for k in keys}
 
 
 class MMDiscoverer:
-    """Mattermost 环境探测器"""
+    """Mattermost 环境探测器 — 包装 MMClient，加一层表格打印与配置建议"""
 
     def __init__(self, base_url: str, token: str):
+        self.client = MMClient(base_url=base_url, token=token)
         self.base_url = base_url.rstrip("/")
-        self.token = token
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            }
-        )
-        self._me: dict | None = None
 
-    # ── 底层请求 ──
+    # ── 便捷方法（直接转发到 MMClient._get）──
 
     def _get(self, path: str, **params) -> dict:
-        url = f"{self.base_url}/api/v4{path}"
-        r = self.session.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        return r.json()
-
-    def _post(self, path: str, payload: dict) -> dict:
-        url = f"{self.base_url}/api/v4{path}"
-        r = self.session.post(url, json=payload, timeout=10)
-        r.raise_for_status()
-        return r.json()
-
-    # ── 探测方法 ──
+        return self.client._get(path, **params)
 
     @property
     def me(self) -> dict:
-        if self._me is None:
-            self._me = self._get("/users/me")
-        return self._me
+        return self.client.get_me()
 
     def get_teams(self) -> list[dict]:
-        return self._get("/users/me/teams")
+        return self.client._get("/users/me/teams")
 
     def get_channels(self) -> list[dict]:
-        return self._get("/users/me/channels")
+        return self.client._get("/users/me/channels")
 
     def get_team_channels(self, team_id: str) -> list[dict]:
-        return self._get(f"/teams/{team_id}/channels")
-
-    def get_channel_posts(self, channel_id: str, limit: int = 5) -> list[dict]:
-        data = self._get(f"/channels/{channel_id}/posts", per_page=limit)
-        order = data.get("order", [])
-        posts = data.get("posts", {})
-        return [posts[pid] for pid in order if pid in posts]
+        return self.client._get(f"/teams/{team_id}/channels")
 
     def get_user(self, user_id: str) -> dict:
-        return self._get(f"/users/{user_id}")
+        return self.client._get(f"/users/{user_id}")
 
     # ── 格式化输出 ──
 
@@ -156,8 +123,7 @@ class MMDiscoverer:
             cid = ch["id"]
             marker = " ⭐" if cid == highlight_channel_id else ""
             name = ch.get("display_name") or ch.get("name", "?")
-            ctype = ch.get("type", "?")
-            type_label = {"O": "公开", "P": "私有", "D": "私聊"}.get(ctype, ctype)
+            type_label = channel_type_label(ch.get("type", "?"))
             # 获取消息数
             try:
                 posts_data = self._get(f"/channels/{cid}/posts", per_page=1)

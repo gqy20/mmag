@@ -39,23 +39,7 @@ class McpConfigItem:
     name: str
     type: str  # "stdio" | "http" | "streamable-http"
     endpoint: str  # command+args 或 url
-    required_env_vars: list[str] = field(default_factory=list)
     raw_config: dict[str, Any] = field(default_factory=dict)
-
-
-def _collect_template_vars(value: Any, out: set[str]) -> None:
-    """递归收集 ${VAR_NAME} 模板变量"""
-    if isinstance(value, str):
-        for m in re.finditer(r"\$\{([A-Z0-9_]+)\}", value):
-            var_name = m.group(1)
-            if var_name:
-                out.add(var_name)
-    elif isinstance(value, list):
-        for item in value:
-            _collect_template_vars(item, out)
-    elif isinstance(value, dict):
-        for v in value.values():
-            _collect_template_vars(v, out)
 
 
 def _resolve_env_vars(value: Any, env: dict[str, str] | None = None) -> Any:
@@ -112,12 +96,7 @@ def read_mcp_config(config_path: str | Path | None = None) -> list[McpConfigItem
             continue
         cfg = _resolve_env_vars(raw_cfg)
 
-        server_type = (
-            str(cfg.get("type", "")).strip()
-            or ("stdio" if "command" in cfg else "http")
-        )
-        required_vars: set[str] = set()
-        _collect_template_vars(cfg, required_vars)
+        server_type = str(cfg.get("type", "")).strip() or ("stdio" if "command" in cfg else "http")
 
         endpoint = ""
         if server_type == "stdio":
@@ -136,7 +115,6 @@ def read_mcp_config(config_path: str | Path | None = None) -> list[McpConfigItem
                 name=name,
                 type=server_type,
                 endpoint=endpoint,
-                required_env_vars=sorted(required_vars),
                 raw_config=cfg,
             )
         )
@@ -147,13 +125,7 @@ def read_mcp_config(config_path: str | Path | None = None) -> list[McpConfigItem
         len(items),
     )
     for item in items:
-        log.debug(
-            "  - [%s] type=%s endpoint=%s env=%s",
-            item.name,
-            item.type,
-            item.endpoint[:80],
-            item.required_vars or "-",
-        )
+        log.debug("  - [%s] type=%s endpoint=%s", item.name, item.type, item.endpoint[:80])
     return items
 
 
@@ -167,16 +139,9 @@ class MCPClientBridge:
         # 之后 registry 中就有了 mcp_xxx_yyy 形式的工具，LLM 可直接调用
     """
 
-    def __init__(self, registry: ToolRegistry, config_path: str | None = None):
+    def __init__(self, registry: ToolRegistry):
         self.registry = registry
-        self.config_path = config_path
         self._sessions: dict[str, Any] = {}  # name → ClientSession
-        self._connected = False
-
-    @property
-    def connected_servers(self) -> list[str]:
-        """已连接的 Server 名称列表"""
-        return list(self._sessions.keys())
 
     async def load_and_connect(self) -> int:
         """读取 .mcp.json 并连接所有配置的 Server
@@ -184,7 +149,7 @@ class MCPClientBridge:
         Returns:
             成功连接并注册工具的 Server 数量
         """
-        items = read_mcp_config(self.config_path)
+        items = read_mcp_config()
         if not items:
             return 0
 
@@ -207,7 +172,6 @@ class MCPClientBridge:
                     type(e).__name__,
                 )
 
-        self._connected = success_count > 0
         if success_count > 0:
             log.info("MCP Bridge 就绪: %d/%d 个 Server 在线", success_count, len(items))
         return success_count
@@ -328,15 +292,18 @@ class MCPClientBridge:
         return handler
 
     async def close_all(self):
-        """关闭所有 MCP 连接"""
+        """关闭所有 MCP 连接，并同步注销注入到 ToolRegistry 的 mcp_* 工具
+
+        避免 session 关闭后 LLM 仍可调用死 session 的工具（会抛连接错误）。
+        """
         for name, session in list(self._sessions.items()):
             try:
-                if hasattr(session, "__aexit__"):
-                    await session.__aexit__(None, None, None)
-                elif hasattr(session, "close"):
-                    await session.close()
+                await session.__aexit__(None, None, None)
                 log.debug("MCP Server '%s' 已断开", name)
             except Exception as e:
                 log.warning("MCP Server '%s' 断开时异常: %s", name, e)
+            # 注销该 Server 注入的全部工具（mcp_<name>_*）
+            removed = self.registry.unregister_prefix(f"mcp_{name}_")
+            if removed:
+                log.debug("MCP Server '%s': 已注销 %d 个工具", name, removed)
         self._sessions.clear()
-        self._connected = False

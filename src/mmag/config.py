@@ -3,7 +3,7 @@
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,35 +19,50 @@ else:
     print(f"[WARN] .env 文件不存在: {_ENV_PATH}，将使用默认值/环境变量")
 
 
+# 字段名（小写 snake_case）→ 环境变量名（大写）的映射
+# 用 dict 显式列出，避免命名约定变化时反射错位
+_FIELD_TO_ENV: dict[str, str] = {
+    "mm_url": "MM_URL",
+    "mm_token": "MM_TOKEN",
+    "mm_bot_user_id": "MM_BOT_USER_ID",
+    "mm_team_id": "MM_TEAM_ID",
+    "mm_channel_id": "MM_CHANNEL_ID",
+    "anthropic_api_key": "ANTHROPIC_API_KEY",
+    "anthropic_model": "ANTHROPIC_MODEL",
+    "anthropic_base_url": "ANTHROPIC_BASE_URL",
+    "bot_name": "BOT_NAME",
+    "bot_display_name": "BOT_DISPLAY_NAME",
+    "listen_probability": "LISTEN_PROBABILITY",
+    "max_context_messages": "MAX_CONTEXT_MESSAGES",
+    "max_context_chars": "MAX_CONTEXT_CHARS",
+    "typing_delay_min": "TYPING_DELAY_MIN",
+    "typing_delay_max": "TYPING_DELAY_MAX",
+    "memory_db_path": "MEMORY_DB_PATH",
+    "log_level": "LOG_LEVEL",
+    "log_dir": "LOG_DIR",
+    "log_retention_days": "LOG_RETENTION_DAYS",
+    "memory_cache_max": "MEMORY_CACHE_MAX",
+    "memory_summary_interval": "MEMORY_SUMMARY_INTERVAL",
+    "memory_compaction_keep": "MEMORY_COMPACTION_KEEP",
+    "memory_summary_batch": "MEMORY_SUMMARY_BATCH",
+    "memory_context_window": "MEMORY_CONTEXT_WINDOW",
+}
+# 敏感字段（值要脱敏打印，只显示前后几位）
+_SECRET_FIELD_NAMES: frozenset[str] = frozenset({"mm_token", "anthropic_api_key"})
+
+
 def _log_config_loading():
-    """打印关键配置项，方便调试"""
-    keys = [
-        "MM_URL",
-        "MM_TOKEN",
-        "MM_TEAM_ID",
-        "MM_CHANNEL_ID",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_MODEL",
-        "BOT_NAME",
-        "LISTEN_PROBABILITY",
-        "MAX_CONTEXT_MESSAGES",
-        "MAX_CONTEXT_CHARS",
-        "LOG_LEVEL",
-        "LOG_DIR",
-        "LOG_RETENTION_DAYS",
-        "MEMORY_CACHE_MAX",
-        "MEMORY_SUMMARY_INTERVAL",
-        "MEMORY_COMPACTION_KEEP",
-        "MEMORY_SUMMARY_BATCH",
-        "MEMORY_CONTEXT_WINDOW",
-    ]
+    """遍历 Config 字段打印加载结果，新增/删除配置项时无需改这里"""
     log.info("═══ 配置加载 ═══")
-    for k in keys:
-        v = os.getenv(k, "")
-        if "KEY" in k or "TOKEN" in k:
-            v = f"{v[:8]}...{v[-4:]}" if len(v) > 12 else "(未设置)" if not v else "(已设置)"
-        log.info("  %s = %s", k, v)
+    for f in fields(Config):
+        env_key = _FIELD_TO_ENV.get(f.name)
+        if env_key is None:
+            # 反射到的字段不在映射表里，跳过（可能是新加字段忘了登记）
+            continue
+        v = os.getenv(env_key, "")
+        if f.name in _SECRET_FIELD_NAMES:
+            v = f"{v[:8]}...{v[-4:]}" if len(v) > 12 else (v or "(未设置)")
+        log.info("  %s = %s", env_key, v)
     log.info("  .env path = %s (%s)", _ENV_PATH, "✅ 存在" if _ENV_PATH.exists() else "❌ 不存在")
     log.info("═══════════════")
 

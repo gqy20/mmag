@@ -54,7 +54,7 @@ def _make_get_posts_tool(mm_client, memory) -> Tool:
             "properties": {
                 "channel_id": {
                     "type": "string",
-                    "description": "频道 ID",
+                    "description": "频道 ID（不是 name）；当前频道 ID 会在 user 消息中以 📍 前缀告知",
                 },
                 "limit": {
                     "type": "integer",
@@ -166,7 +166,7 @@ def _make_get_user_profile_tool(mm_client, memory) -> Tool:
             "required": ["user_id"],
         },
         handler=lambda user_id: _format_profile(
-            memory.get_user_profile(user_id),
+            memory.get_user_profile_decoded(user_id),
             mm_client.get_username(user_id),
         ),
     )
@@ -257,14 +257,14 @@ def _format_knowledge(results: list[dict]) -> dict:
 
 def _format_channel(ch: dict) -> dict:
     """格式化频道信息"""
+    from ..client import channel_type_label
+
     return {
         "id": ch.get("id", ""),
         "name": ch.get("name", ""),
         "display_name": ch.get("display_name", ""),
         "type": ch.get("type", ""),
-        "type_label": {"O": "公开", "P": "私有", "D": "私聊"}.get(
-            ch.get("type", ""), ch.get("type", "")
-        ),
+        "type_label": channel_type_label(ch.get("type", "")),
     }
 
 
@@ -275,27 +275,20 @@ def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:
 
 
 def _format_profile(profile: dict, username: str) -> dict:
-    """格式化用户画像（含自动推断的话题/时段/风格）"""
-    import contextlib
-    import json
+    """格式化用户画像（含自动推断的话题/时段/风格）
 
+    依赖调用方传入已解析的 profile（topics=list, active_hours=dict），
+    通常来自 Memory.get_user_profile_decoded()。
+    """
     if not profile:
         return {"username": username, "note": "暂无画像信息，该用户尚未发言或画像未建立"}
 
-    # 解析 JSON 字段
-    topics = []
-    if profile.get("topics"):
-        with contextlib.suppress(Exception):
-            topics = json.loads(profile["topics"])
-
-    active_hours_raw = {}
-    if profile.get("active_hours"):
-        with contextlib.suppress(Exception):
-            active_hours_raw = json.loads(profile["active_hours"])
-
     # 取最活跃的 Top 3 时段
+    active_hours_raw = profile.get("active_hours") or {}
     top_hours = sorted(active_hours_raw.items(), key=lambda x: x[1], reverse=True)[:3]
     peak_hours = [f"{h}({c}次)" for h, c in top_hours] if top_hours else []
+
+    topics = profile.get("topics") or []
 
     return {
         "username": username,
@@ -425,6 +418,7 @@ def _get_posts_cached(mm_client, memory, channel_id: str, limit: int) -> list[di
     if rest_posts:
         for p in rest_posts:
             p["channel_id"] = channel_id  # 确保有 channel_id
+            p["username"] = mm_client.get_username(p.get("user_id", ""))
             memory.cache_message(p)
         log.debug("get_posts: 已回填 %d 条消息到本地缓存", len(rest_posts))
 

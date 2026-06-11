@@ -21,11 +21,8 @@ async def main():
 
     agent = Agent()
     try:
-        # 首次启动 (无条件执行)，之后根据 running 状态决定是否重连
-        while True:
-            await agent.start()
-            if not agent.running:
-                break
+        # Agent.start() 内部已包含指数退避重连；自然返回/抛错时由 KeyboardInterrupt/Exception 兜底
+        await agent.start()
     except KeyboardInterrupt:
         log.info("👋 收到中断信号，正在停止...")
         await agent.stop()

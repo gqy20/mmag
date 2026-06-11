@@ -51,6 +51,20 @@ class ToolRegistry:
             "工具已注册: %s (%d 参数)", tool.name, len(tool.input_schema.get("properties", {}))
         )
 
+    def unregister(self, name: str) -> bool:
+        """注销工具，返回是否存在并被删除"""
+        if name in self._tools:
+            del self._tools[name]
+            return True
+        return False
+
+    def unregister_prefix(self, prefix: str) -> int:
+        """注销所有 name 以 prefix 开头的工具，返回注销数量"""
+        names = [n for n in self._tools if n.startswith(prefix)]
+        for n in names:
+            del self._tools[n]
+        return len(names)
+
     def get_all(self) -> list[Tool]:
         """获取所有已注册的工具"""
         return list(self._tools.values())

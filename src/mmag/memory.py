@@ -63,17 +63,11 @@ class Memory:
                 notes TEXT,
                 last_interaction REAL,
                 topics TEXT,
-                active_hours TEXT
+                active_hours TEXT,
+                _question_count INTEGER DEFAULT 0
             )
             """
         )
-        # 兼容旧数据库：新增列可能不存在，用 ALTER TABLE 补齐
-        for col in ("topics", "active_hours", "_question_count"):
-            try:
-                col_type = "INTEGER" if col == "_question_count" else "TEXT"
-                c.execute(f"ALTER TABLE user_profiles ADD COLUMN {col} {col_type}")
-            except Exception:
-                pass  # 列已存在则忽略
         # 团队知识
         c.execute(
             """
@@ -137,6 +131,11 @@ class Memory:
     # ---- 消息缓存 ----
 
     def cache_message(self, post: dict):
+        """缓存单条消息到 message_cache 表
+
+        期望 post 包含完整 username（由调用方在写入前从 MMClient.get_username 补全），
+        避免读取时再去走 REST API。
+        """
         msg = post.get("message", "") or ""
         if not msg or len(msg) > 50000:
             return
@@ -149,7 +148,7 @@ class Memory:
                     post["id"],
                     post.get("channel_id", ""),
                     post.get("user_id", ""),
-                    "",  # username 需要另外查
+                    post.get("username", ""),
                     msg[:10000],
                     (post.get("create_at", 0) or 0) / 1000.0,
                     post.get("type", ""),
@@ -584,50 +583,32 @@ class Memory:
             parts.append("常提问")
         return "/".join(parts) if parts else "casual"
 
-    def update_user_profile(self, user_id: str, username: str, updates: dict):
-        existing = self._conn.execute(
-            "SELECT * FROM user_profiles WHERE user_id=?", (user_id,)
-        ).fetchone()
-        now = time.time()
-        if existing:
-            data = dict(existing)
-            for k, v in updates.items():
-                if v and v != {"no_change": True}:
-                    old = data.get(k)
-                    if isinstance(old, str):
-                        try:
-                            old_json = json.loads(old)
-                        except Exception:
-                            old_json = {}
-                        if isinstance(v, dict):
-                            old_json.update(v)
-                            v = json.dumps(v, ensure_ascii=False)
-                    if v:
-                        self._conn.execute(
-                            f"UPDATE user_profiles SET {k}=?, message_count=message_count+1, "
-                            "last_interaction=? WHERE user_id=?",
-                            (v, now, user_id),
-                        )
-                    elif k == "message_count":
-                        self._conn.execute(
-                            "UPDATE user_profiles SET message_count=message_count+1, "
-                            "last_interaction=? WHERE user_id=?",
-                            (now, user_id),
-                        )
-        else:
-            self._conn.execute(
-                """INSERT OR IGNORE INTO user_profiles
-                   (user_id, username, first_seen, message_count, last_interaction)
-                   VALUES (?, ?, ?, 1, ?)""",
-                (user_id, username, now, now),
-            )
-        self._conn.commit()
-
     def get_user_profile(self, user_id: str) -> dict:
+        """原始画像：topics/active_hours 仍是 JSON 字符串，调用方需自己解析"""
         row = self._conn.execute(
             "SELECT * FROM user_profiles WHERE user_id=?", (user_id,)
         ).fetchone()
         return dict(row) if row else {}
+
+    def get_user_profile_decoded(self, user_id: str) -> dict:
+        """画像（已解析 JSON 字段）
+
+        与 get_user_profile 的区别: topics (list) 与 active_hours (dict) 已 json.loads,
+        解析失败时各自 fallback 到空类型。供展示层 (tool handler / 格式化) 直接消费。
+        """
+        profile = self.get_user_profile(user_id)
+        if not profile:
+            return {}
+        for key, default in (("topics", []), ("active_hours", {})):
+            raw = profile.get(key)
+            if not raw:
+                profile[key] = default
+                continue
+            try:
+                profile[key] = json.loads(raw)
+            except Exception:
+                profile[key] = default
+        return profile
 
     # ---- 团队知识 ----
 
@@ -740,10 +721,16 @@ class Memory:
     # ---- 清理 ----
 
     def clear_all(self):
+        """清空短期对话数据（保留用户画像和团队知识）
+
+        删除: message_cache (消息缓存), conversation_segments (对话段),
+              open_items (待办), url_cache (链接分析缓存)
+        保留: user_profiles (用户画像), team_knowledge (团队知识库) — 这些是长期数据
+        """
         for table in ["message_cache", "conversation_segments", "open_items", "url_cache"]:
             self._conn.execute(f"DELETE FROM {table}")
         self._conn.commit()
-        log.info("短期记忆已清空")
+        log.info("短期对话数据已清空（用户画像/团队知识已保留）")
 
     def close(self):
         if self._conn:

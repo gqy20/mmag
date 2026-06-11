@@ -106,17 +106,13 @@ class MemoryCompactor:
         if not wider_batch:
             return
 
-        ctx = (
-            wider_batch[:-summary_interval] if len(wider_batch) > summary_interval else None
-        )
+        ctx = wider_batch[:-summary_interval] if len(wider_batch) > summary_interval else None
         recent_batch = wider_batch[-summary_interval:]
 
         all_summaries = []
         for bs in range(0, len(recent_batch), summary_batch):
             batch = recent_batch[bs : bs + summary_batch]
-            summary = await self._summarize_message_batch(
-                batch, channel_id, context_messages=ctx
-            )
+            summary = await self._summarize_message_batch(batch, channel_id, context_messages=ctx)
             if summary:
                 all_summaries.append(summary)
 
@@ -124,12 +120,9 @@ class MemoryCompactor:
             return
 
         combined = "\n\n---\n\n".join(all_summaries)
-        participants = list(
-            {m.get("username", "?") for m in recent_batch if m.get("username")}
-        )
+        participants = list({m.get("username", "?") for m in recent_batch if m.get("username")})
         topic = (
-            f"定期摘要 #{count // summary_interval} "
-            f"(msg {count - summary_interval + 1}-{count})"
+            f"定期摘要 #{count // summary_interval} (msg {count - summary_interval + 1}-{count})"
         )
 
         # 持久化
@@ -201,9 +194,7 @@ class MemoryCompactor:
             return
 
         combined_summary = "\n\n---\n\n".join(all_summaries)
-        participants = list(
-            {m.get("username", "?") for m in old_messages if m.get("username")}
-        )
+        participants = list({m.get("username", "?") for m in old_messages if m.get("username")})
 
         # 提取最后 20 条中的关键决策作为 key_points
         key_points = []

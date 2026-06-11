@@ -44,7 +44,7 @@ class Agent:
 
         # 运行状态
         self.start_time = time.time()
-        self.stats = {"messages": 0, "responses": 0, "errors": 0}
+        self.stats = {"messages": 0, "responses": 0}
         self.running = False
 
         # 频道级状态
@@ -99,25 +99,24 @@ class Agent:
             self.running = False
             return
 
-        # 阶段 2.5: 连接 MCP 外部工具 Server
-        log.info("[2.5/5] 加载 MCP 外部工具...")
+        # 阶段 3: 连接 MCP 外部工具 Server
+        log.info("[3/5] 加载 MCP 外部工具...")
         try:
             mcp_count = await self.mcp_bridge.load_and_connect()
             if mcp_count > 0:
                 total_mcp_tools = sum(
-                    1 for t in self.tool_registry.list_tools() if t.name.startswith("mcp_")
+                    1 for t in self.tool_registry.get_all() if t.name.startswith("mcp_")
                 )
                 log.info(
-                    f"       ✅ MCP 已连接 {mcp_count} 个 Server, "
-                    f"注册 {total_mcp_tools} 个外部工具"
+                    f"       ✅ MCP 已连接 {mcp_count} 个 Server, 注册 {total_mcp_tools} 个外部工具"
                 )
             else:
                 log.info("       ⏭️ 无 MCP 配置 (.mcp.json 不存在或为空)")
         except Exception as e:
             log.warning("       ⚠️ MCP 加载失败（不影响运行）: %s", e)
 
-        # 阶段 3: 预加载频道消息到缓存
-        log.info("[3/5] 预加载频道消息...")
+        # 阶段 4: 预加载频道消息到缓存
+        log.info("[4/5] 预加载频道消息...")
         try:
             channels_to_load = []
 
@@ -146,8 +145,8 @@ class Agent:
                 posts = self.mm.get_posts(ch_id, limit=config.max_context_messages)
                 self.working_memory[ch_id] = []
                 for p in posts:
-                    self.memory.cache_message(p)
                     p["username"] = self.mm.get_username(p.get("user_id", ""))
+                    self.memory.cache_message(p)
                     self.working_memory[ch_id].append(p)
                 total_msgs += len(posts)
                 log.info(
@@ -159,8 +158,8 @@ class Agent:
             log.warning(f"       ⚠️ 预加载频道失败: {e}")
             log.warning("       (不影响运行，将使用空上下文启动)")
 
-        # 阶段 4+5: 启动 WebSocket 客户端 (封装了连接/握手/心跳/重连)
-        log.info("[4/5] 建立 WebSocket 连接 (官方协议)...")
+        # 阶段 5: 启动 WebSocket 客户端 (封装了连接/握手/心跳/重连)
+        log.info("[5/5] 建立 WebSocket 连接 (官方协议)...")
         self.running = True  # 必须在进入循环前设置!
 
         self.ws = WebSocketClient(
@@ -170,8 +169,8 @@ class Agent:
             on_response=self._on_ws_response,
         )
 
-        # 阶段 5: 提示就绪
-        log.info("[5/5] 🎯 进入事件监听循环...")
+        # 阶段 5 收尾：提示就绪
+        log.info("🎯 进入事件监听循环...")
         log.info(f"       旁听概率: {config.listen_probability:.0%}")
         log.info(f"       上下文窗口: {config.max_context_messages} 条")
         log.info("       纯自然语言驱动，无命令")
@@ -180,7 +179,6 @@ class Agent:
 
         # 阻塞运行 (内部自动重连), 直到 stop() 调 ws.close()
         await self.ws.run()
-
 
     async def _on_ws_event(self, msg: dict):
         """WebSocket 服务端事件回调 (由 ws_client 在 JSON 解析 + 序列号校验后调用)
@@ -231,10 +229,9 @@ class Agent:
     async def _on_posted(self, event: dict):
         """处理 posted 事件 — 核心消息处理入口
 
-        data.post 的格式有三种可能 (官方源码 webSocketEventJSON):
+        data.post 格式 (Mattermost 9.x+):
           1. 完整 dict 对象 (Python json.loads 后)
           2. JSON 字符串 (包含完整 post 对象，需二次解析)
-          3. 纯 post ID 字符串 (旧版或精简模式，需 REST API 补全)
         """
         data = event.get("data", {})
         raw_post = data.get("post")
@@ -246,25 +243,16 @@ class Agent:
         if isinstance(raw_post, dict):
             post = raw_post
         elif isinstance(raw_post, str):
-            # 尝试解析为 JSON (完整 post 对象的字符串形式)
+            # 尝试解析为 JSON 字符串形式的完整 post 对象
             try:
                 parsed = json.loads(raw_post)
-                if isinstance(parsed, dict) and "id" in parsed and "message" in parsed:
-                    post = parsed
-                else:
-                    # 看起来像纯 ID，通过 REST API 获取
-                    post = self.mm._get(f"/posts/{raw_post}")
-                    if not post:
-                        return
-            except (json.JSONDecodeError, Exception):
-                # 不是有效 JSON，当作 post ID 处理
-                try:
-                    post = self.mm._get(f"/posts/{raw_post}")
-                    if not post:
-                        return
-                except Exception as e2:
-                    log.warning(f"       无法解析 post ({str(raw_post)[:40]}...): {e2}")
-                    return
+            except json.JSONDecodeError as e:
+                log.warning(f"       无法解析 post JSON ({str(raw_post)[:40]}...): {e}")
+                return
+            if not isinstance(parsed, dict) or "id" not in parsed or "message" not in parsed:
+                log.warning(f"       解析后的 post 缺少 id/message 字段: {str(raw_post)[:40]}...")
+                return
+            post = parsed
         else:
             return
 
@@ -312,12 +300,11 @@ class Agent:
         # 每条消息都检查，compactor 内部有 guard 避免无效操作
         await self.compactor.maybe_compact(channel_id)
 
-        # 更新工作内存
+        # 更新工作内存（窗口与 LLM 上下文消费对齐，不乘 2）
         if channel_id not in self.working_memory:
             self.working_memory[channel_id] = []
         self.working_memory[channel_id].append(post)
-        # 保持窗口大小
-        if len(self.working_memory[channel_id]) > config.max_context_messages * 2:
+        if len(self.working_memory[channel_id]) > config.max_context_messages:
             self.working_memory[channel_id] = self.working_memory[channel_id][
                 -config.max_context_messages :
             ]
@@ -344,7 +331,7 @@ class Agent:
         if any(m in message.lower() for m in bot_mentions):
             trace.set_context(msg_type="mention")
             log.info("%s → 触发: @提及", trace.prefix())
-            await self._respond_to_mention(post)
+            await self._respond(post, tag="mention", max_rounds=5)
             trace.clear()
             return
 
@@ -353,7 +340,7 @@ class Agent:
         if ch_info.get("type") == "D":
             trace.set_context(msg_type="dm")
             log.info("%s → 触发: DM 私聊", trace.prefix())
-            await self._respond_chat(post)
+            await self._respond(post, tag="chat", max_rounds=3)
             trace.clear()
             return
 
@@ -362,7 +349,7 @@ class Agent:
         if should:
             trace.set_context(msg_type="listen")
             log.info("%s → 触发: 主动旁听", trace.prefix())
-            await self._respond_chat(post)
+            await self._respond(post, tag="chat", max_rounds=3)
             trace.clear()
 
     async def _should_respond(self, post: dict) -> bool:
@@ -407,48 +394,22 @@ class Agent:
         # 概率旁听
         return random.random() < config.listen_probability
 
-    async def _respond_to_mention(self, post: dict):
-        """响应 @提及（支持 Agentic Tool Use）"""
-        t0 = time.monotonic()
-        log.info("%s [mention] 构建上下文...", trace.prefix())
-        await self.typing_indicator(post["channel_id"])
-        context = self._build_context(post, mention=True)
-        log.info(
-            "%s [mention] 调用 Agent Loop (上下文 %d 条消息)...",
-            trace.prefix(),
-            len(context["messages"]),
-        )
-        response = await self.llm.agent_loop(
-            messages=context["messages"],
-            system=context["system"],
-            tools=self.tool_registry.get_schema_list(),
-            tool_registry=self.tool_registry,
-            max_rounds=5,
-        )
-        elapsed = time.monotonic() - t0
-        log.info(
-            "%s [mention] Agent Loop 返回 (%.1fs, %d 字符): %s",
-            trace.prefix(),
-            elapsed,
-            len(response),
-            response[:150],
-        )
-        if not response or response.startswith("⚠️"):
-            log.warning("%s [mention] LLM 返回异常或为空: %s", trace.prefix(), response[:100])
-        else:
-            result = await self.reply(post, response)
-            log.info("%s [mention] 回复已发送 post_id=%s", trace.prefix(), result)
-        self._save_interaction(post, response)
+    async def _respond(self, post: dict, *, tag: str, max_rounds: int):
+        """响应用户消息（支持 Agentic Tool Use）
 
-    async def _respond_chat(self, post: dict):
-        """响应普通对话/旁听（支持 Agentic Tool Use）"""
+        Args:
+            post: 触发的消息
+            tag: 日志标签（mention / chat）— 区分 @提及 vs 旁听
+            max_rounds: Agentic 工具调用最大轮次（@提及 5，旁听 3）
+        """
         t0 = time.monotonic()
-        log.info("%s [chat] 构建上下文...", trace.prefix())
+        log.info("%s [%s] 构建上下文...", trace.prefix(), tag)
         await self.typing_indicator(post["channel_id"])
-        context = self._build_context(post)
+        context = self._build_context(post, mention=(tag == "mention"))
         log.info(
-            "%s [chat] 调用 Agent Loop (上下文 %d 条消息)...",
+            "%s [%s] 调用 Agent Loop (上下文 %d 条消息)...",
             trace.prefix(),
+            tag,
             len(context["messages"]),
         )
         response = await self.llm.agent_loop(
@@ -456,28 +417,34 @@ class Agent:
             system=context["system"],
             tools=self.tool_registry.get_schema_list(),
             tool_registry=self.tool_registry,
-            max_rounds=3,  # 旁听场景限制轮次，避免过度响应
+            max_rounds=max_rounds,
         )
         elapsed = time.monotonic() - t0
         log.info(
-            "%s [chat] Agent Loop 返回 (%.1fs, %d 字符): %s",
+            "%s [%s] Agent Loop 返回 (%.1fs, %d 字符): %s",
             trace.prefix(),
+            tag,
             elapsed,
             len(response),
             response[:150],
         )
         if not response or response.startswith("⚠️"):
-            log.warning("%s [chat] LLM 返回异常或为空: %s", trace.prefix(), response[:100])
+            log.warning("%s [%s] LLM 返回异常或为空: %s", trace.prefix(), tag, response[:100])
         else:
             result = await self.reply(post, response)
-            log.info("%s [chat] 回复已发送 post_id=%s", trace.prefix(), result)
-        self._save_interaction(post, response)
+            log.info("%s [%s] 回复已发送 post_id=%s", trace.prefix(), tag, result)
 
     def _build_context(self, post: dict, mention: bool = False) -> dict:
-        """构建 LLM 上下文（受 max_context_messages + max_context_chars 双重限制）"""
+        """构建 LLM 上下文（受 max_context_messages + max_context_chars 双重限制）
+
+        关键点: 把当前频道的 ID + name 注入到 user 当前消息前缀，
+        这样 LLM 调 get_posts / save_knowledge 等需要 channel_id 的工具时，
+        就能拿到准确的 ID（而不是猜 name）。
+        """
         channel_id = post["channel_id"]
         ch_info = self.mm.get_channel(channel_id)
         ch_name = ch_info.get("display_name", channel_id[:8])
+        ch_real_name = ch_info.get("name", "")  # 频道短名 (e.g. "general")
 
         # 系统提示词（纯人格，不包含工具信息 — 工具通过 SDK tools 参数传递）
         system = prompts.get(
@@ -506,11 +473,23 @@ class Agent:
                     }
                 )
 
-        # 加入当前消息
+        # ── 当前消息前缀：注入频道上下文，让 LLM 调工具时知道传哪个 ID ──
+        meta_lines = [f"📍 频道: {ch_name} | id={channel_id} | name={ch_real_name}"]
+        summary = self.memory.get_recent_summary(channel_id)
+        if summary:
+            meta_lines.append(f"📝 最近讨论摘要: {summary}")
+        knowledge = self.memory.get_relevant_knowledge(channel_id, post["message"], 3)
+        if knowledge:
+            kb_text = "\n".join(f"  - {k['key']}: {k['value']}" for k in knowledge)
+            meta_lines.append(f"📚 相关团队知识:\n{kb_text}")
+        # 第一行（频道信息）同行，其余换行缩进
+        meta_prefix = "[" + meta_lines[0] + ("\n" + "\n".join(meta_lines[1:]) if len(meta_lines) > 1 else "") + "]\n"
+
+        # 加入当前消息（带频道元信息前缀）
         messages.append(
             {
                 "role": "user",
-                "content": f"{post['username']}: {post['message']}",
+                "content": f"{meta_prefix}{post['username']}: {post['message']}",
             }
         )
 
@@ -533,18 +512,7 @@ class Agent:
                     max_chars,
                 )
 
-        # 额外上下文
-        channel_ctx = f"当前频道: {ch_name}"
-        summary = self.memory.get_recent_summary(channel_id)
-        if summary:
-            channel_ctx += f"\n最近讨论摘要: {summary}"
-
-        knowledge = self.memory.get_relevant_knowledge(channel_id, post["message"], 3)
-        if knowledge:
-            kb_text = "\n".join(f"- {k['key']}: {k['value']}" for k in knowledge)
-            channel_ctx += f"\n相关团队知识:\n{kb_text}"
-
-        return {"system": system, "messages": messages, "channel_context": channel_ctx}
+        return {"system": system, "messages": messages}
 
     async def typing_indicator(self, channel_id: str, duration: float | None = None):
         """模拟打字指示器 (通过延迟发送来模拟)"""
@@ -579,6 +547,7 @@ class Agent:
                         "id": post_id or "",
                         "channel_id": post["channel_id"],
                         "user_id": self.bot_user_id,
+                        "username": config.bot_display_name,
                         "message": message,
                         "create_at": int(time.time() * 1000),
                         "type": "",
@@ -592,29 +561,6 @@ class Agent:
         except Exception as e:
             log.error(f"       ❌ send_post 异常: {e}")
             return None
-
-    async def ephemeral(self, post: dict, message: str):
-        """发送仅触发者可见的消息"""
-        self.mm.send_ephemeral(post["user_id"], post["channel_id"], message)
-
-    def _save_interaction(self, post: dict, response: str):
-        """异步保存交互到记忆 (不阻塞主流程)"""
-        # 定期提取记忆 (每 20 条对话)
-        if self.stats["responses"] % 20 == 0:
-            channel_id = post["channel_id"]
-            window = self.working_memory.get(channel_id, [])
-            if len(window) >= 10:
-                log.info(
-                    "%s [memory] 到达知识提取阈值 (总回复=%d, 窗口=%d条)",
-                    trace.prefix(),
-                    self.stats["responses"],
-                    len(window),
-                )
-                texts = [
-                    f"{m.get('username', '?')}: {m.get('message', '')[:200]}" for m in window[-15:]
-                ]
-                # 后续可以在这里调用 LLM 提取知识
-                log.debug("%s [memory] 待提取文本预览: %s", trace.prefix(), "; ".join(texts[:3]))
 
     async def stop(self):
         """停止 Agent"""

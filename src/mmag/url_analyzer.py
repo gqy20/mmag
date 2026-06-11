@@ -74,10 +74,6 @@ GITHUB_ISSUE_PATTERN = re.compile(
     r"^https?://github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)/?$",
     re.IGNORECASE,
 )
-GITHUB_BLOB_PATTERN = re.compile(
-    r"^https?://github\.com/([\w.-]+)/([\w.-]+)/blob/[^/]+/(.+)$",
-    re.IGNORECASE,
-)
 
 # 缓存 TTL（秒）
 CACHE_TTL_OK = 3600  # 1 小时
@@ -101,20 +97,14 @@ _BLOCKED_NETWORKS = [
 # ============================================================
 
 
+# 共享 httpx 客户端单例（懒加载，Agent 退出时 close_client() 关闭）
+_client: httpx.AsyncClient | None = None
+
+
 def _get_client() -> httpx.AsyncClient:
     """获取共享的 httpx 异步客户端（懒加载单例）"""
     global _client
-    try:
-        if _client is None or _client.is_closed:
-            _client = httpx.AsyncClient(
-                timeout=DEFAULT_TIMEOUT,
-                follow_redirects=True,
-                headers={
-                    "User-Agent": USER_AGENT,
-                    "Accept": "application/json, text/html;q=0.9, */*;q=0.8",
-                },
-            )
-    except NameError:
+    if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
             timeout=DEFAULT_TIMEOUT,
             follow_redirects=True,
@@ -124,9 +114,6 @@ def _get_client() -> httpx.AsyncClient:
             },
         )
     return _client
-
-
-_client: httpx.AsyncClient | None = None
 
 
 async def close_client() -> None:

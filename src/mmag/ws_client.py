@@ -105,13 +105,9 @@ class WebSocketClient:
             # 指数退避
             retry_s = _MIN_RETRY_S
             if self._connect_fail_count > _MAX_FAILS_BEFORE_BACKOFF:
-                retry_s = min(
-                    _MIN_RETRY_S * self._connect_fail_count**2, _MAX_RETRY_S
-                )
+                retry_s = min(_MIN_RETRY_S * self._connect_fail_count**2, _MAX_RETRY_S)
             retry_s += random.random() * _JITTER_RANGE_S  # jitter
-            log.info(
-                f"       ⏳ {retry_s:.1f}s 后重连 (第{self._connect_fail_count}次)..."
-            )
+            log.info(f"       ⏳ {retry_s:.1f}s 后重连 (第{self._connect_fail_count}次)...")
             await asyncio.sleep(retry_s)
 
     async def send(self, action: str, data: dict | None = None) -> None:
@@ -143,9 +139,7 @@ class WebSocketClient:
     async def _session(self) -> None:
         """一次完整会话: 连接 → 握手 → 认证 → 心跳 → 事件循环"""
         ws_url = self._build_url()
-        log.info(
-            f"       → {ws_url[:80]}{'...' if len(ws_url) > 80 else ''}"
-        )
+        log.info(f"       → {ws_url[:80]}{'...' if len(ws_url) > 80 else ''}")
 
         async with websockets.connect(
             ws_url,
