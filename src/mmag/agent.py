@@ -146,13 +146,13 @@ class Agent:
                 # 1) Backfill: 拉本地最新时间戳之前的历史,补全到 message_log
                 new_count = self._backfill_channel(ch_id)
                 total_new += new_count
-                # 2) 加载最近 max_context_messages 条作为初始上下文
-                posts = self.mm.get_posts(ch_id, limit=config.max_context_messages)
-                self.working_memory[ch_id] = []
-                for p in posts:
-                    p["username"] = self.mm.get_username(p.get("user_id", ""))
-                    self.memory.log_message(p)
-                    self.working_memory[ch_id].append(p)
+                # 2) 从本地 message_log 读最近 N 条作为初始上下文
+                #    (不重复调 log_message — backfill 已经写过了,本就是全的;
+                #     从本地读能保证 backfill 写入的字段 [username/create_at 等] 一致)
+                posts = self.memory.get_recent_messages(
+                    ch_id, limit=config.max_context_messages
+                )
+                self.working_memory[ch_id] = posts
                 total_msgs += len(posts)
                 log.info(
                     f"       📂 {ch.get('display_name', ch_id[:8]):<15} {len(posts):>3} 条 (新增 {new_count})"
@@ -336,7 +336,6 @@ class Agent:
         if not message:
             return
 
-        channel_id = post.get("channel_id", "")
         self.stats["messages"] += 1
 
         # 补充 username

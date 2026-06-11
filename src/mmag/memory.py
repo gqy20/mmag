@@ -437,7 +437,11 @@ class Memory:
         after_ts: float | None,
         limit: int,
     ) -> list[dict]:
-        """FTS5 失败兜底 — 普通 LIKE 全表扫"""
+        """FTS5 失败兜底 — 普通 LIKE 全表扫
+
+        LIKE 是子串匹配,query 里 "部署" 会匹配 "部署流程" / "重新部署" 等,
+        对中英文都直接可用,不需要 CJK 预分词 (预分词只对 FTS5 词项匹配有意义)。
+        """
         clauses = ["m.message LIKE ?"]
         params: list = [f"%{query}%"]
 
