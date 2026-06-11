@@ -99,15 +99,23 @@ Bot 支持三种触发方式：
 ├── .env                        # 环境配置
 ├── prompts.yml                 # 系统提示词模板
 ├── src/mmag/
-│   ├── __init__.py             # 包入口
+│   ├── __init__.py             # 包入口 (暴露 Agent/Config)
 │   ├── cli.py                  # CLI 入口
 │   ├── config.py               # 配置加载 (.env)
 │   ├── prompts.py              # 提示词管理
-│   ├── memory.py               # SQLite 持久化记忆
-│   ├── llm.py                  # LLM 适配器 (Anthropic/StepFun)
-│   ├── client.py               # Mattermost REST API 客户端
-│   ├── agent.py                # 核心 Agent (WebSocket + 事件循环)
-│   └── discover.py             # 环境 ID 探测工具
+│   ├── logger.py               # 日志 (控制台 + 按日分文件 + 自动清理)
+│   ├── memory.py               # SQLite 持久化记忆 (Layer 1+2)
+│   ├── memory_compactor.py     # 长期记忆压缩器
+│   ├── llm.py                  # LLM 适配器 (AsyncAnthropic + Agentic Tool Use)
+│   ├── client.py               # Mattermost REST API 客户端 (元数据缓存)
+│   ├── url_analyzer.py         # 链接分析 (GitHub / Trafilatura / SSRF 防护)
+│   ├── mcp_bridge.py           # MCP 外部工具桥接 (.mcp.json)
+│   ├── ws_client.py            # Mattermost WebSocket 协议实现
+│   ├── agent.py                # 核心 Agent (编排消息处理 + 工具调用)
+│   ├── discover.py             # 环境 ID 探测工具
+│   └── tools/                  # 工具注册 + 内置工具集
+│       ├── registry.py
+│       └── builtin.py
 └── docs/
     └── MATTERMOST_ID_GUIDE.md  # Mattermost ID 层级参考
 ```
@@ -142,7 +150,8 @@ Bot 具备跨会话持久记忆：
 
 - **WebSocket 协议**：完整实现 Mattermost 官方协议（握手认证、序列号校验、30s 心跳、指数退避重连）
 - **断线续传**：通过 `connection_id` + `sequence_number` 实现断线后恢复
-- **LLM 兼容**：通过 `ANTHROPIC_BASE_URL` 支持 StepFun 等兼容接口，自动过滤 ThinkingBlock
+- **LLM 适配**：`AsyncAnthropic` 原生异步客户端（SDK 内置 `max_retries=2`）；Agentic Tool Use 循环 + ThinkingBlock 自动过滤
+- **LLM 兼容**：通过 `ANTHROPIC_BASE_URL` 支持 StepFun 等兼容接口；调用失败抛 `LLMError` 由 agent 层转成用户友好提示
 
 ## License
 
