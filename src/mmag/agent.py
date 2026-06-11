@@ -263,10 +263,10 @@ class Agent:
         两个独立动作:
           A. 定期摘要（每 ~100 条消息）: 只读最近一批消息做摘要，
              原始消息保留在 message_cache 中不删除。
-          B. 容量清理（超过 1000 条时）: 弹出最旧的 ~200 条，
-             先做摘要再删除，将缓存控制在 800-1000 范围。
+          B. 容量清理（超过上限时）: 弹出最旧的 N 条，
+             先做摘要再删除，将缓存控制在安全范围。
 
-        用户意图: "原始信息依然保留1000条，不过是100条会生成一个摘要罢了"
+        摘要完成后会以**线程回复**形式发到频道（不污染主聊天流）。
         """
         cfg = self.config
         summary_interval = cfg.memory_summary_interval
@@ -278,7 +278,6 @@ class Agent:
         count = self.memory.get_channel_cache_count(channel_id)
 
         # ── 动作 A: 定期摘要（每 ~100 条）──
-        # 用 count // summary_interval 判断是否到达摘要节点
         if count > 0 and count % summary_interval == 0:
             log.info(
                 "%s [摘要] channel=%s 第 %d 条 → 触发定期摘要",
@@ -286,11 +285,10 @@ class Agent:
                 channel_id[:12],
                 count,
             )
-            # 取当前批次 + 前序上下文（当前批次之前的 N 条消息）
+            # 取当前批次 + 前序上下文
             peek_count = summary_interval + cfg.memory_context_window
             wider_batch = self.memory.peek_recent_messages(channel_id, limit=peek_count)
             if wider_batch:
-                # 分割：前半部分是上下文，后半部分是待摘要的当前批次
                 ctx = (
                     wider_batch[:-summary_interval] if len(wider_batch) > summary_interval else None
                 )
@@ -310,22 +308,28 @@ class Agent:
                     participants = list(
                         {m.get("username", "?") for m in recent_batch if m.get("username")}
                     )
-                    key_points = []
-                    for m in recent_batch[-20:]:
-                        msg = (m.get("message") or "").strip()
-                        if len(msg) > 15 and not msg.startswith(("http", "@")):
-                            key_points.append(f"[{m.get('username', '?')}] {msg[:120]}")
+                    topic = (
+                        f"定期摘要 #{count // summary_interval} "
+                        f"(msg {count - summary_interval + 1}-{count})"
+                    )
 
                     self.memory.save_conversation_segment(
                         channel_id=channel_id,
-                        topic=(
-                            f"定期摘要 #{count // summary_interval} "
-                            f"(msg {count - summary_interval + 1}-{count})"
-                        ),
+                        topic=topic,
                         summary=combined,
                         participants=participants,
-                        key_points=key_points[-10:],
+                        key_points=[],
                     )
+
+                    # 发送线程回复到频道
+                    last_post_id = recent_batch[-1].get("id", "") if recent_batch else ""
+                    await self._post_summary_thread(
+                        channel_id=channel_id,
+                        root_id=last_post_id,
+                        title=f"📋 {topic}",
+                        content=combined,
+                    )
+
                     elapsed = time.monotonic() - t0
                     log.info(
                         "%s [摘要] 完成 | %d 批 | %.1fs | 缓存仍 %d 条",
@@ -335,7 +339,7 @@ class Agent:
                         self.memory.get_channel_cache_count(channel_id),
                     )
 
-        # ── 动作 B: 容量清理（>1000 条时弹出最旧的）──
+        # ── 动作 B: 容量清理（超过上限时）──
         if count > max_cache_size:
             log.info(
                 "%s [清理] channel=%s %d 条 > 上限 %d → 开始容量清理",
@@ -348,7 +352,7 @@ class Agent:
             if not old_messages:
                 return
 
-            # 获取紧接在被弹出消息之后的消息作为上下文（保持连贯性）
+            # 获取紧接在被弹出消息之后的消息作为上下文
             context_msgs = self.memory.peek_recent_messages(
                 channel_id, limit=cfg.memory_context_window
             )
@@ -361,6 +365,41 @@ class Agent:
                 )
                 if summary:
                     all_summaries.append(summary)
+
+            if all_summaries:
+                combined_summary = "\n\n---\n\n".join(all_summaries)
+                participants = list(
+                    {m.get("username", "?") for m in old_messages if m.get("username")}
+                )
+                topic = f"容量清理-{time.strftime('%Y-%m-%d_%H%M')} ({len(old_messages)}条)"
+
+                self.memory.save_conversation_segment(
+                    channel_id=channel_id,
+                    topic=topic,
+                    summary=combined_summary,
+                    participants=participants,
+                    key_points=[],
+                )
+
+                # 发送线程回复到频道（挂载在缓存中最新一条消息下）
+                latest_msgs = self.memory.peek_recent_messages(channel_id, limit=1)
+                anchor_id = latest_msgs[0].get("id", "") if latest_msgs else ""
+                await self._post_summary_thread(
+                    channel_id=channel_id,
+                    root_id=anchor_id,
+                    title=f"🗂️ {topic}",
+                    content=combined_summary,
+                )
+
+                elapsed = time.monotonic() - t0
+                remaining = self.memory.get_channel_cache_count(channel_id)
+                log.info(
+                    "%s [清理] 完成 | 摘要 %d 批 | %.1fs | 缓存剩余 %d 条",
+                    trace.prefix(),
+                    len(all_summaries),
+                    elapsed,
+                    remaining,
+                )
 
             if all_summaries:
                 combined_summary = "\n\n---\n\n".join(all_summaries)
@@ -465,7 +504,38 @@ class Agent:
         except Exception as e:
             log.error("%s [压缩] LLM 摘要失败: %s", trace.prefix(), e)
             return f"(摘要失败: {e})"
-            return f"(摘要失败: {e})"
+
+    async def _post_summary_thread(self, channel_id: str, root_id: str, title: str, content: str):
+        """将摘要以线程回复形式发送到频道
+
+        线程消息不会出现在主聊天流中，用户需要点开才能看到。
+        这样既让团队可见知识沉淀，又不打扰正常对话。
+        """
+        # 截断过长的摘要（Mattermost 单条消息限制 ~4MB，但实际显示体验上 4000 字符为宜）
+        max_len = 4000
+        if len(content) > max_len:
+            content = content[:max_len] + "\n\n...(摘要已截断)"
+
+        message = f"### {title}\n\n{content}"
+
+        try:
+            post_id = self.mm.send_post(
+                channel_id=channel_id,
+                message=message,
+                root_id=root_id,
+                props={"from_bot": "true", "summary": "true"},
+            )
+            if post_id:
+                log.info(
+                    "%s [摘要线程] 已发送 → %s (root=%s)",
+                    trace.prefix(),
+                    post_id[:12],
+                    root_id[:12] if root_id else "(主流)",
+                )
+            else:
+                log.warning("%s [摘要线程] send_post 返回 None", trace.prefix())
+        except Exception as e:
+            log.error("%s [摘要线程] 发送失败: %s", trace.prefix(), e)
 
     async def _handle_ws_message(self, raw: str, ws):
         """
