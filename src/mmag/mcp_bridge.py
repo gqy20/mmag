@@ -19,7 +19,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .logger import get_logger
 
@@ -40,6 +40,17 @@ class McpConfigItem:
     type: str  # "stdio" | "http" | "streamable-http"
     endpoint: str  # command+args 或 url
     raw_config: dict[str, Any] = field(default_factory=dict)
+
+
+class _McpConn(NamedTuple):
+    """一对 MCP 连接资源 — close_all / 异常清理都要按反向关两层
+
+    transport: stdio_client 或 sse_client 上下文 (管子进程 / HTTP 连接)
+    session:   ClientSession (管 MCP 协议握手 + list_tools / call_tool)
+    """
+
+    transport: Any
+    session: Any
 
 
 def _resolve_env_vars(value: Any, env: dict[str, str] | None = None) -> Any:
@@ -141,7 +152,7 @@ class MCPClientBridge:
 
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
-        self._sessions: dict[str, Any] = {}  # name → ClientSession
+        self._sessions: dict[str, _McpConn] = {}  # name → (transport, session)
 
     async def load_and_connect(self) -> int:
         """读取 .mcp.json 并连接所有配置的 Server
@@ -179,17 +190,25 @@ class MCPClientBridge:
     async def _connect_one(self, item: McpConfigItem) -> int:
         """连接单个 MCP Server 并注册其所有工具
 
+        MCP SDK 的 stdio_client / sse_client 实际是 async context manager,
+        yield 的是 (read_stream, write_stream) tuple, 不是 session。
+        需要再包一层 ClientSession(read, write) 才能拿到 list_tools / call_tool。
+
+        资源管理: transport 和 session 是两层独立的 context manager,
+        任一异常都需要按反向顺序 (session → transport) 关闭, 否则 stdio
+        子进程 / HTTP 连接会泄漏。
+
         Returns:
             注册的工具数量
         """
+        from mcp.client.session import ClientSession
         from mcp.client.sse import sse_client
         from mcp.client.stdio import StdioServerParameters, stdio_client
 
-        # ── 建立连接 ──
-        # client 是 context manager;一旦 __aenter__() 成功就必须配对 __aexit__(),
-        # 否则 stdio 子进程 / HTTP 连接会泄漏
-        client: Any | None = None
+        transport: Any | None = None
+        session: Any | None = None
         try:
+            # 1) 建 transport (stdio_client / sse_client 是 async context manager)
             if item.type == "stdio":
                 cfg = item.raw_config
                 params = StdioServerParameters(
@@ -204,42 +223,54 @@ class MCPClientBridge:
                         },
                     },
                 )
-                client = stdio_client(params)
-                session = await client.__aenter__()
+                transport = stdio_client(params)
+                streams = await transport.__aenter__()
 
             elif item.type in ("http", "streamable-http"):
                 url = item.raw_config.get("url", "")
                 headers = item.raw_config.get("headers", {})
-                # 过滤掉 Authorization 等 header 中可能未解析的 ${VAR}
                 resolved_headers = {
                     k: v
                     for k, v in headers.items()
                     if isinstance(k, str) and isinstance(v, str)
                 }
-                client = sse_client(url, headers=resolved_headers)
-                session = await client.__aenter__()
+                transport = sse_client(url, headers=resolved_headers)
+                streams = await transport.__aenter__()
 
             else:
                 log.warning("MCP Server '%s': 不支持的传输类型 '%s'", item.name, item.type)
                 return 0
 
-            self._sessions[item.name] = session
+            # 2) 包 ClientSession 拿到真正的 MCP 协议句柄
+            session = ClientSession(*streams)
+            await session.__aenter__()
+            # 2.5) MCP 协议握手: 必须先 initialize() 才能调 list_tools / call_tool,
+            #      否则服务端会报 "Received request before initialization was complete"
+            try:
+                await session.initialize()
+            except Exception as e:
+                log.warning("MCP Server '%s' initialize 失败: %s", item.name, e)
+                await self._close_conn(item.name, transport, session)
+                self._sessions.pop(item.name, None)
+                return 0
+            self._sessions[item.name] = _McpConn(transport=transport, session=session)
 
-            # ── 拉取工具列表 ──
+            # 3) 拉取工具列表
             try:
                 result = await session.list_tools()
                 tools = result.tools
             except Exception as e:
                 log.warning("MCP Server '%s' 获取工具列表失败: %s", item.name, e)
+                # 失败也要把 session/transport 关掉
+                await self._close_conn(item.name, transport, session)
+                self._sessions.pop(item.name, None)
                 return 0
 
-            # ── 注册到 ToolRegistry ──
+            # 4) 注册到 ToolRegistry
             registered = 0
             for tool in tools:
                 tool_name = f"mcp_{item.name}_{tool.name}"
                 input_schema = tool.inputSchema or {}
-
-                # 包装 handler: 将调用转发到远程 MCP Server
                 handler = self._make_handler(session, tool.name, item.name)
 
                 from .tools import Tool
@@ -254,24 +285,31 @@ class MCPClientBridge:
                 )
                 registered += 1
 
-            # 成功路径:client 所有权转给 _sessions,后续由 close_all 统一关闭
-            client = None
             return registered
 
         except BaseException:
             # __aenter__ 成功但 list_tools / register 之前任意步骤失败:
-            # 必须显式关闭 client 释放 stdio 子进程 / HTTP 连接
-            if client is not None:
-                try:
-                    await client.__aexit__(None, None, None)
-                except Exception as cleanup_err:
-                    log.warning(
-                        "MCP Server '%s' 失败时清理 client 异常: %s",
-                        item.name,
-                        cleanup_err,
-                    )
+            # 反向关闭两层 (session → transport)
+            await self._close_conn(item.name, transport, session)
             self._sessions.pop(item.name, None)
             raise
+
+    @staticmethod
+    async def _close_conn(name: str, transport: Any, session: Any) -> None:
+        """反向关闭 MCP 连接的两层 (session → transport),吞所有异常
+
+        用于异常路径和 list_tools 失败时的局部清理。
+        """
+        if session is not None:
+            try:
+                await session.__aexit__(None, None, None)
+            except Exception as e:
+                log.warning("MCP Server '%s' session 关闭异常: %s", name, e)
+        if transport is not None:
+            try:
+                await transport.__aexit__(None, None, None)
+            except Exception as e:
+                log.warning("MCP Server '%s' transport 关闭异常: %s", name, e)
 
     @staticmethod
     def _make_handler(session: Any, tool_name: str, server_name: str):
@@ -314,13 +352,11 @@ class MCPClientBridge:
         """关闭所有 MCP 连接，并同步注销注入到 ToolRegistry 的 mcp_* 工具
 
         避免 session 关闭后 LLM 仍可调用死 session 的工具（会抛连接错误）。
+
+        关闭顺序: session → transport (反向建立顺序)
         """
-        for name, session in list(self._sessions.items()):
-            try:
-                await session.__aexit__(None, None, None)
-                log.debug("MCP Server '%s' 已断开", name)
-            except Exception as e:
-                log.warning("MCP Server '%s' 断开时异常: %s", name, e)
+        for name, conn in list(self._sessions.items()):
+            await self._close_conn(name, conn.transport, conn.session)
             # 注销该 Server 注入的全部工具（mcp_<name>_*）
             removed = self.registry.unregister_prefix(f"mcp_{name}_")
             if removed:
