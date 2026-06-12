@@ -43,6 +43,9 @@ _FIELD_TO_ENV: dict[str, str] = {
     "log_retention_days": "LOG_RETENTION_DAYS",
     "memory_summary_interval": "MEMORY_SUMMARY_INTERVAL",
     "memory_context_window": "MEMORY_CONTEXT_WINDOW",
+    "max_images_per_msg": "MAX_IMAGES_PER_MSG",
+    "max_image_bytes": "MAX_IMAGE_BYTES",
+    "max_tool_rounds": "MAX_TOOL_ROUNDS",
 }
 # 敏感字段（值要脱敏打印，只显示前后几位）
 _SECRET_FIELD_NAMES: frozenset[str] = frozenset({"mm_token", "anthropic_api_key"})
@@ -86,8 +89,8 @@ class Config:
         os.getenv("MAX_CONTEXT_MESSAGES", "100")
     )  # LLM 上下文窗口消息数
     max_context_chars: int = int(
-        os.getenv("MAX_CONTEXT_CHARS", "10000")
-    )  # LLM 上下文窗口总字符上限
+        os.getenv("MAX_CONTEXT_CHARS", "30000")
+    )  # LLM 上下文窗口总字符上限 (中英混合 1 字符 ≈ 0.5 token → 30000 字符 ≈ 15k token)
     typing_delay_min: float = float(os.getenv("TYPING_DELAY_MIN", "1"))
     typing_delay_max: float = float(os.getenv("TYPING_DELAY_MAX", "3"))
     memory_db_path: str = os.getenv("MEMORY_DB_PATH", "./agent_memory.db")
@@ -102,6 +105,19 @@ class Config:
     memory_context_window: int = int(
         os.getenv("MEMORY_CONTEXT_WINDOW", "100")
     )  # 摘要时注入的前序消息数量（保持上下文连贯）
+    # ── 多模态 (图片附件) ──
+    # 单条消息最多喂多少张图给 LLM,超过会被跳过(降为附件名文本)。
+    # 太多图会爆 token,1 张图 ≈ 1500 token,4 张 ≈ 6000 token。
+    max_images_per_msg: int = int(os.getenv("MAX_IMAGES_PER_MSG", "4"))
+    # 单张图片字节上限,超过就跳过(避免下载时间过长 / token 过贵)。
+    max_image_bytes: int = int(
+        os.getenv("MAX_IMAGE_BYTES", str(5 * 1024 * 1024))
+    )  # 默认 5MB
+    # ── Agent Loop ──
+    # Agentic 工具调用的最大轮数(每轮 = 1 次 LLM + N 次工具 + 1 次结果回填)。
+    # 调高 → 复杂任务可拆更多步,但单次请求耗时和 token 都线性增加;
+    # 调低 → 快速失败,长任务会被强制收尾(返回最后一轮文本)。
+    max_tool_rounds: int = int(os.getenv("MAX_TOOL_ROUNDS", "10"))  # 默认 10
 
     @property
     def ws_url(self) -> str:

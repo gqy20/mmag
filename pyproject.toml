@@ -32,6 +32,7 @@ packages = ["src/mmag"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-xdist>=3.6",  # 并行跑测试 (-n auto)
     "ruff>=0.9",
 ]
 
@@ -64,3 +65,8 @@ indent-style = "space"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# markers:
+#   slow: 调真实 LLM 的端到端测试,日常开发跳过 (-m "not slow")
+markers = [
+    "slow: 调真实 LLM, 跑一次要 30-60s, 日常开发可跳过",
+]

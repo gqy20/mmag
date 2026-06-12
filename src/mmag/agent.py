@@ -1,10 +1,11 @@
 """
-核心 Agent — 消息处理 + 响应编排 (支持 Agentic Tool Use)
+核心 Agent — 消息处理 + 响应编排 (支持 Agentic Tool Use + 多模态)
 
 WebSocket 连接管理已拆分到 ws_client.py, 记忆压缩拆分到 memory_compactor.py
 """
 
 import asyncio
+import base64
 import json
 import random
 import time
@@ -343,13 +344,21 @@ class Agent:
             log.debug(f"       ✅ Team 匹配: {ch_team_id}")
 
         message = (post.get("message") or "").strip()
-        if not message:
+        # 放宽: 没文字但有附件也接受 (用户可能只发了张图,无配文)
+        file_metas = (post.get("metadata") or {}).get("files") or []
+        if not message and not file_metas:
             return
 
         self.stats["messages"] += 1
 
         # 补充 username
         post["username"] = self.mm.get_username(user_id)
+
+        # 多模态: 下载图片附件, 构造 image block 列表, 注入到 _build_context
+        # 注意: _llm_content_blocks 是临时字段, 仅供本次 LLM 调用, 不入 message_log
+        post["_llm_content_blocks"] = await self._build_image_blocks(
+            file_metas, max_count=config.max_images_per_msg, max_bytes=config.max_image_bytes
+        )
 
         # 缓存消息
         if not self.memory.log_message(post):
@@ -390,7 +399,7 @@ class Agent:
         if any(m in message.lower() for m in bot_mentions):
             trace.set_context(msg_type="mention")
             log.info("%s → 触发: @提及", trace.prefix())
-            await self._respond(post, tag="mention", max_rounds=5)
+            await self._respond(post, tag="mention")
             trace.clear()
             return
 
@@ -399,7 +408,7 @@ class Agent:
         if ch_info.get("type") == "D":
             trace.set_context(msg_type="dm")
             log.info("%s → 触发: DM 私聊", trace.prefix())
-            await self._respond(post, tag="chat", max_rounds=3)
+            await self._respond(post, tag="chat")
             trace.clear()
             return
 
@@ -408,7 +417,7 @@ class Agent:
         if should:
             trace.set_context(msg_type="listen")
             log.info("%s → 触发: 主动旁听", trace.prefix())
-            await self._respond(post, tag="chat", max_rounds=3)
+            await self._respond(post, tag="chat")
             trace.clear()
 
     async def _should_respond(self, post: dict) -> bool:
@@ -433,7 +442,7 @@ class Agent:
         # 概率旁听
         return random.random() < config.listen_probability
 
-    async def _respond(self, post: dict, *, tag: str, max_rounds: int):
+    async def _respond(self, post: dict, *, tag: str, max_rounds: int | None = None):
         """响应用户消息（支持 Agentic Tool Use）
 
         Args:
@@ -445,6 +454,8 @@ class Agent:
         log.info("%s [%s] 构建上下文...", trace.prefix(), tag)
         await self.typing_indicator(post["channel_id"])
         context = self._build_context(post, mention=(tag == "mention"))
+        # 默认走 config,调用方可临时覆盖(目前没用到,留扩展位)
+        rounds = max_rounds if max_rounds is not None else config.max_tool_rounds
         log.info(
             "%s [%s] 调用 Agent Loop (上下文 %d 条消息)...",
             trace.prefix(),
@@ -457,7 +468,7 @@ class Agent:
                 system=context["system"],
                 tools=self.tool_registry.get_schema_list(),
                 tool_registry=self.tool_registry,
-                max_rounds=max_rounds,
+                max_rounds=rounds,
             )
         except LLMError as e:
             # LLM 调用失败 (网络/SDK异常) — 给用户友好提示 + log 留底
@@ -478,6 +489,127 @@ class Agent:
         else:
             result = await self.reply(post, response)
             log.info("%s [%s] 回复已发送 post_id=%s", trace.prefix(), tag, result)
+
+    async def _build_image_blocks(
+        self, file_metas: list[dict], *, max_count: int, max_bytes: int
+    ) -> list[dict] | None:
+        """从 Mattermost 附件元信息列表里下载图片, 构造 Anthropic image blocks
+
+        多图场景下, 符合下载条件的图片用 `asyncio.gather` 并发拉取,
+        比串行快 N 倍 (N = 图片数, 受 MM 服务器并发限制)。
+
+        Args:
+            file_metas: post["metadata"]["files"] 中的附件元信息列表
+                (含 id / mime_type / name / size / width / height)
+            max_count: 最多下载几张图, 超过的用占位文本
+            max_bytes: 单张字节上限, 超过的用占位文本
+
+        Returns:
+            成功时: list[dict] (image blocks); 无图/全失败时: None
+            注意: 失败的文件会被记到日志, 不抛异常 (LLM 不能看见图就让用户配文可见)
+        """
+        if not file_metas:
+            return None
+
+        # 1) 分类: 图片 vs 非图片 (早期过滤,避免浪费下载配额)
+        image_metas: list[dict] = []
+        skipped_notes: list[str] = []
+        for fmeta in file_metas:
+            mime = (fmeta.get("mime_type") or "").lower()
+            if not mime.startswith("image/"):
+                # 非图片附件 (PDF/zip/...) 暂不支持视觉化, 用文本占位
+                skipped_notes.append(f"[附件: {fmeta.get('name', '?')} ({mime})]")
+                continue
+            image_metas.append(fmeta)
+
+        # 2) 数量截断: 只下前 max_count 张
+        if len(image_metas) > max_count:
+            for fmeta in image_metas[max_count:]:
+                skipped_notes.append(f"[图片过多已跳过: {fmeta.get('name', '?')}]")
+            image_metas = image_metas[:max_count]
+
+        # 3) 预估大小过滤 (避免不必要的下载)
+        download_list: list[tuple[str, str, str, int]] = []  # (fid, name, mime, declared_size)
+        for fmeta in image_metas:
+            fid = fmeta.get("id", "")
+            name = fmeta.get("name", "?")
+            mime = (fmeta.get("mime_type") or "").lower()
+            size = fmeta.get("size") or 0
+            if size and size > max_bytes:
+                skipped_notes.append(f"[图片过大已跳过: {name} ({size} bytes)]")
+                continue
+            download_list.append((fid, name, mime, size))
+
+        if not download_list and not skipped_notes:
+            return None
+
+        # 4) 并发下载 (asyncio.gather 一次拉完, 顺序与 download_list 对齐)
+        if download_list:
+            results = await asyncio.gather(
+                *(self.mm.get_file_bytes_async(fid) for fid, _, _, _ in download_list),
+                return_exceptions=True,
+            )
+        else:
+            results = []
+
+        # 5) 拼装 image blocks, 失败的降级为 skipped note
+        image_blocks: list[dict] = []
+        for (fid, name, mime, _declared_size), result in zip(download_list, results, strict=True):
+            if isinstance(result, Exception):
+                log.warning("下载图片异常 file_id=%s: %s", fid[:12], result)
+                skipped_notes.append(f"[图片下载失败: {name}]")
+                continue
+            if not result:
+                skipped_notes.append(f"[图片下载失败: {name}]")
+                continue
+            data, actual_mime = result
+            if len(data) > max_bytes:
+                skipped_notes.append(f"[图片过大已跳过: {name} ({len(data)} bytes)]")
+                continue
+
+            try:
+                b64 = base64.standard_b64encode(data).decode("ascii")
+            except Exception as e:
+                log.warning("base64 编码失败 file_id=%s: %s", fid[:12], e)
+                skipped_notes.append(f"[图片编码失败: {name}]")
+                continue
+
+            image_blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": actual_mime or mime,
+                        "data": b64,
+                    },
+                }
+            )
+            log.info(
+                "%s 已加载图片附件: %s (%d bytes, mime=%s)",
+                trace.prefix(),
+                name,
+                len(data),
+                actual_mime or mime,
+            )
+
+        if not image_blocks and not skipped_notes:
+            return None
+        if not image_blocks:
+            # 全失败, 不返回 blocks (后续 _build_context 会用纯文本路径)
+            log.info(
+                "%s 所有图片附件均无法加载, 降级为文本: %s",
+                trace.prefix(),
+                "; ".join(skipped_notes),
+            )
+            return None
+
+        # 成功加载图: blocks 在前, 文本占位放最后
+        # (返回的 blocks 会被 _build_context 拼到 user message 的文本部分之前)
+        return image_blocks + (
+            [{"type": "text", "text": "附件说明: " + "; ".join(skipped_notes)}]
+            if skipped_notes
+            else []
+        )
 
     def _build_context(self, post: dict, mention: bool = False) -> dict:
         """构建 LLM 上下文（受 max_context_messages + max_context_chars 双重限制）
@@ -531,29 +663,55 @@ class Agent:
         meta_prefix = "[" + meta_lines[0] + ("\n" + "\n".join(meta_lines[1:]) if len(meta_lines) > 1 else "") + "]\n"
 
         # 加入当前消息（带频道元信息前缀）
-        messages.append(
-            {
-                "role": "user",
-                "content": f"{meta_prefix}{post['username']}: {post['message']}",
-            }
-        )
+        # 多模态: 如果 _on_posted 已下载图片, 用 list[ContentBlock] 注入;
+        #        否则走纯文本路径(向后兼容)
+        text_payload = f"{meta_prefix}{post['username']}: {post['message']}"
+        image_blocks = post.get("_llm_content_blocks")
+        if image_blocks:
+            # Anthropic content 列表: image blocks 在前, 文本块在后
+            current_user_content: str | list = list(image_blocks) + [
+                {"type": "text", "text": text_payload}
+            ]
+        else:
+            current_user_content = text_payload
+        messages.append({"role": "user", "content": current_user_content})
 
         # ── 总字符上限裁剪：从旧消息开始丢弃，保留当前消息 ──
         max_chars = config.max_context_chars
         if max_chars > 0:
-            total_chars = sum(len(m["content"]) for m in messages)
+
+            def _msg_chars(m: dict) -> int:
+                """计算单条 message 的字符当量:
+                - 纯文本 content: 直接 len
+                - list[ContentBlock]: text 块累加 len(text), image 块按 1500 token 估算字符
+                """
+                c = m.get("content")
+                if isinstance(c, str):
+                    return len(c)
+                if isinstance(c, list):
+                    total = 0
+                    for blk in c:
+                        if isinstance(blk, dict):
+                            if blk.get("type") == "text":
+                                total += len(blk.get("text", ""))
+                            elif blk.get("type") == "image":
+                                total += 6000  # 一张图 ≈ 1500 token ≈ 6000 字符
+                    return total
+                return 0
+
+            total_chars = sum(_msg_chars(m) for m in messages)
             if total_chars > max_chars:
                 # 始终保留最后一条（当前消息），从头部裁剪
                 current_msg = messages.pop()
                 while len(messages) > 1 and sum(
-                    len(m["content"]) for m in messages
-                ) > max_chars - len(current_msg["content"]):
+                    _msg_chars(m) for m in messages
+                ) > max_chars - _msg_chars(current_msg):
                     messages.pop(0)
                 messages.append(current_msg)
                 log.debug(
                     "[上下文] 字符裁剪: %d → %d (上限 %d)",
                     total_chars,
-                    sum(len(m["content"]) for m in messages),
+                    sum(_msg_chars(m) for m in messages),
                     max_chars,
                 )
 

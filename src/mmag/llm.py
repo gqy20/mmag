@@ -22,9 +22,6 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-# 默认最大工具调用轮次
-DEFAULT_MAX_TOOL_ROUNDS = 10
-
 
 class LLMError(Exception):
     """LLM 调用失败的领域异常 — 包装 SDK 异常/网络异常供上层决策"""
@@ -67,7 +64,7 @@ class LLM:
             texts = _parse_response(response).texts
             elapsed = time.monotonic() - t0
             log.debug("%s LLM 单轮调用 (%.3fs, %d 字符输出)", trace.prefix(), elapsed, len(texts))
-            return texts if texts else "(模型返回为空)"
+            return "\n".join(texts).strip() if texts else "(模型返回为空)"
         except Exception as e:
             elapsed = time.monotonic() - t0
             log.error("%s LLM 调用失败 (%.3fs): %s", trace.prefix(), elapsed, e, exc_info=True)
@@ -91,7 +88,7 @@ class LLM:
         system: str = "",
         tools: list[Any] | None = None,
         tool_registry: ToolRegistry | None = None,
-        max_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
+        max_rounds: int = config.max_tool_rounds,
         max_tokens: int = 4096,
     ) -> str:
         """多轮 Agentic 循环：LLM 自主决定是否调用工具，直到产出最终回复。
