@@ -475,6 +475,33 @@ class Agent:
             log.error("%s [%s] LLM 调用失败: %s", trace.prefix(), tag, e, exc_info=True)
             response = "⚠️ LLM 服务暂时不可用，请稍后再试。"
 
+        # ---- 方案 D 兜底: agent_loop 触发了内部兜底 ("⚠️ 处理超时...") 时,
+        # 拿原始 context 重试一次无 tools 的 chat()。step-3.7-flash 在
+        # tools=[] 模式比 tools=[...] 模式出 text 概率高很多 (实测 0/5 空 vs 100% 空),
+        # 给用户最后一次拿到有意义回复的机会。
+        # 重试也失败就保留兜底文本 (不再返回 "(模型返回为空)" 等内部哨兵)。
+        if response.startswith("⚠️ 处理超时"):
+            log.warning(
+                "%s [%s] agent_loop 触发了内部兜底, 尝试 chat() 重试一次...",
+                trace.prefix(),
+                tag,
+            )
+            try:
+                retry_resp = await self.llm.chat(
+                    messages=context["messages"],
+                    system=context["system"],
+                )
+                if retry_resp and not retry_resp.startswith("(模型返回为空)"):
+                    log.info(
+                        "%s [%s] chat() 重试成功, 拿到 %d 字符",
+                        trace.prefix(),
+                        tag,
+                        len(retry_resp),
+                    )
+                    response = retry_resp
+            except LLMError as e:
+                log.warning("%s [%s] chat() 重试也失败: %s", trace.prefix(), tag, e)
+
         elapsed = time.monotonic() - t0
         log.info(
             "%s [%s] Agent Loop 返回 (%.1fs, %d 字符): %s",

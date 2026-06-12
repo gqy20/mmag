@@ -2,11 +2,19 @@
 LLM 适配器 (Anthropic) — 支持单轮对话 + Agentic Tool Use 循环
 """
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 from anthropic import AsyncAnthropic
+
+# step-3.7-flash 等国产模型训练痕迹: 在 tools=[] 模式下, 偶发按 ChatML 模板
+# 把"伪 tool call"直接输出成 XML 字符串 (而非结构化 tool_use block)。
+# Anthropic SDK 只看结构化 tool_use, 不会 parse 这段, 会作为普通 text 漏给用户。
+# 业界做法: Qwen-Agent / Step-Agent-SDK 在 SDK 层做 XML → 结构化 call 的反向解析。
+# mmag 走的是 Anthropic SDK, 没这能力, 所以在 return 前兜底过滤。
+_RE_TOOL_CALL_XML = re.compile(r"<tool_call>\s*.*?\s*</tool_call>", re.DOTALL)
 
 from .config import config
 from .logger import get_logger, trace
@@ -64,7 +72,11 @@ class LLM:
             texts = _parse_response(response).texts
             elapsed = time.monotonic() - t0
             log.debug("%s LLM 单轮调用 (%.3fs, %d 字符输出)", trace.prefix(), elapsed, len(texts))
-            return "\n".join(texts).strip() if texts else "(模型返回为空)"
+            raw_text = "\n".join(texts)
+            # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML 噪声,
+            # 剥后空就保持哨兵, 让上层 Plan D 兜底决定是否重试
+            cleaned = _strip_tool_call_xml(raw_text).strip()
+            return cleaned if cleaned else "(模型返回为空)"
         except Exception as e:
             elapsed = time.monotonic() - t0
             log.error("%s LLM 调用失败 (%.3fs): %s", trace.prefix(), elapsed, e, exc_info=True)
@@ -125,12 +137,23 @@ class LLM:
             self.call_count += 1
             round_t0 = time.monotonic()
 
+            # ---- 末轮强制收尾 (B-1 方案) ----
+            # step-3.7-flash 等模型在带 tools 参数时, 拿到 tool_result 后倾向继续 tool_use
+            # 而不出 text, 出现 R2 (以及后续轮) 反复调工具的"死循环"。
+            # 最后一轮临时禁用 tools 调一次, 让模型必须出 text:
+            #   - 有 text → 直接用 (用户得到的是模型自己的"智能收尾"答复)
+            #   - 无 text (兜底) → 返回"处理超时"提示
+            # 灵感: LangGraph chat_agent_executor._are_more_steps_needed
+            #       (remaining_steps < 2 && has_tool_calls 时直接 override 响应)
+            is_final_round = round_i == max_rounds
+            tools_for_this_round: list[Any] = [] if is_final_round else tools_schema
+
             try:
                 kwargs: dict[str, Any] = {
                     "model": self.model,
                     "max_tokens": max_tokens,
                     "messages": working_messages,
-                    "tools": tools_schema,
+                    "tools": tools_for_this_round,
                 }
                 if system:
                     kwargs["system"] = system
@@ -156,9 +179,37 @@ class LLM:
 
             round_elapsed = time.monotonic() - round_t0
 
+            # ---- 末轮强制收尾: 哪怕模型在 tools=[] 模式下还调了工具, 也不再执行 ----
+            if is_final_round:
+                # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML 噪声
+                final_text = _strip_tool_call_xml("\n".join(text_parts)).strip()
+                total_elapsed = time.monotonic() - loop_t0
+                if final_text:
+                    log.info(
+                        "%s Round %d/%d 末轮强制收尾, 取到 text %d 字符 (%.3fs) | 总 %.3fs",
+                        trace.prefix(),
+                        round_i,
+                        max_rounds,
+                        len(final_text),
+                        round_elapsed,
+                        total_elapsed,
+                    )
+                    return final_text
+                # 末轮 + 过滤后空 (整段都是 XML 或本来就没 text): 兜底,
+                # 不让 "(模型返回为空)" 这种内部哨兵漏给用户
+                log.warning(
+                    "%s Round %d/%d 末轮强制收尾仍无 text, fallback (%.3fs)",
+                    trace.prefix(),
+                    round_i,
+                    max_rounds,
+                    round_elapsed,
+                )
+                return "⚠️ 处理超时，请重试"
+
             # ---- 判断是否需要继续循环 ----
             if not tool_calls:
-                final_text = "\n".join(text_parts).strip()
+                # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML 噪声
+                final_text = _strip_tool_call_xml("\n".join(text_parts)).strip()
                 total_elapsed = time.monotonic() - loop_t0
                 log.info(
                     "%s Round %d/%d → 纯文本回复 (%.3fs) | 总耗时 %.3fs | 输出 %d 字符",
@@ -169,7 +220,19 @@ class LLM:
                     total_elapsed,
                     len(final_text),
                 )
-                return final_text if final_text else "(模型返回为空)"
+                if final_text:
+                    return final_text
+                # step-3.7-flash 等模型偶发 R1 直接出空 text (无 tool_call 也没 text),
+                # 或整段都是 <tool_call> XML (剥后空): 走这里 — 不再把
+                # "(模型返回为空)" 这种内部哨兵漏给用户, 统一兜底
+                log.warning(
+                    "%s Round %d/%d → 纯文本回复但 text 为空, fallback (%.3fs)",
+                    trace.prefix(),
+                    round_i,
+                    max_rounds,
+                    round_elapsed,
+                )
+                return "⚠️ 处理超时，请重试"
 
             # ---- 有工具调用 → 执行 → 注入结果 → 继续下一轮 ----
             tool_names = [tc["name"] for tc in tool_calls]
@@ -245,7 +308,10 @@ class LLM:
                 elif isinstance(content, str) and content.strip():
                     last_texts.append(content)
                 break
-        return "\n".join(reversed(last_texts)) if last_texts else "⚠️ 处理超时，请重试"
+        # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML 噪声;
+        # 剥后空走兜底, 不让 XML 漏给用户
+        cleaned = _strip_tool_call_xml("\n".join(reversed(last_texts))).strip()
+        return cleaned if cleaned else "⚠️ 处理超时，请重试"
 
 
 # ============================================================
@@ -286,3 +352,25 @@ def _parse_response(response) -> ParsedResponse:
                 {"id": block.id, "name": block.name, "input": dict(block.input)}
             )
     return parsed
+
+
+def _strip_tool_call_xml(text: str) -> str:
+    """过滤 step-3.7-flash 等国产模型意外输出的 <tool_call>...</tool_call> XML 字符串
+
+    背景:
+      step-3.7-flash / Qwen / DeepSeek 等模型训练时用 ChatML 模板, 偶发在
+      tools=[] 模式下把"伪 tool call"按训练痕迹直接输出成 XML 字符串
+      (而非结构化 tool_use block)。Anthropic SDK 只看 tool_use block, 不会
+      parse 这段, 所以会作为普通 text 漏给用户。
+
+      业界做法: Qwen-Agent / Step-Agent-SDK 在 SDK 层做 XML → 结构化 call 的
+      反向解析。mmag 走的是 Anthropic SDK, 没这能力, 所以在 return 前兜底过滤。
+
+    设计:
+      - 非贪婪 + re.DOTALL: 一次只剥一个块, 不会误伤中间的有效文本
+      - 快路径: 不含 "<tool_call>" 子串时直接返回, 避免热路径 regex 开销
+      - 整段都是 XML (剥后空): 由调用方决定走兜底, 本函数不抛、不改语义
+    """
+    if "<tool_call>" not in text:
+        return text
+    return _RE_TOOL_CALL_XML.sub("", text)
