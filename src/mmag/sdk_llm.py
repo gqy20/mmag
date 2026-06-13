@@ -325,32 +325,48 @@ class SDKLLM:
         if config.anthropic_base_url:
             env["ANTHROPIC_BASE_URL"] = config.anthropic_base_url
 
-        # MCP servers: in-process "mmag" server + optional external .mcp.json
+        # MCP servers: in-process "mmag" server (内置工具 + crawl 工具)
+        # 注意: 外部 .mcp.json 子进程模式在当前环境下不工作 (uvx crawl-mcp stdio 无响应)
+        # 改为 in-process 包装: 直接调用 crawl4ai_mcp.fastmcp_server.mcp.call_tool()
         mcp_servers: dict[str, Any] = {}
 
-        if tool_funcs:
+        all_tool_funcs: list = list(tool_funcs) if tool_funcs else []
+
+        # 注入 crawl-mcp 工具 (in-process 包装)
+        try:
+            from .sdk_crawl_tools import create_sdk_crawl_tools
+
+            crawl_tools = create_sdk_crawl_tools()
+            all_tool_funcs.extend(crawl_tools)
+            log.info("已注入 %d 个 crawl-mcp 工具 (in-process)", len(crawl_tools))
+        except ImportError as e:
+            log.warning("crawl4ai_mcp 未安装, 跳过爬虫工具: %s", e)
+
+        if all_tool_funcs:
             mmag_server = create_sdk_mcp_server(
-                name="mmag", version="0.1.0", tools=tool_funcs
+                name="mmag", version="0.1.0", tools=all_tool_funcs
             )
             mcp_servers["mmag"] = mmag_server
-
-        if self._mcp_json_path:
-            mcp_servers["external"] = str(self._mcp_json_path)
 
         options = ClaudeAgentOptions(
             model=config.anthropic_model,
             max_turns=max_turns,
             system_prompt=(
                 "你是一个 mmag (Mattermost AI Agent) 助手。"
-                "你可以使用工具查询消息、搜索知识库、分析链接等。"
-                "你也可以用 Read/Grep 阅读项目文件来理解上下文。"
+                "你可以使用以下工具:"
+                "- get_posts / search_messages / search_knowledge: 查询 Mattermost 消息和知识库"
+                "- analyze_link: 分析链接内容"
+                "- crawl_single / crawl_site / crawl_batch: 爬取网页内容"
+                "- search_text / search_news / search_books / search_videos / search_images: 搜索互联网内容"
+                "- Read / Grep / Glob: 阅读和搜索项目文件"
                 "回答简洁、准确、有帮助。"
             ),
             permission_mode="bypassPermissions",
             mcp_servers=mcp_servers if mcp_servers else None,
-            allowed_tools=[],
+            # 注意: 不设 allowed_tools → 所有工具(含MCP)都对LLM可见
+            # 安全控制完全交给 disallowed_tools + can_use_tool 回调
             disallowed_tools=list(CLI_DANGEROUS_TOOLS),  # 安全网: 黑名单危险工具
-            can_use_tool=_tool_permission_callback,       # 动态权限回调 (白名单)
+            can_use_tool=_tool_permission_callback,       # 动态权限回调 (三层防护)
             env=env,
             setting_sources=[],  # 不加载项目 CLAUDE.md
             cwd=str(Path(__file__).resolve().parents[2]),  # 限制工作目录为项目根目录
