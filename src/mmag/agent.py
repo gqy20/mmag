@@ -9,6 +9,7 @@ import base64
 import json
 import random
 import time
+from datetime import datetime
 
 from .client import PROP_FROM_BOT, PROP_TRUE, MMClient
 from .config import _log_config_loading, config
@@ -820,19 +821,20 @@ class Agent:
 
         # 格式化为 LLM messages
         messages = []
+        prev_ts_ms: float | None = None
         for m in recent:
             role = "assistant" if m.get("user_id") == self.bot_user_id else "user"
             name = m.get("username", "?")
-            content = m.get("message", "")
+            raw_content = m.get("message", "")
+            ts_ms = m.get("create_at") or 0
+            # 跨天才补 MM-DD,同一天只显示 HH:MM
+            time_label = _format_time_label(ts_ms, prev_ts_ms)
+            prev_ts_ms = ts_ms if ts_ms else prev_ts_ms
             if role == "assistant":
-                messages.append({"role": role, "content": content})
+                content = f"{time_label} {raw_content}"
             else:
-                messages.append(
-                    {
-                        "role": role,
-                        "content": f"{name}: {content}",
-                    }
-                )
+                content = f"{time_label} {name}: {raw_content}"
+            messages.append({"role": role, "content": content})
 
         # ── 当前消息前缀：注入频道上下文，让 LLM 调工具时知道传哪个 ID ──
         meta_lines = [f"📍 频道: {ch_name} | id={channel_id} | name={ch_real_name}"]
@@ -984,3 +986,28 @@ class Agent:
                 log.error("memory.close 失败: %s", e, exc_info=True)
 
         log.info("Agent 已停止")
+
+
+# ============================================================
+# 内部辅助函数
+# ============================================================
+
+
+def _format_time_label(ts_ms: float, prev_ts_ms: float | None) -> str:
+    """为单条消息生成紧凑的时间前缀标签,让 LLM 看到"消息间隔"
+
+    规则:
+      - 缺时间戳 (ts_ms=0) → 返回空串,不加前缀(不影响老数据)
+      - 第一条消息 (prev_ts_ms=None) → 总是带 MM-DD,让 LLM 有"起点日期"
+      - 跟上一条同一天 → 只显示 HH:MM
+      - 跟上一条跨天 → 补 MM-DD HH:MM
+    """
+    if not ts_ms:
+        return ""
+    cur = datetime.fromtimestamp(ts_ms / 1000)
+    if prev_ts_ms is None:
+        return f"[{cur:%m-%d %H:%M}]"
+    prev = datetime.fromtimestamp(prev_ts_ms / 1000)
+    if cur.date() != prev.date():
+        return f"[{cur:%m-%d %H:%M}]"
+    return f"[{cur:%H:%M}]"
