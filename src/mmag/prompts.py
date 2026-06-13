@@ -35,6 +35,11 @@ class PromptManager:
         """读取字符串模板节点,做 .format(**kwargs) 渲染后返回
 
         用于 system_prompt 等 LLM 模板。
+
+        占位符策略（与 str.format 一致）:
+          - 传入的 kwargs 会被替换
+          - 模板里有但 kwargs 没传的占位符，保留为 `{key}` 原样（不回退整个模板）
+          - 仅当 kwargs 出现多余 key 时记录 warning（不抛）
         """
         template = self._raw.get(name, "")
         if not isinstance(template, str):
@@ -42,11 +47,7 @@ class PromptManager:
             return ""
         if not template:
             return ""
-        try:
-            return template.format(**kwargs)
-        except KeyError as e:
-            log.warning("提示词 '%s' 缺少变量: %s", name, e)
-            return template
+        return _safe_format(template, kwargs)
 
     def get_section(self, name: str, **kwargs) -> dict:
         """读取非模板结构节点(dict),递归对其中所有字符串做 .format(**kwargs) 替换
@@ -63,17 +64,29 @@ class PromptManager:
 
 
 def _format_dict(obj, kwargs: dict):
-    """递归对 dict / list / str 中的 str 节点做 .format(**kwargs)"""
+    """递归对 dict / list / str 中的 str 节点做 .format(**kwargs)
+
+    缺失的占位符保留为 `{key}` 原样，行为与 PromptManager.get() 一致。
+    """
     if isinstance(obj, str):
-        try:
-            return obj.format(**kwargs)
-        except KeyError:
-            return obj
+        return _safe_format(obj, kwargs)
     if isinstance(obj, dict):
         return {k: _format_dict(v, kwargs) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_format_dict(v, kwargs) for v in obj]
     return obj
+
+
+class _SafeDict(dict):
+    """format_map 用的兜底 mapping: 缺失的 key 保留为 `{key}` 原样而非抛 KeyError"""
+
+    def __missing__(self, key: str) -> str:  # type: ignore[override]
+        return "{" + key + "}"
+
+
+def _safe_format(template: str, kwargs: dict) -> str:
+    """用 _SafeDict 兜底的 .format_map。缺失占位符保留原字面量。"""
+    return template.format_map(_SafeDict(kwargs))
 
 
 prompts = PromptManager()

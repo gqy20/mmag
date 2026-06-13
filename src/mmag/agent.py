@@ -83,14 +83,12 @@ class Agent:
         log.info(f"  🤖 {config.bot_display_name} Agent 启动中...")
         log.info("=" * 50)
 
-        # 阶段 1: 获取 Bot 身份
+        # 阶段 1: 获取 Bot 身份（基于 MM_TOKEN 调 /users.me,user_id 与 username 一起返回）
         log.info("[1/5] 获取 Bot 身份...")
         me = self.mm.get_me()
         self.bot_user_id = me["id"]
         self.bot_username = me["username"]
-        if config.mm_bot_user_id:
-            self.bot_user_id = config.mm_bot_user_id
-        log.info(f"       ✅ Bot: @{self.bot_username} ({self.bot_user_id})")
+        log.info(f"       ✅ Bot: @{self.bot_username} ({self.bot_user_id}) [来源: API]")
 
         # 阶段 2: LLM 配置检查
         log.info("[2/5] 检查 LLM 配置...")
@@ -654,7 +652,9 @@ class Agent:
         system = prompts.get(
             "system_prompt",
             bot_name=config.bot_display_name,
+            bot_display_name=config.bot_display_name,
             bot_username=self.bot_username,
+            bot_user_id=self.bot_user_id,
         )
 
         # 消息历史
