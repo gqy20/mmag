@@ -126,7 +126,7 @@ ANTHROPIC_MODEL=step-3.7-flash         # 模型名称
 # Agent 行为配置
 # ============================================
 
-BOT_NAME=小智                            # Bot 名称 (用于 @提及 匹配 + 提示词)
+BOT_NAME=                                 # 已删除 — bot 身份完全由 MM_TOKEN 决定
 LISTEN_PROBABILITY=0.15                  # 旁听概率 (0~1, 建议 0.1~0.2)
 MAX_CONTEXT_MESSAGES=30                  # 上下文窗口大小
 TYPING_DELAY_MIN=1                       # 模拟打字最短延迟(秒)
@@ -222,7 +222,7 @@ print('Bot 成员状态:', 'OK' if 'id' in data else 'NOT MEMBER')
 | 消息被折叠（thread） | 点击 `查看线程` 展开回复 |
 | 缓存问题 | 清除浏览器缓存后刷新 |
 
-### Q2: 回复内容出现 `{bot_name}` 字面量？
+### Q2: 回复内容出现 `{bot_username}` 字面量？
 
 这是 **YAML 模板变量未渲染** 的症状。
 
@@ -230,10 +230,10 @@ print('Bot 成员状态:', 'OK' if 'id' in data else 'NOT MEMBER')
 
 **修复：** 确保 `prompts.yml` 中所有变量用单花括号 `{var}`：
 ```yaml
-# ❌ 错误 (输出字面量 {bot_name})
-system_prompt: "你是 {{bot_name}}"
+# ❌ 错误 (输出字面量 {bot_username})
+system_prompt: "你是 {{bot_username}}"
 
-# ✅ 正确 (渲染为 小智)
+# ✅ 正确 (渲染为 agent2)
 system_prompt: "你是 {bot_name}"
 ```
 

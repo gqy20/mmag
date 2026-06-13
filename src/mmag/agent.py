@@ -65,10 +65,8 @@ class Agent:
         )
 
         # 主动旁听触发器 (从 prompts.yml 加载, 改词不用改代码)
-        self._triggers = prompts.get_section(
-            "triggers",
-            bot_name=config.bot_name,
-        )
+        # 注:self.bot_username 还没拿到(start 阶段从 API 取),先传空,start() 拿到后 reload
+        self._triggers: dict = {}
 
         # WebSocket 客户端 (启动时构造, 调用 ws.run() 进入事件循环)
         self.ws: WebSocketClient | None = None
@@ -80,7 +78,7 @@ class Agent:
         _log_config_loading()
 
         log.info("=" * 50)
-        log.info(f"  🤖 {config.bot_name} Agent 启动中...")
+        log.info(f"  🤖 Agent 启动中...")
         log.info("=" * 50)
 
         # 阶段 1: 获取 Bot 身份（基于 MM_TOKEN 调 /users.me,user_id 与 username 一起返回）
@@ -89,6 +87,12 @@ class Agent:
         self.bot_user_id = me["id"]
         self.bot_username = me["username"]
         log.info(f"       ✅ Bot: @{self.bot_username} ({self.bot_user_id}) [来源: API]")
+
+        # 拿到真实 username 后,reload 触发器配置 (里面 {bot_username} 占位符需要正确替换)
+        self._triggers = prompts.get_section(
+            "triggers",
+            bot_username=self.bot_username,
+        )
 
         # 阶段 2: LLM 配置检查
         log.info("[2/5] 检查 LLM 配置...")
@@ -389,11 +393,7 @@ class Agent:
         log.info("%s [%s] %s", trace.prefix(), post["username"], message[:80])
 
         # ====== @提及 必回 ======
-        bot_mentions = [
-            f"@{self.bot_username}",
-            f"@{config.bot_name.lower()}",
-        ]
-        if any(m in message.lower() for m in bot_mentions):
+        if f"@{self.bot_username}" in message.lower():
             trace.set_context(msg_type="mention")
             log.info("%s → 触发: @提及", trace.prefix())
             await self._respond(post, tag="mention")
@@ -695,7 +695,7 @@ class Agent:
         return "\n".join(rendered)
 
     # 启发式: Mattermost username 命中这些关键词 → 标记为 bot (兜底,db 没 is_bot 字段时用)
-    _BOT_USERNAME_HINTS = ("bot", "agent", "test", "system", "小智", "小助手")
+    _BOT_USERNAME_HINTS = ("bot", "agent", "test", "system")
 
     def _classify_role(self, uid: str, username: str) -> str:
         """根据 user_id / db profile / username 给频道成员打角色标签
@@ -730,8 +730,8 @@ class Agent:
         """从频道近期消息里去重提取所有出现过的 user,渲染为结构化 markdown 表格
 
         解决的问题: 之前只在 system_prompt 里注入「我」和「当前对话者」+「近期发言者」,
-        但缺一个稳定的「频道成员坐标系」。结果 hz_bot 那种 system_prompt 里也写
-        「我是小智」的 bot 发消息时,我们的 bot 看到「我是小智」会误以为对方在说自己。
+        但缺一个稳定的「频道成员坐标系」。结果 hz_bot 那种 system_prompt 里自称
+        跟 agent2 一样的 bot 发消息时,我们的 bot 看到「我是 agent2」会误以为对方在说自己。
         显式列出 user_id → role → 自称,LLM 一眼能区分。
 
         列:
@@ -805,7 +805,6 @@ class Agent:
         # 系统提示词（纯人格，不包含工具信息 — 工具通过 SDK tools 参数传递）
         system = prompts.get(
             "system_prompt",
-            bot_name=config.bot_name,
             bot_username=self.bot_username,
             bot_user_id=self.bot_user_id,
             current_user_id=current_user_id,
@@ -936,7 +935,7 @@ class Agent:
                         "id": post_id or "",
                         "channel_id": post["channel_id"],
                         "user_id": self.bot_user_id,
-                        "username": config.bot_name,
+                        "username": self.bot_username,
                         "message": message,
                         "create_at": int(time.time() * 1000),
                         "type": "",

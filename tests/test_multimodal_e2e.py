@@ -236,7 +236,7 @@ def test_llm_actually_sees_image(tmp_path):
         last = ctx["messages"][-1]
         print(f"  最后一条 content 块数: {len(last['content'])}")
 
-        system = prompts.get("system_prompt", bot_name=config.bot_name)
+        system = prompts.get("system_prompt", bot_username=agent.bot_username)
         # step-3.7-flash 偶发只返回 thinking 不返回 text (概率行为),
         # 加 max_tokens + 1 次重试,让测试稳定。生产调用也会自然重试。
         response = ""
@@ -285,14 +285,14 @@ def test_text_only_path_still_works():
         "channel_id": "ch1",
         "user_id": "user_1",
         "username": "bob",
-        "message": "@小智 帮我看看这个",
+        "message": "@test_bot 帮我看看这个",
     }
     ctx = agent._build_context(post)
     msgs = ctx["messages"]
     assert msgs[-1]["role"] == "user"
     assert isinstance(msgs[-1]["content"], str)
     assert "bob" in msgs[-1]["content"]
-    assert "@小智" in msgs[-1]["content"]
+    assert "@test_bot" in msgs[-1]["content"]
     # system prompt 应包含"多模态"提示
     assert "多模态" in ctx["system"], "system_prompt 应包含多模态能力说明"
     print("  ✓ 纯文本路径无破坏")

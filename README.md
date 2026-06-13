@@ -68,7 +68,6 @@ ANTHROPIC_BASE_URL=            # 留空用官方 API，或填 StepFun 兼容地�
 ANTHROPIC_MODEL=step-3.7-flash # 模型名称
 
 # Agent
-BOT_NAME=小智                  # Bot 名称
 LISTEN_PROBABILITY=0.15        # 主动旁听概率 (0~1)
 MAX_CONTEXT_MESSAGES=100       # 上下文窗口消息数 (传给 LLM 的最近 N 条)
 MAX_CONTEXT_CHARS=10000        # 上下文窗口总字符上限 (按 token 粗估)
@@ -122,7 +121,7 @@ make discover -- --json
 
 Bot 支持三种触发方式：
 
-1. **@提及** — 在消息中 `@小智`，必回复
+1. **@提及** — 在消息中 `@<bot_username>`(由 MM_TOKEN 决定,如 `agent2`),必回复
 2. **DM 私聊** — 直接私聊 Bot，必回复
 3. **智能旁听** — 群聊中自动检测问题、帮忙请求等，按概率响应（默认 15%）
 

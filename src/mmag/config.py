@@ -29,7 +29,6 @@ _FIELD_TO_ENV: dict[str, str] = {
     "anthropic_api_key": "ANTHROPIC_API_KEY",
     "anthropic_model": "ANTHROPIC_MODEL",
     "anthropic_base_url": "ANTHROPIC_BASE_URL",
-    "bot_name": "BOT_NAME",
     "listen_probability": "LISTEN_PROBABILITY",
     "max_context_messages": "MAX_CONTEXT_MESSAGES",
     "max_context_chars": "MAX_CONTEXT_CHARS",
@@ -79,7 +78,6 @@ class Config:
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
     anthropic_base_url: str | None = os.getenv("ANTHROPIC_BASE_URL") or None
     # Agent
-    bot_name: str = os.getenv("BOT_NAME", "小智")
     listen_probability: float = float(os.getenv("LISTEN_PROBABILITY", "0.15"))
     max_context_messages: int = int(
         os.getenv("MAX_CONTEXT_MESSAGES", "100")

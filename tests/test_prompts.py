@@ -3,7 +3,7 @@ prompts 单元测试
 
 覆盖:
   - PromptManager.get() 字符串模板 + .format() 变量替换
-  - 身份卡占位符全部传入时能正确渲染 (bot_username / bot_user_id / bot_name)
+  - 身份卡占位符全部传入时能正确渲染 (bot_username / bot_user_id)
   - 占位符缺失时静默返回原模板 (.format() KeyError 走 fallback 分支)
   - PromptManager.get_section() 递归 .format() 替换
   - prompts.yml 节点缺失或非字符串时的兜底
@@ -29,7 +29,6 @@ def tmp_prompts(tmp_path):
               ## 身份卡（你自己）
               - 用户名: @{bot_username}
               - 用户 ID: {bot_user_id}
-              - 称呼: {bot_name}
 
               ## 当前对话者
               - 用户名: @{current_user_username}
@@ -39,15 +38,12 @@ def tmp_prompts(tmp_path):
               ## 近期发言者
               {recent_speakers}
 
-              ## 频道成员
-              {channel_members}
-
-              你是 {bot_name}。
+              你是 {bot_username}。
 
             triggers:
               high_triggers:
-                - "{bot_name}"
-                - "@{bot_name}"
+                - "{bot_username}"
+                - "@{bot_username}"
               question_suffixes:
                 - "?"
             """
@@ -63,15 +59,12 @@ class TestPromptManagerGet:
             "system_prompt",
             bot_username="agent2",
             bot_user_id="u7qkmtkja78rdrhkn569wc4iar",
-            bot_name="小智",
         )
         assert "@agent2" in out, "bot_username 应被替换为 @agent2"
         assert "u7qkmtkja78rdrhkn569wc4iar" in out, "bot_user_id 应被注入"
-        assert "小智" in out, "bot_name 应被替换"
         # 占位符没残留
         assert "{bot_username}" not in out
         assert "{bot_user_id}" not in out
-        assert "{bot_name}" not in out
 
     def test_missing_placeholder_returns_template_silently(self, tmp_prompts):
         """模拟 agent 漏传 bot_user_id，prompts.get 不应抛 KeyError"""
@@ -79,7 +72,6 @@ class TestPromptManagerGet:
             "system_prompt",
             bot_username="agent2",
             # bot_user_id 故意漏传
-            bot_name="小智",
         )
         # bot_username 替换成功
         assert "@agent2" in out
@@ -92,7 +84,6 @@ class TestPromptManagerGet:
             "system_prompt",
             bot_username="agent2",
             bot_user_id="u7qkmtkja78rdrhkn569wc4iar",
-            bot_name="小智",
             current_user_id="u_gqy_12345678",
             current_user_username="gqy",
             current_user_profile="风格:技术型，关注:Python/Docker",
@@ -111,7 +102,6 @@ class TestPromptManagerGet:
             "system_prompt",
             bot_username="agent2",
             bot_user_id="u7qk",
-            bot_name="小智",
             # current_user_* 全部漏传
             recent_speakers="（无）",
         )
@@ -134,11 +124,11 @@ class TestPromptManagerSection:
     def test_section_renders_nested_placeholders(self, tmp_prompts):
         sec = tmp_prompts.get_section(
             "triggers",
-            bot_name="小智",
+            bot_username="agent2",
         )
-        # triggers 里的 {bot_name} 都被替换
-        assert "小智" in sec["high_triggers"]
-        assert "@小智" in sec["high_triggers"]
+        # triggers 里的 {bot_username} 都被替换
+        assert "agent2" in sec["high_triggers"]
+        assert "@agent2" in sec["high_triggers"]
         # 没有占位符残留
         for trig in sec["high_triggers"]:
             assert "{" not in trig
@@ -148,7 +138,7 @@ class TestPromptManagerSection:
     def test_section_without_kwargs_returns_raw_copy(self, tmp_prompts):
         sec = tmp_prompts.get_section("triggers")
         # 原始占位符未替换
-        assert any("{bot_name}" in t for t in sec["high_triggers"])
+        assert any("{bot_username}" in t for t in sec["high_triggers"])
 
     def test_section_missing_node_returns_empty_dict(self, tmp_prompts):
         assert tmp_prompts.get_section("nonexistent") == {}

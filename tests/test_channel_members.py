@@ -3,8 +3,8 @@ agent._build_channel_members_table / _classify_role 单元测试
 
 目的: 防止"频道成员清单"这个身份坐标系组件出现回归。
   - 之前只注入"近期发言者"(只是 user 列表,没有 role)
-  - 现在升级为结构化表格,显式标 self/bot/member,防止 hz_bot
-    自称"我是小智"时我们的 bot 跟它混淆
+  - 现在升级为结构化表格,显式标 self/bot/member,防止其他 bot
+    自称跟我们一样的身份时混淆
 
 绕开 Agent.__init__ 启动(它会真连 MM/WS/记忆),直接用 __new__ 注入
 最小必要属性。
@@ -48,8 +48,8 @@ class TestClassifyRole:
 
     def test_bot_username_keyword_returns_bot(self):
         a = _make_agent("u_bot_self")
-        # hz_bot / test / agent / system / 小智 / 小助手 都应该识别
-        for u in ("hz_bot", "agent007", "test_runner", "system-bot", "小智", "我的小助手"):
+        # hz_bot / test / agent / system 都应该识别
+        for u in ("hz_bot", "agent007", "test_runner", "system-bot"):
             assert a._classify_role("u_other", u) == "bot", f"username={u} 应被识别为 bot"
 
     def test_bot_username_keyword_case_insensitive(self):

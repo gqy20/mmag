@@ -40,7 +40,6 @@ def load_env(env_file: Path | None = None) -> dict[str, str]:
         "MM_TOKEN",
         "MM_TEAM_ID",
         "MM_CHANNEL_ID",
-        "BOT_NAME",
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_MODEL",
