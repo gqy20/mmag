@@ -34,6 +34,9 @@ def tmp_prompts(tmp_path):
               - 用户 ID: {current_user_id}
               - 已知画像: {current_user_profile}
 
+              ## 时间锚点
+              现在: {current_time}
+
               ## 近期发言者
               {recent_speakers}
 
@@ -51,12 +54,15 @@ class TestPromptManagerGet:
             "system_prompt",
             bot_username="agent2",
             bot_user_id="u7qkmtkja78rdrhkn569wc4iar",
+            current_time="2026-06-14 14:30:00 (Sunday)",
         )
         assert "@agent2" in out, "bot_username 应被替换为 @agent2"
         assert "u7qkmtkja78rdrhkn569wc4iar" in out, "bot_user_id 应被注入"
+        assert "2026-06-14 14:30:00" in out, "current_time 应被注入"
         # 占位符没残留
         assert "{bot_username}" not in out
         assert "{bot_user_id}" not in out
+        assert "{current_time}" not in out
 
     def test_missing_placeholder_returns_template_silently(self, tmp_prompts):
         """模拟 agent 漏传 bot_user_id，prompts.get 不应抛 KeyError"""

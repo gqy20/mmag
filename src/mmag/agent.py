@@ -826,6 +826,7 @@ class Agent:
         )
 
         # 系统提示词（纯人格，不包含工具信息 — 工具通过 SDK tools 参数传递）
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S (%A)")
         system = prompts.get(
             "system_prompt",
             bot_username=self.bot_username,
@@ -835,6 +836,7 @@ class Agent:
             current_user_profile=current_user_profile,
             recent_speakers=recent_speakers,
             channel_members=channel_members,
+            current_time=current_time,
         )
 
         # 消息历史
