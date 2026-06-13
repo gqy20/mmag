@@ -236,7 +236,7 @@ def test_llm_actually_sees_image(tmp_path):
         last = ctx["messages"][-1]
         print(f"  最后一条 content 块数: {len(last['content'])}")
 
-        system = prompts.get("system_prompt", bot_name=config.bot_display_name)
+        system = prompts.get("system_prompt", bot_name=config.bot_name)
         # step-3.7-flash 偶发只返回 thinking 不返回 text (概率行为),
         # 加 max_tokens + 1 次重试,让测试稳定。生产调用也会自然重试。
         response = ""

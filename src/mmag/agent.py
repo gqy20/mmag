@@ -67,7 +67,6 @@ class Agent:
         self._triggers = prompts.get_section(
             "triggers",
             bot_name=config.bot_name,
-            bot_display_name=config.bot_display_name,
         )
 
         # WebSocket 客户端 (启动时构造, 调用 ws.run() 进入事件循环)
@@ -80,7 +79,7 @@ class Agent:
         _log_config_loading()
 
         log.info("=" * 50)
-        log.info(f"  🤖 {config.bot_display_name} Agent 启动中...")
+        log.info(f"  🤖 {config.bot_name} Agent 启动中...")
         log.info("=" * 50)
 
         # 阶段 1: 获取 Bot 身份（基于 MM_TOKEN 调 /users.me,user_id 与 username 一起返回）
@@ -392,7 +391,6 @@ class Agent:
         bot_mentions = [
             f"@{self.bot_username}",
             f"@{config.bot_name.lower()}",
-            f"@{config.bot_display_name.lower()}",
         ]
         if any(m in message.lower() for m in bot_mentions):
             trace.set_context(msg_type="mention")
@@ -719,8 +717,7 @@ class Agent:
         # 系统提示词（纯人格，不包含工具信息 — 工具通过 SDK tools 参数传递）
         system = prompts.get(
             "system_prompt",
-            bot_name=config.bot_display_name,
-            bot_display_name=config.bot_display_name,
+            bot_name=config.bot_name,
             bot_username=self.bot_username,
             bot_user_id=self.bot_user_id,
             current_user_id=current_user_id,
@@ -849,7 +846,7 @@ class Agent:
                         "id": post_id or "",
                         "channel_id": post["channel_id"],
                         "user_id": self.bot_user_id,
-                        "username": config.bot_display_name,
+                        "username": config.bot_name,
                         "message": message,
                         "create_at": int(time.time() * 1000),
                         "type": "",

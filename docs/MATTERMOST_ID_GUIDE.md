@@ -126,8 +126,7 @@ ANTHROPIC_MODEL=step-3.7-flash         # 模型名称
 # Agent 行为配置
 # ============================================
 
-BOT_NAME=小智                            # Bot 名称 (用于 @提及 匹配)
-BOT_DISPLAY_NAME=小智                    # 显示名称 (用于提示词)
+BOT_NAME=小智                            # Bot 名称 (用于 @提及 匹配 + 提示词)
 LISTEN_PROBABILITY=0.15                  # 旁听概率 (0~1, 建议 0.1~0.2)
 MAX_CONTEXT_MESSAGES=30                  # 上下文窗口大小
 TYPING_DELAY_MIN=1                       # 模拟打字最短延迟(秒)

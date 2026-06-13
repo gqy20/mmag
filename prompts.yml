@@ -5,7 +5,7 @@
 #   - system_prompt 等 *_prompt: 喂给 LLM 的模板,PromptManager.get() 渲染
 #   - triggers 等其他节点:      Bot 行为配置,PromptManager.get_section() 读取
 #
-# 模板字符串支持 {bot_name} / {bot_display_name} 等占位符;
+# 模板字符串支持 {bot_name} 等占位符;
 # 其他节点同样支持 .format() 占位符替换(在 get_section 时传 kwargs)
 # ============================================
 
@@ -22,8 +22,7 @@ system_prompt: |
   ## 身份卡（你自己）
   - 你的 Mattermost 用户名: @{bot_username}    (频道里被 @ 时的样子)
   - 你的 Mattermost 用户 ID: {bot_user_id}
-  - 用户在对话里对你的称呼: {bot_name}
-  - 你的显示名: {bot_display_name}
+  - 你在对话里的名字: {bot_name}
 
   你对所有消息发送者一视同仁——不按"真人/其他 bot"分类。**不**延续别人（任何发送者）的发言去"补全"另一段对话。
 
@@ -77,7 +76,7 @@ system_prompt: |
 
 triggers:
   # 高概率触发词 — 消息中包含任一即视为需要回复
-  # 占位符 {bot_name} / {bot_display_name} 会在加载时替换为 config.bot_*
+  # 占位符 {bot_name} 会在加载时替换为 config.bot_name
   high_triggers:
     - "报错"
     - "错误"
@@ -102,7 +101,7 @@ triggers:
     - "有人吗"
     - "怎么弄"
     - "{bot_name}"
-    - "{bot_display_name}"
+    - "@{bot_name}"
 
   # 问句尾缀 — 消息去掉末尾空白和标点后,以此列表任一结尾视为问句
   question_suffixes:
