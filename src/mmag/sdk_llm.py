@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,167 @@ def _strip_thinking_tags(text: str) -> str:
 def _strip_model_artifacts(text: str) -> str:
     """组合入口: 一次剥掉所有已知的国产模型训练痕迹输出"""
     return _strip_thinking_tags(_strip_tool_call_xml(text))
+
+
+# ============================================================
+# 工具权限控制 — 三层防护: sandbox + 路径白名单 + 工具黑名单
+# ============================================================
+
+# 项目根目录 — 所有文件操作的允许范围边界
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+
+# 需要路径检查的只读工具（参数含 file_path / path / pattern）
+_PATH_SENSITIVE_TOOLS = frozenset({"Read", "Grep", "Glob", "LSP"})
+
+# 完全不需要路径检查的工具（网络/内部状态）
+_PATH_SAFE_TOOLS = frozenset({
+    "WebFetch",   # URL 访问，不涉及本地文件
+    "WebSearch",  # 网络搜索，不涉及本地文件
+    "TodoWrite",  # SDK 内部状态，无文件系统操作
+    "Task",       # SDK 内部状态，无文件系统操作
+})
+
+# 所有允许的 CLI 内置工具
+_CLI_SAFE_TOOLS = _PATH_SENSITIVE_TOOLS | _PATH_SAFE_TOOLS
+
+# 禁止的危险工具（无论什么情况都不允许）
+CLI_DANGEROUS_TOOLS = frozenset({
+    "Bash",       # 🔴 执行任意 shell 命令
+    "Write",      # 🔴 写入/创建任意文件
+    "Edit",       # 🔴 编辑文件 (sed-like)
+})
+
+
+def _resolve_path(path: str | None) -> str | None:
+    """解析路径并返回绝对路径。返回 None 表示无法解析或非法路径。"""
+    if not path or not isinstance(path, str):
+        return None
+    try:
+        p = Path(path).expanduser().resolve()
+        return str(p)
+    except (ValueError, OSError):
+        return None
+
+
+def _is_path_allowed(path: str) -> bool:
+    """严格路径白名单检查：只允许项目根目录及其子目录内的文件。
+
+    阻止:
+      - 绝对路径跳出项目目录 (如 /etc/passwd, ~/.ssh/id_rsa)
+      - symlink 跳出 (resolve() 会解引用)
+      - .. 穿越攻击
+    """
+    resolved = _resolve_path(path)
+    if not resolved:
+        return False
+    # 必须以项目根目录为前缀
+    if not resolved.startswith(_PROJECT_ROOT):
+        log.warning("路径越界: %s (不在 %s 内)", resolved, _PROJECT_ROOT)
+        return False
+    return True
+
+
+def _extract_paths_from_input(tool_name: str, input_data: dict[str, Any]) -> list[str]:
+    """从工具输入参数中提取所有可能的文件路径。
+
+    不同工具的路径参数名不同:
+      Read:     file_path
+      Grep:     pattern (可能含路径通配)
+      Glob:     pattern (路径通配)
+      LSP:      file_path / uri
+    """
+    paths: list[str] = []
+
+    # 直接路径参数
+    for key in ("file_path", "path", "uri", "directory"):
+        val = input_data.get(key)
+        if val and isinstance(val, str):
+            paths.append(val)
+
+    # pattern 参数 (Grep/Glob 可能是路径模式)
+    pattern = input_data.get("pattern")
+    if pattern and isinstance(pattern, str):
+        # 如果 pattern 看起来像路径（含 / 或 . 或 ~），也检查
+        if any(c in pattern for c in ("/", ".", "~")):
+            paths.append(pattern)
+
+    # include/exclude 文件列表
+    for key in ("include", "exclude", "files"):
+        val = input_data.get(key)
+        if isinstance(val, list):
+            paths.extend(v for v in val if isinstance(v, str))
+        elif isinstance(val, str):
+            paths.append(val)
+
+    return paths
+
+
+async def _tool_permission_callback(
+    tool_name: str,
+    input_data: dict[str, Any],
+    context,  # ToolPermissionContext
+) -> Any:
+    """can_use_tool 回调 — 三层动态权限决策。
+
+    层级 1 — MCP 工具: mcp__ 前缀 → ✅ 全部放行
+    层级 2 — 危险工具黑名单: Bash/Write/Edit → ❌ 无条件拒绝
+    层级 3 — 安全工具路径检查: Read/Grep/Glob/LSP → 仅允许项目目录内
+    层级 4 — 未知工具 → ❌ 默认拒绝（安全优先）
+    """
+    from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
+
+    # ── 层级 1: MCP 工具 ──
+    if tool_name.startswith("mcp__"):
+        log.debug("权限放行 [MCP]: %s", tool_name)
+        return PermissionResultAllow()
+
+    # ── 层级 2: 危险工具无条件拒绝 ──
+    if tool_name in CLI_DANGEROUS_TOOLS:
+        log.warning(
+            "权限拒绝 [危险]: %s (input=%s)",
+            tool_name,
+            str(input_data)[:200],
+        )
+        return PermissionResultDeny(
+            message=f"工具 '{tool_name}' 在 bot 模式下被禁用（安全策略）",
+        )
+
+    # ── 层级 3: 安全工具 + 路径白名单检查 ──
+    if tool_name in _PATH_SAFE_TOOLS:
+        # WebFetch/WebSearch/TodoWrite/Task 不涉及本地文件
+        log.debug("权限放行 [安全-无路径]: %s", tool_name)
+        return PermissionResultAllow()
+
+    if tool_name in _PATH_SENSITIVE_TOOLS:
+        # 提取所有可能的路径参数
+        candidate_paths = _extract_paths_from_input(tool_name, input_data)
+
+        if candidate_paths:
+            # 有路径参数 → 逐个检查
+            for p in candidate_paths:
+                if not _is_path_allowed(p):
+                    log.warning(
+                        "权限拒绝 [路径越界]: %s | tool=%s | path=%s",
+                        tool_name, tool_name, p,
+                    )
+                    return PermissionResultDeny(
+                        message=(
+                            f"禁止访问项目外文件: {p}\n"
+                            f"仅允许读取 {_PROJECT_ROOT} 及其子目录下的文件"
+                        ),
+                    )
+            log.debug("权限放行 [安全-路径OK]: %s (%d 个路径已校验)", tool_name, len(candidate_paths))
+            return PermissionResultAllow()
+        else:
+            # 无路径参数（罕见但可能）→ 放行（SDK 内部会处理错误）
+            log.debug("权限放行 [安全-无路径]: %s (无路径参数)", tool_name)
+            return PermissionResultAllow()
+
+    # ── 层级 4: 未知工具默认拒绝 ──
+    log.warning("权限拒绝 [未知]: %s", tool_name)
+    return PermissionResultDeny(
+        message=f"未知工具 '{tool_name}' 未在白名单中",
+    )
 
 
 # ============================================================
@@ -181,13 +343,20 @@ class SDKLLM:
             system_prompt=(
                 "你是一个 mmag (Mattermost AI Agent) 助手。"
                 "你可以使用工具查询消息、搜索知识库、分析链接等。"
+                "你也可以用 Read/Grep 阅读项目文件来理解上下文。"
                 "回答简洁、准确、有帮助。"
             ),
             permission_mode="bypassPermissions",
             mcp_servers=mcp_servers if mcp_servers else None,
-            allowed_tools=[],  # bypassPermissions 下允许所有工具（不能传 None，SDK 内部会 list(None) 报错）
+            allowed_tools=[],
+            disallowed_tools=list(CLI_DANGEROUS_TOOLS),  # 安全网: 黑名单危险工具
+            can_use_tool=_tool_permission_callback,       # 动态权限回调 (白名单)
             env=env,
             setting_sources=[],  # 不加载项目 CLAUDE.md
+            cwd=str(Path(__file__).resolve().parents[2]),  # 限制工作目录为项目根目录
+            # ── Session 隔离 ──
+            session_id=str(uuid.uuid4()),                    # 独立 session ID（用于日志追踪）
+            extra_args={"no-session-persistence": None},  # 不写 session 文件到 ~/.claude/projects/ (SDK 自动加 -- 前缀) (SDK 自动加 -- 前缀)
         )
         return options
 
@@ -250,6 +419,14 @@ class SDKLLM:
         is_error = False
         result_msg: ResultMessage | None = None
 
+        # Session 追踪（用于日志关联，不持久化到磁盘）
+        _session_tag = getattr(self.client, '_session_id', f'call-{self.call_count}')
+
+        log.debug(
+            "SDK query #%d | session=%s | prompt=%d chars",
+            self.call_count, _session_tag, len(prompt),
+        )
+
         try:
             await self.client.query(prompt)
             async for msg in self.client.receive_response():
@@ -293,8 +470,9 @@ class SDKLLM:
         raw_text = "\n".join(text_parts)
 
         log.debug(
-            "SDK query 完成 (%.3fs) | turns=%d tools=%d chars=%d",
+            "SDK query 完成 (%.3fs) | session=%s | turns=%d tools=%d chars=%d",
             elapsed,
+            getattr(result_msg, 'session_id', _session_tag) if result_msg else _session_tag,
             result_msg.num_turns if result_msg else 0,
             tool_calls_count,
             len(raw_text),
