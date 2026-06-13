@@ -127,7 +127,7 @@ ANTHROPIC_MODEL=step-3.7-flash         # 模型名称
 # ============================================
 
 BOT_NAME=                                 # 已删除 — bot 身份完全由 MM_TOKEN 决定
-LISTEN_PROBABILITY=0.15                  # 旁听概率 (0~1, 建议 0.1~0.2)
+# 触发策略: @/DM/thread 走硬规则,其他 LLM 自主决策(<SILENT> 标记沉默)
 MAX_CONTEXT_MESSAGES=30                  # 上下文窗口大小
 TYPING_DELAY_MIN=1                       # 模拟打字最短延迟(秒)
 TYPING_DELAY_MAX=3                       # 模拟打字最长延迟(秒)

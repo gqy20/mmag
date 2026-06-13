@@ -298,6 +298,15 @@ class Memory:
         ).fetchall()
         return [dict(r) for r in reversed(rows)]
 
+    def get_post_user(self, post_id: str) -> str | None:
+        """根据 post_id 查 user_id,用于判断 thread root 是不是自己发的"""
+        if not post_id:
+            return None
+        row = self._conn.execute(
+            "SELECT user_id FROM message_log WHERE id=?", (post_id,)
+        ).fetchone()
+        return row["user_id"] if row else None
+
     def peek_recent_messages(
         self, channel_id: str, limit: int = 100, order: str = "DESC"
     ) -> list[dict]:

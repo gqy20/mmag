@@ -68,7 +68,7 @@ ANTHROPIC_BASE_URL=            # 留空用官方 API，或填 StepFun 兼容地�
 ANTHROPIC_MODEL=step-3.7-flash # 模型名称
 
 # Agent
-LISTEN_PROBABILITY=0.15        # 主动旁听概率 (0~1)
+# 触发策略: @/DM/thread 走硬规则,其他 LLM 自主决策(<SILENT> 标记沉默)
 MAX_CONTEXT_MESSAGES=100       # 上下文窗口消息数 (传给 LLM 的最近 N 条)
 MAX_CONTEXT_CHARS=10000        # 上下文窗口总字符上限 (按 token 粗估)
 MEMORY_SUMMARY_INTERVAL=100    # 每 N 条消息触发一次定期摘要

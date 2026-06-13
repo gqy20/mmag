@@ -107,9 +107,10 @@
 - 方案参考: `__init__.py` 只放 `__version__`,`Agent` / `Config` 走显式 `from mmag.agent import Agent`
 
 ### 12. 配置无 schema 校验
-- 位置: `src/mmag/config.py:67-105`
-- 问题: `listen_probability=float(os.getenv("LISTEN_PROBABILITY", "0.15"))` 若环境变量是 "abc" 会 crash;无范围校验
+- 位置: `src/mmag/config.py`
+- 问题: `float(os.getenv("X", "0.5"))` 若环境变量是 "abc" 会 crash;无范围校验
 - 方案参考: 改 pydantic BaseSettings / `dataclass` + 自定义 `__post_init__`
+- 注: `LISTEN_PROBABILITY` / `BOT_NAME` 已在重构中删除,需用其他字段做示范
 
 ---
 

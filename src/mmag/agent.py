@@ -64,10 +64,6 @@ class Agent:
             config=self.config,
         )
 
-        # 主动旁听触发器 (从 prompts.yml 加载, 改词不用改代码)
-        # 注:self.bot_username 还没拿到(start 阶段从 API 取),先传空,start() 拿到后 reload
-        self._triggers: dict = {}
-
         # WebSocket 客户端 (启动时构造, 调用 ws.run() 进入事件循环)
         self.ws: WebSocketClient | None = None
 
@@ -87,12 +83,6 @@ class Agent:
         self.bot_user_id = me["id"]
         self.bot_username = me["username"]
         log.info(f"       ✅ Bot: @{self.bot_username} ({self.bot_user_id}) [来源: API]")
-
-        # 拿到真实 username 后,reload 触发器配置 (里面 {bot_username} 占位符需要正确替换)
-        self._triggers = prompts.get_section(
-            "triggers",
-            bot_username=self.bot_username,
-        )
 
         # 阶段 2: LLM 配置检查
         log.info("[2/5] 检查 LLM 配置...")
@@ -188,7 +178,7 @@ class Agent:
 
         # 阶段 5 收尾：提示就绪
         log.info("🎯 进入事件监听循环...")
-        log.info(f"       旁听概率: {config.listen_probability:.0%}")
+        log.info(f"       触发策略: @/DM/thread 走硬规则，其他 LLM 自主决策")
         log.info(f"       上下文窗口: {config.max_context_messages} 条")
         log.info("       纯自然语言驱动，无命令")
         log.info("")
@@ -392,52 +382,85 @@ class Agent:
 
         log.info("%s [%s] %s", trace.prefix(), post["username"], message[:80])
 
-        # ====== @提及 必回 ======
-        if f"@{self.bot_username}" in message.lower():
+        # ====== 触发判定: 显式召唤(硬规则,不走 LLM 决策)======
+        if self._is_explicit_invocation(post):
             trace.set_context(msg_type="mention")
-            log.info("%s → 触发: @提及", trace.prefix())
+            log.info("%s → 触发: 显式召唤 (@/DM/thread)", trace.prefix())
             await self._respond(post, tag="mention")
             trace.clear()
             return
 
-        # ====== DM 私聊必回 ======
-        ch_info = self.mm.get_channel(channel_id)
-        if ch_info.get("type") == "D":
-            trace.set_context(msg_type="dm")
-            log.info("%s → 触发: DM 私聊", trace.prefix())
-            await self._respond(post, tag="chat")
-            trace.clear()
+        # ====== 触发判定: LLM 自主决策(一次 LLM 调用)======
+        trace.set_context(msg_type="decide")
+        log.info("%s → LLM 决策: 是否要回应...", trace.prefix())
+        response_text = await self._llm_decide_and_respond(post)
+        trace.clear()
+
+        if self._is_silent(response_text):
+            log.info("🤐 %s → LLM 决定沉默: %s", trace.prefix(), message[:60])
             return
 
-        # ====== 智能旁听 ======
-        should = await self._should_respond(post)
-        if should:
-            trace.set_context(msg_type="listen")
-            log.info("%s → 触发: 主动旁听", trace.prefix())
-            await self._respond(post, tag="chat")
-            trace.clear()
+        log.info("💬 %s → LLM 决定回应: %s", trace.prefix(), message[:60])
+        await self._send_message(post, response_text)
 
-    async def _should_respond(self, post: dict) -> bool:
-        """判断是否应该主动回复 — 触发词/问句/概率三层判定
+    def _is_explicit_invocation(self, post: dict) -> bool:
+        """显式召唤: 硬规则,优先级最高,不走 LLM 决策
 
-        触发词与问句尾缀从 triggers.yml 加载,改配置不用动代码。
+        包括:
+          - @ 提及我
+          - DM 私聊
+          - thread 回复我的消息
         """
-        message = post["message"]
+        message = post["message"].lower()
 
-        # 高概率触发词
-        if self._triggers["high_triggers"] and any(
-            w in message.lower() for w in self._triggers["high_triggers"]
-        ):
+        # @ 提及
+        if f"@{self.bot_username}" in message:
             return True
 
-        # 问句检测
-        if self._triggers["question_suffixes"]:
-            stripped = message.rstrip(self._triggers["strip_trailing"])
-            if stripped.endswith(tuple(self._triggers["question_suffixes"])):
-                return True
+        # DM 私聊
+        ch_info = self.mm.get_channel(post["channel_id"])
+        if ch_info.get("type") == "D":
+            return True
 
-        # 概率旁听
-        return random.random() < config.listen_probability
+        # thread 回复我的消息
+        root_id = post.get("root_id", "")
+        if root_id and self.memory.get_post_user(root_id) == self.bot_user_id:
+            return True
+
+        return False
+
+    async def _llm_decide_and_respond(self, post: dict) -> str:
+        """让 LLM 自主决定是否回应: 一次 LLM 调用,LLM 输出 <SILENT> 或回复文本
+
+        设计:
+          - 一次 LLM 调用完成"判断 + 生成" (无额外判定调用)
+          - LLM 拿到的 system_prompt 里有"收手原则"指令
+          - LLM 通过输出 <SILENT> 标记表达沉默
+        """
+        await self.typing_indicator(post["channel_id"])
+        context = self._build_context(post, mention=False)
+        try:
+            response = await self.llm.agent_loop(
+                messages=context["messages"],
+                system=context["system"],
+                tools=self.tool_registry.get_schema_list(),
+                max_rounds=config.max_tool_rounds,
+            )
+            return response or ""
+        except Exception as e:
+            log.error("       ❌ LLM 决策异常: %s", e)
+            return "<SILENT>"
+
+    def _is_silent(self, text: str) -> bool:
+        """解析 LLM 输出: 第一行是 <SILENT> 标记则视为沉默"""
+        if not text:
+            return True
+        first_line = text.strip().split("\n", 1)[0].strip()
+        return first_line == "<SILENT>" or first_line.startswith("<SILENT>")
+
+    async def _send_message(self, post: dict, message: str) -> str | None:
+        """实际发送消息到频道 (主聊天流)"""
+        return await self.reply(post, message)
 
     async def _respond(self, post: dict, *, tag: str, max_rounds: int | None = None):
         """响应用户消息（支持 Agentic Tool Use）

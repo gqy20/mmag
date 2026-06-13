@@ -5,7 +5,6 @@ prompts 单元测试
   - PromptManager.get() 字符串模板 + .format() 变量替换
   - 身份卡占位符全部传入时能正确渲染 (bot_username / bot_user_id)
   - 占位符缺失时静默返回原模板 (.format() KeyError 走 fallback 分支)
-  - PromptManager.get_section() 递归 .format() 替换
   - prompts.yml 节点缺失或非字符串时的兜底
 """
 
@@ -39,13 +38,6 @@ def tmp_prompts(tmp_path):
               {recent_speakers}
 
               你是 {bot_username}。
-
-            triggers:
-              high_triggers:
-                - "{bot_username}"
-                - "@{bot_username}"
-              question_suffixes:
-                - "?"
             """
         ),
         encoding="utf-8",
@@ -118,30 +110,6 @@ class TestPromptManagerGet:
         p.write_text("system_prompt:\n  - a list, not a string\n", encoding="utf-8")
         pm = PromptManager(p)
         assert pm.get("system_prompt") == ""
-
-
-class TestPromptManagerSection:
-    def test_section_renders_nested_placeholders(self, tmp_prompts):
-        sec = tmp_prompts.get_section(
-            "triggers",
-            bot_username="agent2",
-        )
-        # triggers 里的 {bot_username} 都被替换
-        assert "agent2" in sec["high_triggers"]
-        assert "@agent2" in sec["high_triggers"]
-        # 没有占位符残留
-        for trig in sec["high_triggers"]:
-            assert "{" not in trig
-        # question_suffixes 不含占位符，原样保留
-        assert sec["question_suffixes"] == ["?"]
-
-    def test_section_without_kwargs_returns_raw_copy(self, tmp_prompts):
-        sec = tmp_prompts.get_section("triggers")
-        # 原始占位符未替换
-        assert any("{bot_username}" in t for t in sec["high_triggers"])
-
-    def test_section_missing_node_returns_empty_dict(self, tmp_prompts):
-        assert tmp_prompts.get_section("nonexistent") == {}
 
 
 class TestFormatDict:
