@@ -20,6 +20,11 @@ from .tools import ToolRegistry
 # mmag 走的是 Anthropic SDK, 没这能力, 所以在 return 前兜底过滤。
 _RE_TOOL_CALL_XML = re.compile(r"<tool_call>\s*.*?\s*</tool_call>", re.DOTALL)
 
+# step-3.7-flash / Qwen 等模型偶发把思考过程作为普通 text 输出(而非结构化
+# ThinkingBlock),导致整段内心独白直接漏到频道。Anthropic SDK 只认 block.type ==
+# "thinking" 的结构化块, 文本里的 <think>...</think> 它不解析。需要后处理剥掉。
+_RE_THINKING = re.compile(r"<think>.*?</think>", re.DOTALL)
+
 if TYPE_CHECKING:
     from anthropic.types import (
         MessageParam,
@@ -73,9 +78,9 @@ class LLM:
             elapsed = time.monotonic() - t0
             log.debug("%s LLM 单轮调用 (%.3fs, %d 字符输出)", trace.prefix(), elapsed, len(texts))
             raw_text = "\n".join(texts)
-            # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML 噪声,
+            # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML / <think> 噪声,
             # 剥后空就保持哨兵, 让上层 Plan D 兜底决定是否重试
-            cleaned = _strip_tool_call_xml(raw_text).strip()
+            cleaned = _strip_model_artifacts(raw_text).strip()
             return cleaned if cleaned else "(模型返回为空)"
         except Exception as e:
             elapsed = time.monotonic() - t0
@@ -181,8 +186,8 @@ class LLM:
 
             # ---- 末轮强制收尾: 哪怕模型在 tools=[] 模式下还调了工具, 也不再执行 ----
             if is_final_round:
-                # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML 噪声
-                final_text = _strip_tool_call_xml("\n".join(text_parts)).strip()
+                # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML / <think> 噪声
+                final_text = _strip_model_artifacts("\n".join(text_parts)).strip()
                 total_elapsed = time.monotonic() - loop_t0
                 if final_text:
                     log.info(
@@ -208,8 +213,8 @@ class LLM:
 
             # ---- 判断是否需要继续循环 ----
             if not tool_calls:
-                # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML 噪声
-                final_text = _strip_tool_call_xml("\n".join(text_parts)).strip()
+                # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML / <think> 噪声
+                final_text = _strip_model_artifacts("\n".join(text_parts)).strip()
                 total_elapsed = time.monotonic() - loop_t0
                 log.info(
                     "%s Round %d/%d → 纯文本回复 (%.3fs) | 总耗时 %.3fs | 输出 %d 字符",
@@ -308,9 +313,9 @@ class LLM:
                 elif isinstance(content, str) and content.strip():
                     last_texts.append(content)
                 break
-        # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML 噪声;
-        # 剥后空走兜底, 不让 XML 漏给用户
-        cleaned = _strip_tool_call_xml("\n".join(reversed(last_texts))).strip()
+        # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML / <think> 噪声;
+        # 剥后空走兜底, 不让噪声漏给用户
+        cleaned = _strip_model_artifacts("\n".join(reversed(last_texts))).strip()
         return cleaned if cleaned else "⚠️ 处理超时，请重试"
 
 
@@ -374,3 +379,31 @@ def _strip_tool_call_xml(text: str) -> str:
     if "<tool_call>" not in text:
         return text
     return _RE_TOOL_CALL_XML.sub("", text)
+
+
+def _strip_thinking_tags(text: str) -> str:
+    """过滤 step-3.7-flash 等模型把 thinking 过程作为普通 text 输出的部分
+
+    背景:
+      Anthropic Claude 有结构化 ThinkingBlock (block.type == "thinking"),
+      SDK 自动识别。Anthropic 兼容 API 下的国产模型 (step-3.7-flash / Qwen 等)
+      训练时把思考过程也作为普通 text 输出, 通常包裹在 <think>...</think> 里,
+      SDK 不会解析, 整段内心独白会漏到频道。
+
+    设计同 _strip_tool_call_xml:
+      - 非贪婪 + re.DOTALL: 一次剥一个块, 不误伤中间的有效文本
+      - 快路径: 不含 "<think>" 子串时直接返回
+      - 剥后空由调用方走兜底
+    """
+    if "<think>" not in text:
+        return text
+    return _RE_THINKING.sub("", text)
+
+
+def _strip_model_artifacts(text: str) -> str:
+    """组合入口: 一次剥掉所有已知的国产模型训练痕迹输出
+
+    顺序: 先剥 tool_call XML (历史更长, 命中更多), 再剥 thinking 标签
+    (step-3.7-flash 偶发会同时出现两种)。两个剥后空都交给调用方走兜底。
+    """
+    return _strip_thinking_tags(_strip_tool_call_xml(text))
