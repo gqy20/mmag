@@ -65,7 +65,8 @@ class Memory:
                 last_interaction REAL,
                 topics TEXT,
                 active_hours TEXT,
-                _question_count INTEGER DEFAULT 0
+                _question_count INTEGER DEFAULT 0,
+                is_bot INTEGER DEFAULT 0
             )
             """
         )

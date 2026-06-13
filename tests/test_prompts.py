@@ -39,6 +39,9 @@ def tmp_prompts(tmp_path):
               ## 近期发言者
               {recent_speakers}
 
+              ## 频道成员
+              {channel_members}
+
               你是 {bot_name}。
 
             triggers:

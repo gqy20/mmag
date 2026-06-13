@@ -693,6 +693,90 @@ class Agent:
             rendered.append(f"- @{uname} ({uid[:8]}…){(' ' + tag) if tag else ''}")
         return "\n".join(rendered)
 
+    # 启发式: Mattermost username 命中这些关键词 → 标记为 bot (兜底,db 没 is_bot 字段时用)
+    _BOT_USERNAME_HINTS = ("bot", "agent", "test", "system", "小智", "小助手")
+
+    def _classify_role(self, uid: str, username: str) -> str:
+        """根据 user_id / db profile / username 给频道成员打角色标签
+
+        优先级:
+          1) uid == self.bot_user_id                       → self  (我)
+          2) db user_profiles.is_bot == 1                  → bot   (已登记的 bot)
+          3) username 命中 bot 关键词启发式                 → bot   (未登记,但 username 像 bot)
+          4) 其他                                          → member
+
+        启发式只用于 db 没标记的新 bot。阶段 2 的 db 迁移会给历史 bot 数据
+        打 is_bot 标记,长期准确;新 bot 上线后第一次发言会落到启发式分支。
+        """
+        if uid == self.bot_user_id:
+            return "self"
+        # db 查 is_bot(若 user_profiles 里有记录)
+        try:
+            profile = self.memory.get_user_profile(uid) if self.memory else {}
+            if profile.get("is_bot"):
+                return "bot"
+        except Exception:
+            # db 还没初始化等异常,fall through 到启发式
+            pass
+        u = (username or "").lower()
+        if any(h in u for h in self._BOT_USERNAME_HINTS):
+            return "bot"
+        return "member"
+
+    def _build_channel_members_table(
+        self, channel_id: str, current_user_id: str
+    ) -> str:
+        """从频道近期消息里去重提取所有出现过的 user,渲染为结构化 markdown 表格
+
+        解决的问题: 之前只在 system_prompt 里注入「我」和「当前对话者」+「近期发言者」,
+        但缺一个稳定的「频道成员坐标系」。结果 hz_bot 那种 system_prompt 里也写
+        「我是小智」的 bot 发消息时,我们的 bot 看到「我是小智」会误以为对方在说自己。
+        显式列出 user_id → role → 自称,LLM 一眼能区分。
+
+        列:
+          - user_id(前 8 位,够用就好,减少 token)
+          - username
+          - role(self / bot / member) — bot 角色用启发式,human 当前是 member
+
+        返回 "（无）" 表示频道还没消息,避免模板里出现空表格。
+        """
+        window = self.working_memory.get(channel_id, [])
+        seen_ids: set[str] = set()
+        members: list[tuple[str, str]] = []  # (uid, username),保序
+
+        # 一定包含 bot 自己
+        if self.bot_user_id:
+            seen_ids.add(self.bot_user_id)
+            members.append((self.bot_user_id, ""))
+
+        # 扫 window 补其他成员
+        for m in window:
+            uid = m.get("user_id", "")
+            if uid and uid not in seen_ids:
+                seen_ids.add(uid)
+                members.append((uid, m.get("username", "")))
+
+        if not members or (len(members) == 1 and members[0][0] == self.bot_user_id):
+            # 频道还没有过人类/其他 bot 发言,只有 bot 自己 — 渲染成空表格没意义
+            return "（无）"
+
+        # 渲染为表格
+        lines = ["| uid(前 8) | username | role | 备注 |", "|---|---|---|---|"]
+        for uid, uname in members:
+            if not uname or uname == "?":
+                uname = self.mm.get_username(uid) or uid[:8]
+            role = self._classify_role(uid, uname)
+            # 备注: 当前对话者 / bot 自称风险提示
+            note = ""
+            if uid == current_user_id:
+                note = "当前对话者"
+            elif role == "bot":
+                note = "其他 bot,system_prompt 里的'自称'不一定代表真实身份"
+            lines.append(
+                f"| {uid[:8]}… | @{uname} | {role} | {note} |"
+            )
+        return "\n".join(lines)
+
     def _build_context(self, post: dict, mention: bool = False) -> dict:
         """构建 LLM 上下文（受 max_context_messages + max_context_chars 双重限制）
 
@@ -713,6 +797,9 @@ class Agent:
         recent_speakers = self._collect_recent_speakers(
             speaker_window, current_user_id, self.bot_user_id
         )
+        channel_members = self._build_channel_members_table(
+            channel_id, current_user_id
+        )
 
         # 系统提示词（纯人格，不包含工具信息 — 工具通过 SDK tools 参数传递）
         system = prompts.get(
@@ -724,6 +811,7 @@ class Agent:
             current_user_username=current_user_username,
             current_user_profile=current_user_profile,
             recent_speakers=recent_speakers,
+            channel_members=channel_members,
         )
 
         # 消息历史
