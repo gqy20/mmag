@@ -42,6 +42,7 @@ _FIELD_TO_ENV: dict[str, str] = {
     "max_images_per_msg": "MAX_IMAGES_PER_MSG",
     "max_image_bytes": "MAX_IMAGE_BYTES",
     "max_tool_rounds": "MAX_TOOL_ROUNDS",
+    "use_sdk_llm": "USE_SDK_LLM",
 }
 # 敏感字段（值要脱敏打印，只显示前后几位）
 _SECRET_FIELD_NAMES: frozenset[str] = frozenset({"mm_token", "anthropic_api_key"})
@@ -110,6 +111,9 @@ class Config:
     # 调高 → 复杂任务可拆更多步,但单次请求耗时和 token 都线性增加;
     # 调低 → 快速失败,长任务会被强制收尾(返回最后一轮文本)。
     max_tool_rounds: int = int(os.getenv("MAX_TOOL_ROUNDS", "10"))  # 默认 10
+    # ── SDK LLM ──
+    # 是否使用 Claude Agent SDK 替代手写 LLM 循环 (默认启用)
+    use_sdk_llm: bool = os.getenv("USE_SDK_LLM", "true").lower() in ("true", "1", "yes")
 
     @property
     def ws_url(self) -> str:

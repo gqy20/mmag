@@ -10,11 +10,13 @@ import json
 import random
 import time
 from datetime import datetime
+from pathlib import Path
 
 from .client import PROP_FROM_BOT, PROP_TRUE, MMClient
 from .config import _log_config_loading, config
 from .llm import LLM, LLMError
 from .logger import get_logger, trace
+from .sdk_llm import SDKLLM, SDKLLMError
 from .mcp_bridge import MCPClientBridge
 from .memory import Memory
 from .memory_compactor import MemoryCompactor
@@ -32,6 +34,7 @@ class Agent:
         self.config = config
         self.mm = MMClient()
         self.llm = LLM()
+        self.sdk_llm = SDKLLM()  # SDK adapter (与 LLM 共存, 通过 config.use_sdk_llm 切换)
         self.memory = Memory(config.memory_db_path)
 
         # 工具注册系统
@@ -114,6 +117,29 @@ class Agent:
                 log.info("       ⏭️ 无 MCP 配置 (.mcp.json 不存在或为空)")
         except Exception as e:
             log.warning("       ⚠️ MCP 加载失败（不影响运行）: %s", e)
+
+        # 阶段 3.5: 初始化 SDK LLM Client (持久连接)
+        log.info("[3.5/5] 初始化 SDK LLM Client...")
+        if config.use_sdk_llm:
+            try:
+                from .sdk_tools import create_sdk_tools
+
+                sdk_tool_funcs = create_sdk_tools(self.mm, self.memory)
+
+                # 解析 .mcp.json 路径供外部 MCP 使用
+                _mcp_candidate = Path(__file__).resolve().parents[2] / ".mcp.json"
+                mcp_json_path = str(_mcp_candidate) if _mcp_candidate.exists() else None
+
+                await self.sdk_llm.start(
+                    tool_funcs=sdk_tool_funcs,
+                    mcp_json_path=mcp_json_path,
+                )
+                log.info("       ✅ SDK LLM 就绪 (持久连接)")
+            except Exception as e:
+                log.error("       ❌ SDK LLM 初始化失败, 回退到 legacy LLM: %s", e)
+                config.use_sdk_llm = False  # 自动降级
+        else:
+            log.info("       ⏭️ SDK LLM 未启用 (use_sdk_llm=False), 使用 legacy LLM")
 
         # 阶段 4: 预加载频道消息到缓存
         log.info("[4/5] 预加载频道消息...")
@@ -439,8 +465,9 @@ class Agent:
         """
         await self.typing_indicator(post["channel_id"])
         context = self._build_context(post, mention=False)
+        llm_backend = self.sdk_llm if config.use_sdk_llm else self.llm
         try:
-            response = await self.llm.agent_loop(
+            response = await llm_backend.agent_loop(
                 messages=context["messages"],
                 system=context["system"],
                 tools=self.tool_registry.get_schema_list(),
@@ -482,15 +509,19 @@ class Agent:
             tag,
             len(context["messages"]),
         )
+        # 选择 LLM 后端: SDK adapter 或 legacy LLM
+        llm_backend = self.sdk_llm if config.use_sdk_llm else self.llm
+        llm_error_type = SDKLLMError if config.use_sdk_llm else LLMError
+
         try:
-            response = await self.llm.agent_loop(
+            response = await llm_backend.agent_loop(
                 messages=context["messages"],
                 system=context["system"],
                 tools=self.tool_registry.get_schema_list(),
                 tool_registry=self.tool_registry,
                 max_rounds=rounds,
             )
-        except LLMError as e:
+        except llm_error_type as e:
             # LLM 调用失败 (网络/SDK异常) — 给用户友好提示 + log 留底
             log.error("%s [%s] LLM 调用失败: %s", trace.prefix(), tag, e, exc_info=True)
             response = "⚠️ LLM 服务暂时不可用，请稍后再试。"
@@ -507,7 +538,7 @@ class Agent:
                 tag,
             )
             try:
-                retry_resp = await self.llm.chat(
+                retry_resp = await llm_backend.chat(
                     messages=context["messages"],
                     system=context["system"],
                 )
@@ -519,7 +550,7 @@ class Agent:
                         len(retry_resp),
                     )
                     response = retry_resp
-            except LLMError as e:
+            except (LLMError, SDKLLMError) as e:
                 log.warning("%s [%s] chat() 重试也失败: %s", trace.prefix(), tag, e)
 
         elapsed = time.monotonic() - t0
@@ -986,6 +1017,13 @@ class Agent:
                 await self.ws.close()
             except Exception as e:
                 log.error("ws.close 失败: %s", e, exc_info=True)
+
+        # 1.5) 关闭 SDK LLM 持久连接
+        if hasattr(self, "sdk_llm"):
+            try:
+                await self.sdk_llm.stop()
+            except Exception as e:
+                log.error("sdk_llm.stop 失败: %s", e, exc_info=True)
 
         # 2) 关闭 MCP 外部连接 (会注销注入的 mcp_* 工具)
         if hasattr(self, "mcp_bridge"):
