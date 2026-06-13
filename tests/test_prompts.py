@@ -26,11 +26,19 @@ def tmp_prompts(tmp_path):
         textwrap.dedent(
             """\
             system_prompt: |
-              ## 身份卡
+              ## 身份卡（你自己）
               - 用户名: @{bot_username}
               - 用户 ID: {bot_user_id}
               - 称呼: {bot_name}
               - 显示名: {bot_display_name}
+
+              ## 当前对话者
+              - 用户名: @{current_user_username}
+              - 用户 ID: {current_user_id}
+              - 已知画像: {current_user_profile}
+
+              ## 近期发言者
+              {recent_speakers}
 
               你是 {bot_name}。
 
@@ -78,6 +86,42 @@ class TestPromptManagerGet:
         assert "@agent2" in out
         # 缺失的占位符保留原样，不崩
         assert "{bot_user_id}" in out
+
+    def test_renders_current_user_and_speakers(self, tmp_prompts):
+        """新功能：当前对话者 + 近期发言者应被注入到 system_prompt"""
+        out = tmp_prompts.get(
+            "system_prompt",
+            bot_username="agent2",
+            bot_user_id="u7qkmtkja78rdrhkn569wc4iar",
+            bot_name="小智",
+            bot_display_name="小智",
+            current_user_id="u_gqy_12345678",
+            current_user_username="gqy",
+            current_user_profile="风格:技术型，关注:Python/Docker",
+            recent_speakers="- @gqy (u_gqy_12…)\n- @whz (u_whz_34…)",
+        )
+        assert "@gqy" in out
+        assert "u_gqy_12345678" in out
+        assert "风格:技术型" in out
+        # 近期发言者列表整段注入
+        assert "@whz" in out
+        assert "u_whz_34" in out
+
+    def test_missing_current_user_keeps_placeholder(self, tmp_prompts):
+        """没传 current_user_xxx 时应该保留 {key} 占位符（不崩）"""
+        out = tmp_prompts.get(
+            "system_prompt",
+            bot_username="agent2",
+            bot_user_id="u7qk",
+            bot_name="小智",
+            bot_display_name="小智",
+            # current_user_* 全部漏传
+            recent_speakers="（无）",
+        )
+        # 缺失的占位符保留原样
+        assert "{current_user_id}" in out
+        assert "{current_user_username}" in out
+        assert "{current_user_profile}" in out
 
     def test_missing_node_returns_empty_string(self, tmp_prompts):
         assert tmp_prompts.get("nonexistent_node") == ""

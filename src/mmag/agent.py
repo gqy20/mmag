@@ -636,6 +636,65 @@ class Agent:
             else []
         )
 
+    def _format_user_profile_summary(self, user_id: str) -> str:
+        """把 user 画像压成 ~200 字符可读文本,给 system_prompt 当「已知画像」用
+
+        新用户(memory 里没画像)返回 "（暂无画像）",让模板渲染时不会留下空段。
+        """
+        if not user_id:
+            return "（暂无画像）"
+        profile = self.memory.get_user_profile_decoded(user_id)
+        if not profile:
+            return "（暂无画像）"
+        parts: list[str] = []
+        style = profile.get("style")
+        if style:
+            parts.append(f"风格:{style}")
+        topics = profile.get("topics") or []
+        if topics:
+            parts.append("关注:" + "/".join(str(t) for t in topics[:5]))
+        msg_count = profile.get("message_count")
+        if msg_count:
+            parts.append(f"已聊过{msg_count}条")
+        text = "，".join(parts) if parts else "（暂无画像）"
+        return text[:200]
+
+    def _collect_recent_speakers(
+        self, window: list[dict], current_user_id: str, bot_user_id: str
+    ) -> str:
+        """从近期消息窗口里去重提取发言者,按出现顺序
+
+        一定包含当前消息作者(current_user_id)和 bot 自身;其他用户按在 window
+        里出现的先后顺序追加。渲染为多行 markdown 列表,空时返回 "（无）"。
+        """
+        seen: list[tuple[str, str]] = []  # (user_id, username),保持顺序
+        seen_ids: set[str] = set()
+
+        def _add(uid: str, uname: str) -> None:
+            if uid and uid not in seen_ids:
+                seen_ids.add(uid)
+                seen.append((uid, uname or "?"))
+
+        # 1) 当前作者 + bot 自身 永远在最前
+        _add(current_user_id, "")
+        _add(bot_user_id, "")
+
+        # 2) 扫 window,补其他发言者
+        for m in window:
+            _add(m.get("user_id", ""), m.get("username", ""))
+
+        if not seen:
+            return "（无）"
+        # 补全 username（current_user_id / bot_user_id 在 seen[0..1] 可能是空 username）
+        # 用 mm client 兜底查一次,失败就显示 user_id 前 8 位
+        rendered = []
+        for uid, uname in seen:
+            if not uname or uname == "?":
+                uname = self.mm.get_username(uid) or uid[:8]
+            tag = "（你）" if uid == bot_user_id else ("（当前）" if uid == current_user_id else "")
+            rendered.append(f"- @{uname} ({uid[:8]}…){(' ' + tag) if tag else ''}")
+        return "\n".join(rendered)
+
     def _build_context(self, post: dict, mention: bool = False) -> dict:
         """构建 LLM 上下文（受 max_context_messages + max_context_chars 双重限制）
 
@@ -648,6 +707,15 @@ class Agent:
         ch_name = ch_info.get("display_name", channel_id[:8])
         ch_real_name = ch_info.get("name", "")  # 频道短名 (e.g. "general")
 
+        # 对话者信息(给 system_prompt 注入用)
+        current_user_id = post.get("user_id", "")
+        current_user_username = post.get("username", "?")
+        current_user_profile = self._format_user_profile_summary(current_user_id)
+        speaker_window = self.working_memory.get(channel_id, [])
+        recent_speakers = self._collect_recent_speakers(
+            speaker_window, current_user_id, self.bot_user_id
+        )
+
         # 系统提示词（纯人格，不包含工具信息 — 工具通过 SDK tools 参数传递）
         system = prompts.get(
             "system_prompt",
@@ -655,6 +723,10 @@ class Agent:
             bot_display_name=config.bot_display_name,
             bot_username=self.bot_username,
             bot_user_id=self.bot_user_id,
+            current_user_id=current_user_id,
+            current_user_username=current_user_username,
+            current_user_profile=current_user_profile,
+            recent_speakers=recent_speakers,
         )
 
         # 消息历史
