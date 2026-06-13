@@ -9,16 +9,16 @@ from typing import TYPE_CHECKING, Any, cast
 
 from anthropic import AsyncAnthropic
 
+from .config import config
+from .logger import get_logger, trace
+from .tools import ToolRegistry
+
 # step-3.7-flash 等国产模型训练痕迹: 在 tools=[] 模式下, 偶发按 ChatML 模板
 # 把"伪 tool call"直接输出成 XML 字符串 (而非结构化 tool_use block)。
 # Anthropic SDK 只看结构化 tool_use, 不会 parse 这段, 会作为普通 text 漏给用户。
 # 业界做法: Qwen-Agent / Step-Agent-SDK 在 SDK 层做 XML → 结构化 call 的反向解析。
 # mmag 走的是 Anthropic SDK, 没这能力, 所以在 return 前兜底过滤。
 _RE_TOOL_CALL_XML = re.compile(r"<tool_call>\s*.*?\s*</tool_call>", re.DOTALL)
-
-from .config import config
-from .logger import get_logger, trace
-from .tools import ToolRegistry
 
 if TYPE_CHECKING:
     from anthropic.types import (

@@ -24,7 +24,6 @@ else:
 _FIELD_TO_ENV: dict[str, str] = {
     "mm_url": "MM_URL",
     "mm_token": "MM_TOKEN",
-    "mm_bot_user_id": "MM_BOT_USER_ID",
     "mm_team_id": "MM_TEAM_ID",
     "mm_channel_id": "MM_CHANNEL_ID",
     "anthropic_api_key": "ANTHROPIC_API_KEY",
@@ -74,7 +73,6 @@ class Config:
     # Mattermost
     mm_url: str = os.getenv("MM_URL", "http://localhost:8065").rstrip("/")
     mm_token: str = os.getenv("MM_TOKEN", "")
-    mm_bot_user_id: str = os.getenv("MM_BOT_USER_ID", "")
     mm_team_id: str = os.getenv("MM_TEAM_ID", "")
     mm_channel_id: str = os.getenv("MM_CHANNEL_ID", "")  # 指定频道 ID，留空=监听 Team 下所有频道
     # Anthropic
