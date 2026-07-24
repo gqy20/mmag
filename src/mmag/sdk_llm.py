@@ -18,6 +18,7 @@ import json
 import re
 import time
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -381,51 +382,82 @@ class SDKLLM:
         )
         return options
 
-    # ---- Prompt 构建 ----
+    # ---- 内容构建 ----
 
-    def _build_prompt(self, messages: list[dict], system: str = "") -> str:
-        """将 Anthropic 格式消息列表展平为 prompt 字符串。
+    def _build_content_blocks(
+        self, messages: list[dict], system: str = ""
+    ) -> list[dict]:
+        """将消息列表转换为结构化 content blocks, 保留 image blocks。
 
-        处理多模态消息: text block 直出, image block 标注为 [图片附件]。
-        System prompt 作为 [System] 前缀注入。
+        替代旧的 _build_prompt() — 不再展平为文本字符串,
+        image block 原样保留, 使 CLI 能传递给 Anthropic Vision API。
+
+        text block 带 [role] 标签 (与旧实现一致), image block 无标签。
         """
-        parts: list[str] = []
+        blocks: list[dict] = []
         if system:
-            parts.append(f"[System]\n{system}")
+            blocks.append({"type": "text", "text": f"[System]\n{system}"})
 
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
             if isinstance(content, str):
-                parts.append(f"[{role.capitalize()}]\n{content}")
+                blocks.append(
+                    {"type": "text", "text": f"[{role.capitalize()}]\n{content}"}
+                )
             elif isinstance(content, list):
-                # 多模态: content 是 [text_block, image_block, ...]
                 text_parts: list[str] = []
-                image_count = 0
                 for block in content:
-                    if isinstance(block, dict):
-                        btype = block.get("type", "")
-                        if btype == "text":
-                            text_parts.append(block.get("text", ""))
-                        elif btype == "image":
-                            source = block.get("source", {})
-                            media_type = source.get("media_type", "image")
-                            text_parts.append(f"[图片附件: {media_type}]")
-                            image_count += 1
-                combined_text = "\n".join(filter(None, text_parts))
-                if combined_text:
-                    label = f"[{role.capitalize()}]"
-                    if image_count > 0:
-                        label += f" (含{image_count}张图片)"
-                    parts.append(f"{label}\n{combined_text}")
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type", "")
+                    if btype == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif btype == "image":
+                        if text_parts:
+                            blocks.append(
+                                {
+                                    "type": "text",
+                                    "text": f"[{role.capitalize()}]\n"
+                                    + "\n".join(filter(None, text_parts)),
+                                }
+                            )
+                            text_parts = []
+                        blocks.append(block)
+                if text_parts:
+                    blocks.append(
+                        {
+                            "type": "text",
+                            "text": f"[{role.capitalize()}]\n"
+                            + "\n".join(filter(None, text_parts)),
+                        }
+                    )
 
-        return "\n\n".join(parts)
+        return blocks
+
+    async def _message_stream(
+        self, content: list[dict]
+    ) -> AsyncIterator[dict[str, Any]]:
+        """构造 stream-json 格式的单条用户消息 (AsyncIterable)。
+
+        SDK client.query(AsyncIterable) 路径会逐条 json.dumps 写入 CLI stdin,
+        绕过 query(str) 路径的 content-type=str 限制, 使 image blocks 原样到达 CLI。
+        """
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+            "parent_tool_use_id": None,
+            "session_id": "default",
+        }
 
     # ---- 核心查询执行 ----
 
-    async def _execute_query(self, prompt: str) -> tuple[str, bool]:
+    async def _execute_query(self, content: list[dict]) -> tuple[str, bool]:
         """执行 query() + receive_response() 循环。
+
+        Args:
+            content: 结构化 content blocks (含 text/image blocks)
 
         Returns:
             (response_text, had_error) 元组
@@ -443,13 +475,19 @@ class SDKLLM:
         # Session 追踪（用于日志关联，不持久化到磁盘）
         _session_tag = getattr(self.client, '_session_id', f'call-{self.call_count}')
 
+        _image_count = sum(
+            1 for b in content if isinstance(b, dict) and b.get("type") == "image"
+        )
         log.debug(
-            "SDK query #%d | session=%s | prompt=%d chars",
-            self.call_count, _session_tag, len(prompt),
+            "SDK query #%d | session=%s | blocks=%d images=%d",
+            self.call_count,
+            _session_tag,
+            len(content),
+            _image_count,
         )
 
         try:
-            await self.client.query(prompt)
+            await self.client.query(self._message_stream(content))
             async for msg in self.client.receive_response():
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
@@ -515,19 +553,19 @@ class SDKLLM:
         """通过 SDK 执行 agentic 循环。公共 API 与 LLM.agent_loop 完全一致。
 
         SDK 内部处理多轮 tool-use 循环, 本 adapter 只负责:
-        1. 展平 messages 为 prompt 字符串
+        1. 构建 content blocks (保留 image blocks)
         2. 调用 query + receive_response
         3. 提取文本 + artifact stripping
         4. 返回最终回复字符串
         """
-        prompt = self._build_prompt(messages, system)
+        content = self._build_content_blocks(messages, system)
 
         try:
             # 自动重连
             if not self._connected:
                 await self.reconnect()
 
-            raw_text, is_error = await self._execute_query(prompt)
+            raw_text, is_error = await self._execute_query(content)
 
             # 过滤国产模型训练痕迹
             cleaned = _strip_model_artifacts(raw_text).strip()
@@ -550,13 +588,13 @@ class SDKLLM:
         self, messages: list[dict], system: str = "", max_tokens: int = 1024
     ) -> str:
         """单轮对话 via SDK。用于 Plan D 兜底和 MemoryCompactor。"""
-        prompt = self._build_prompt(messages, system)
+        content = self._build_content_blocks(messages, system)
 
         try:
             if not self._connected:
                 await self.reconnect()
 
-            raw_text, _is_error = await self._execute_query(prompt)
+            raw_text, _is_error = await self._execute_query(content)
             cleaned = _strip_model_artifacts(raw_text).strip()
             return cleaned if cleaned else "(模型返回为空)"
         except Exception as e:

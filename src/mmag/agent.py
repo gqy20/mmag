@@ -27,6 +27,61 @@ from .ws_client import WebSocketClient
 log = get_logger(__name__)
 
 
+# MIME 精确值 → 视为文本文档 (text/* 前缀单独判断)
+_TEXT_MIME_EXACT = frozenset({
+    "application/json",
+    "application/ld+json",
+    "application/xml",
+    "application/x-yaml",
+    "application/yaml",
+    "application/x-yml",
+    "application/javascript",
+    "application/x-javascript",
+    "application/x-sh",
+    "application/x-shellscript",
+    "application/x-toml",
+    "application/toml",
+    "application/x-latex",
+    "application/x-httpd-php",
+    "application/sql",
+    "application/graphql",
+})
+# 文件扩展名 → 视为文本文档 (当 MIME 不可靠时, 如 application/octet-stream)
+_TEXT_EXTENSIONS = frozenset({
+    ".md", ".markdown", ".txt", ".rst", ".log",
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".json", ".json5", ".jsonl",
+    ".xml", ".html", ".htm", ".css", ".csv", ".tsv",
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs",
+    ".sh", ".bash", ".zsh", ".fish",
+    ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".cc",
+    ".java", ".kt", ".scala", ".rb", ".php", ".pl",
+    ".sql", ".graphql", ".gql",
+    ".lua", ".r", ".dart", ".swift", ".clj",
+    ".vue", ".svelte",
+    ".env", ".gitignore", ".dockerfile",
+    ".tex", ".bib",
+})
+
+
+def _is_text_attachment(mime: str, filename: str) -> bool:
+    """判断附件是否为文本文档 (可下载并 UTF-8 解码)
+
+    先查 MIME 前缀/精确匹配, 再用文件扩展名兜底
+    (Mattermost 对 yaml 等 MIME 可能返回 application/octet-stream)
+    """
+    if mime.startswith("text/"):
+        return True
+    if mime in _TEXT_MIME_EXACT:
+        return True
+    # octet-stream 或空 MIME → 查扩展名兜底
+    if not mime or mime == "application/octet-stream":
+        ext = Path(filename).suffix.lower()
+        if ext in _TEXT_EXTENSIONS:
+            return True
+    return False
+
+
 class Agent:
     """Mattermost AI Agent 主类 — 支持 Agentic Tool Use"""
 
@@ -372,10 +427,13 @@ class Agent:
         # 补充 username
         post["username"] = self.mm.get_username(user_id)
 
-        # 多模态: 下载图片附件, 构造 image block 列表, 注入到 _build_context
+        # 多模态: 下载图片/文本文档附件, 构造 content block 列表, 注入到 _build_context
         # 注意: _llm_content_blocks 是临时字段, 仅供本次 LLM 调用, 不入 message_log
-        post["_llm_content_blocks"] = await self._build_image_blocks(
-            file_metas, max_count=config.max_images_per_msg, max_bytes=config.max_image_bytes
+        post["_llm_content_blocks"] = await self._build_attachment_blocks(
+            file_metas,
+            max_count=config.max_images_per_msg,
+            max_bytes=config.max_image_bytes,
+            max_text_chars=config.max_text_attachment_chars,
         )
 
         # 缓存消息
@@ -568,46 +626,51 @@ class Agent:
             result = await self.reply(post, response)
             log.info("%s [%s] 回复已发送 post_id=%s", trace.prefix(), tag, result)
 
-    async def _build_image_blocks(
-        self, file_metas: list[dict], *, max_count: int, max_bytes: int
+    async def _build_attachment_blocks(
+        self, file_metas: list[dict], *, max_count: int, max_bytes: int,
+        max_text_chars: int = 50000,
     ) -> list[dict] | None:
-        """从 Mattermost 附件元信息列表里下载图片, 构造 Anthropic image blocks
+        """从 Mattermost 附件元信息列表里下载图片/文本文档, 构造 content blocks
 
-        多图场景下, 符合下载条件的图片用 `asyncio.gather` 并发拉取,
-        比串行快 N 倍 (N = 图片数, 受 MM 服务器并发限制)。
+        支持的附件类型:
+        - image/* → base64 image block (并发下载)
+        - text/* + application/json → text block (UTF-8 解码, 截断保护)
+        - 其他 (PDF/zip/...) → 占位文本
 
         Args:
             file_metas: post["metadata"]["files"] 中的附件元信息列表
-                (含 id / mime_type / name / size / width / height)
             max_count: 最多下载几张图, 超过的用占位文本
-            max_bytes: 单张字节上限, 超过的用占位文本
+            max_bytes: 单张图片字节上限, 超过的用占位文本
+            max_text_chars: 文本附件字符上限, 超过截断
 
         Returns:
-            成功时: list[dict] (image blocks); 无图/全失败时: None
-            注意: 失败的文件会被记到日志, 不抛异常 (LLM 不能看见图就让用户配文可见)
+            成功时: list[dict] (content blocks); 无附件/全失败时: None
         """
         if not file_metas:
             return None
 
-        # 1) 分类: 图片 vs 非图片 (早期过滤,避免浪费下载配额)
+        # 1) 分类: 图片 / 文本文档 / 其他
         image_metas: list[dict] = []
+        text_metas: list[dict] = []
         skipped_notes: list[str] = []
         for fmeta in file_metas:
             mime = (fmeta.get("mime_type") or "").lower()
-            if not mime.startswith("image/"):
-                # 非图片附件 (PDF/zip/...) 暂不支持视觉化, 用文本占位
+            name = fmeta.get("name", "")
+            if mime.startswith("image/"):
+                image_metas.append(fmeta)
+            elif _is_text_attachment(mime, name):
+                text_metas.append(fmeta)
+            else:
                 skipped_notes.append(f"[附件: {fmeta.get('name', '?')} ({mime})]")
-                continue
-            image_metas.append(fmeta)
 
-        # 2) 数量截断: 只下前 max_count 张
+        # 2) 图片数量截断
         if len(image_metas) > max_count:
             for fmeta in image_metas[max_count:]:
                 skipped_notes.append(f"[图片过多已跳过: {fmeta.get('name', '?')}]")
             image_metas = image_metas[:max_count]
 
-        # 3) 预估大小过滤 (避免不必要的下载)
-        download_list: list[tuple[str, str, str, int]] = []  # (fid, name, mime, declared_size)
+        # 3) 预估大小过滤 (图片)
+        image_download_list: list[tuple[str, str, str, int]] = []
         for fmeta in image_metas:
             fid = fmeta.get("id", "")
             name = fmeta.get("name", "?")
@@ -616,23 +679,40 @@ class Agent:
             if size and size > max_bytes:
                 skipped_notes.append(f"[图片过大已跳过: {name} ({size} bytes)]")
                 continue
-            download_list.append((fid, name, mime, size))
+            image_download_list.append((fid, name, mime, size))
 
-        if not download_list and not skipped_notes:
+        # 4) 文本文档预估大小过滤 (复用 max_bytes 避免下载超大文件)
+        text_download_list: list[tuple[str, str, str]] = []  # (fid, name, mime)
+        for fmeta in text_metas:
+            fid = fmeta.get("id", "")
+            name = fmeta.get("name", "?")
+            mime = (fmeta.get("mime_type") or "").lower()
+            size = fmeta.get("size") or 0
+            if size and size > max_bytes:
+                skipped_notes.append(f"[文本附件过大已跳过: {name} ({size} bytes)]")
+                continue
+            text_download_list.append((fid, name, mime))
+
+        all_downloads = image_download_list + text_download_list
+        if not all_downloads and not skipped_notes:
             return None
 
-        # 4) 并发下载 (asyncio.gather 一次拉完, 顺序与 download_list 对齐)
-        if download_list:
+        # 5) 并发下载 (图片 + 文本文档一起 gather)
+        if all_downloads:
             results = await asyncio.gather(
-                *(self.mm.get_file_bytes_async(fid) for fid, _, _, _ in download_list),
+                *(self.mm.get_file_bytes_async(fid) for fid, *_ in all_downloads),
                 return_exceptions=True,
             )
         else:
             results = []
 
-        # 5) 拼装 image blocks, 失败的降级为 skipped note
-        image_blocks: list[dict] = []
-        for (fid, name, mime, _declared_size), result in zip(download_list, results, strict=True):
+        # 6) 拼装 content blocks
+        content_blocks: list[dict] = []
+        n_images = len(image_download_list)
+
+        # 6a) 图片 → image blocks
+        for i, (fid, name, mime, _declared_size) in enumerate(image_download_list):
+            result = results[i]
             if isinstance(result, Exception):
                 log.warning("下载图片异常 file_id=%s: %s", fid[:12], result)
                 skipped_notes.append(f"[图片下载失败: {name}]")
@@ -652,7 +732,7 @@ class Agent:
                 skipped_notes.append(f"[图片编码失败: {name}]")
                 continue
 
-            image_blocks.append(
+            content_blocks.append(
                 {
                     "type": "image",
                     "source": {
@@ -670,20 +750,54 @@ class Agent:
                 actual_mime or mime,
             )
 
-        if not image_blocks and not skipped_notes:
-            return None
-        if not image_blocks:
-            # 全失败, 不返回 blocks (后续 _build_context 会用纯文本路径)
+        # 6b) 文本文档 → text blocks
+        for j, (fid, name, mime) in enumerate(text_download_list):
+            result = results[n_images + j]
+            if isinstance(result, Exception):
+                log.warning("下载文本附件异常 file_id=%s: %s", fid[:12], result)
+                skipped_notes.append(f"[文本附件下载失败: {name}]")
+                continue
+            if not result:
+                skipped_notes.append(f"[文本附件下载失败: {name}]")
+                continue
+            data, _actual_mime = result
+            try:
+                text = data.decode("utf-8", errors="replace")
+            except Exception as e:
+                log.warning("文本附件解码失败 file_id=%s: %s", fid[:12], e)
+                skipped_notes.append(f"[文本附件解码失败: {name}]")
+                continue
+
+            truncated = len(text) > max_text_chars
+            if truncated:
+                text = text[:max_text_chars] + f"\n\n[... 已截断, 原文 {len(text)} 字符 ...]"
+
+            content_blocks.append(
+                {
+                    "type": "text",
+                    "text": f"[附件: {name}]\n{text}",
+                }
+            )
             log.info(
-                "%s 所有图片附件均无法加载, 降级为文本: %s",
+                "%s 已加载文本附件: %s (%d bytes%s, mime=%s)",
+                trace.prefix(),
+                name,
+                len(data),
+                ", 已截断" if truncated else "",
+                mime,
+            )
+
+        if not content_blocks and not skipped_notes:
+            return None
+        if not content_blocks:
+            log.info(
+                "%s 所有附件均无法加载, 降级为文本: %s",
                 trace.prefix(),
                 "; ".join(skipped_notes),
             )
             return None
 
-        # 成功加载图: blocks 在前, 文本占位放最后
-        # (返回的 blocks 会被 _build_context 拼到 user message 的文本部分之前)
-        return image_blocks + (
+        return content_blocks + (
             [{"type": "text", "text": "附件说明: " + "; ".join(skipped_notes)}]
             if skipped_notes
             else []
