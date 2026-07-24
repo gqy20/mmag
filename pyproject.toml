@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Mattermost AI Agent - 通过 WebSocket 实时参与团队对话，支持 Agentic Tool Use"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.49.0",
     "websockets>=15.0",
@@ -40,7 +40,7 @@ dev = [
 # ---- Ruff (lint + format) ----
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]

@@ -40,7 +40,7 @@ async def main():
             "你是一个测试助手。用户让你抓取网页时，请使用 crawl_single 或 crawl_batch 等 crawl-mcp 工具。"
             "抓取后总结页面内容返回给用户。"
         ),
-        permission_mode="bypassPermissions",
+        permission_mode="default",
         mcp_servers={"external": mcp_json_path},  # 只挂外部 MCP
         allowed_tools=[],
         disallowed_tools=["Bash", "Write", "Edit"],

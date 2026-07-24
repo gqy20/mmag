@@ -108,7 +108,7 @@ async def run_poc():
             "你可以使用 mcp__mmag__get_posts 和 mcp__mmag__search_knowledge 工具查询消息和知识库。"
             "当用户问'最近聊了什么'时, 用 get_posts 拉消息。"
         ),
-        permission_mode="bypassPermissions",
+        permission_mode="default",
         mcp_servers={"mmag": mmag_server},
         allowed_tools=[
             "mcp__mmag__get_posts",

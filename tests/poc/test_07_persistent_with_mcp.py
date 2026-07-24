@@ -50,7 +50,7 @@ async def test_a_persistent_with_mcp():
         model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         max_turns=3,
         system_prompt="你是 mmag 助手, 可以用 mcp__mmag__get_posts 查消息。回答简洁。",
-        permission_mode="bypassPermissions",
+        permission_mode="default",
         mcp_servers={"mmag": server},
         allowed_tools=["mcp__mmag__get_posts"],
         env=env,
@@ -119,7 +119,7 @@ async def test_b_setting_sources_comparison():
             model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
             max_turns=1,
             system_prompt="用一句话回答。",
-            permission_mode="bypassPermissions",
+            permission_mode="default",
             env=env,
             setting_sources=sources,
         )

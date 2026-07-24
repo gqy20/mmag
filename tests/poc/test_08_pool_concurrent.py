@@ -46,7 +46,7 @@ def build_client() -> ClaudeSDKClient:
         model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         max_turns=3,
         system_prompt="你是 mmag 助手。",
-        permission_mode="bypassPermissions",
+        permission_mode="default",
         mcp_servers={"mmag": server},
         allowed_tools=["mcp__mmag__get_posts"],
         env=env,

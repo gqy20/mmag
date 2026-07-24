@@ -37,7 +37,7 @@ def build_options() -> ClaudeAgentOptions:
         model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         max_turns=1,
         system_prompt="用一句话回答。",
-        permission_mode="bypassPermissions",
+        permission_mode="default",
         env=env,
     )
 

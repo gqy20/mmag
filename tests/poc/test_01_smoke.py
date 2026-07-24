@@ -48,7 +48,7 @@ def build_options(model: str, base_url: str | None) -> ClaudeAgentOptions:
         model=model,
         max_turns=1,
         system_prompt="你是一个简洁的助手, 回答限制在 30 字内。",
-        permission_mode="bypassPermissions",
+        permission_mode="default",
         env=env,
     )
 

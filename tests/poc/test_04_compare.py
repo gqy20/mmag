@@ -163,7 +163,7 @@ async def path_b(prompt: str, system: str) -> PathBResult:
         model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         max_turns=3,
         system_prompt=system,
-        permission_mode="bypassPermissions",
+        permission_mode="default",
         mcp_servers={"mmag": server},
         allowed_tools=["mcp__mmag__get_posts"],
         env=env,

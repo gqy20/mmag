@@ -40,7 +40,7 @@ async def run_poc():
         model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         max_turns=3,
         system_prompt="你是一个简洁的助手, 优先用 mcp__crawl-mcp__* 工具。",
-        permission_mode="bypassPermissions",
+        permission_mode="default",
         mcp_servers=str(MCP_JSON),  # ← 直接传 .mcp.json 路径
         # 允许的 mcp 工具名 — 这里只测 search_text 兜底
         allowed_tools=["mcp__crawl-mcp__search_text"],

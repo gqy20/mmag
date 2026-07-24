@@ -361,10 +361,15 @@ class SDKLLM:
                 "- Read / Grep / Glob: 阅读和搜索项目文件"
                 "回答简洁、准确、有帮助。"
             ),
-            permission_mode="bypassPermissions",
+            permission_mode="default",
             mcp_servers=mcp_servers if mcp_servers else None,
-            # 注意: 不设 allowed_tools → 所有工具(含MCP)都对LLM可见
-            # 安全控制完全交给 disallowed_tools + can_use_tool 回调
+            # 不设 allowed_tools → 所有工具(含MCP)都对LLM可见
+            # 安全控制交给 disallowed_tools + can_use_tool 回调
+            # 注意: 必须用 "default" 而非 "bypassPermissions":
+            #   1. bypassPermissions 会被 SDK 转为 --dangerously-skip-permissions CLI flag,
+            #      该 flag 在 root/sudo 下被 CLI 拒绝运行
+            #   2. bypassPermissions 会 shadow can_use_tool 回调 (回调永不执行),
+            #      使三层权限防护全部失效
             disallowed_tools=list(CLI_DANGEROUS_TOOLS),  # 安全网: 黑名单危险工具
             can_use_tool=_tool_permission_callback,       # 动态权限回调 (三层防护)
             env=env,
