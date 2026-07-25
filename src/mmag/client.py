@@ -3,6 +3,7 @@ Mattermost REST API 客户端
 """
 
 import asyncio
+import mimetypes
 from typing import Any
 
 import requests
@@ -92,7 +93,8 @@ class MMClient:
         return self._channels[channel_id]
 
     def send_post(
-        self, channel_id: str, message: str, root_id: str = "", props: dict | None = None
+        self, channel_id: str, message: str, root_id: str = "", props: dict | None = None,
+        file_ids: list[str] | None = None,
     ) -> str | None:
         """发送消息到频道"""
         payload: dict[str, Any] = {
@@ -103,6 +105,8 @@ class MMClient:
             payload["root_id"] = root_id
         if props:
             payload["props"] = props
+        if file_ids:
+            payload["file_ids"] = file_ids
         try:
             result = self._post("/posts", json=payload)
             post_id = result.get("id")
@@ -110,6 +114,37 @@ class MMClient:
             return post_id
         except Exception as e:
             log.error(f"发送消息失败: {e}")
+            return None
+
+    def upload_file(
+        self, channel_id: str, filename: str, data: bytes, content_type: str = "",
+    ) -> str | None:
+        """上传文件到频道，返回 file_id
+
+        Mattermost API: POST /api/v4/files (multipart/form-data)
+        上传后文件不可见，需创建带 file_ids 的 post 才在频道显示。
+        """
+        if not content_type:
+            content_type, _ = mimetypes.guess_type(filename)
+        if not content_type:
+            content_type = "application/octet-stream"
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/api/v4/files",
+                data={"channel_id": channel_id, "filename": filename},
+                files={"files": (filename, data, content_type)},
+                timeout=60,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            if isinstance(result, list) and result:
+                file_id = result[0].get("id")
+                log.debug(f"文件已上传: {filename} ({len(data)} bytes) → file_id={file_id[:12] if file_id else '?'}...")
+                return file_id
+            log.error(f"上传文件响应格式异常: {type(result)}")
+            return None
+        except Exception as e:
+            log.error(f"上传文件失败: {e}")
             return None
 
     def send_typing(self, channel_id: str) -> bool:

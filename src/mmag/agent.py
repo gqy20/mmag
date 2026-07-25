@@ -17,6 +17,7 @@ from .config import _log_config_loading, config
 from .llm import LLM, LLMError
 from .logger import get_logger, trace
 from .sdk_llm import SDKLLM, SDKLLMError
+from .sdk_tools import ToolContext
 from .mcp_bridge import MCPClientBridge
 from .memory import Memory
 from .memory_compactor import MemoryCompactor
@@ -114,6 +115,9 @@ class Agent:
         self.bot_user_id = ""
         self.bot_username = ""
 
+        # 工具上下文 (Agent ↔ SDK 工具共享, 每次消息处理前更新)
+        self.tool_context = ToolContext()
+
         # 记忆压缩器 (长期记忆层管理)
         self.compactor = MemoryCompactor(
             memory=self.memory,
@@ -179,7 +183,7 @@ class Agent:
             try:
                 from .sdk_tools import create_sdk_tools
 
-                sdk_tool_funcs = create_sdk_tools(self.mm, self.memory)
+                sdk_tool_funcs = create_sdk_tools(self.mm, self.memory, self.tool_context)
 
                 # 解析 .mcp.json 路径供外部 MCP 使用
                 _mcp_candidate = Path(__file__).resolve().parents[2] / ".mcp.json"
@@ -465,6 +469,9 @@ class Agent:
         )
 
         log.info("%s [%s] %s", trace.prefix(), post["username"], message[:80])
+
+        # 更新工具上下文 (send_file 等工具需要感知当前用户消息)
+        self.tool_context.current_post = post
 
         # ====== 触发判定: 显式召唤(硬规则,不走 LLM 决策)======
         if self._is_explicit_invocation(post):
