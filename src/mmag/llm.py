@@ -1,13 +1,15 @@
 """
-LLM 适配器 (Anthropic) — 支持单轮对话 + Agentic Tool Use 循环
+LLM 适配器 (Anthropic) — 支持单轮对话 + Agentic Tool Use 循环 (LangGraph)
 """
 
+import operator
 import re
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, TypedDict, cast
 
 from anthropic import AsyncAnthropic
+from langgraph.graph import END, START, StateGraph
 
 from .config import config
 from .logger import get_logger, trace
@@ -78,8 +80,6 @@ class LLM:
             elapsed = time.monotonic() - t0
             log.debug("%s LLM 单轮调用 (%.3fs, %d 字符输出)", trace.prefix(), elapsed, len(texts))
             raw_text = "\n".join(texts)
-            # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML / <think> 噪声,
-            # 剥后空就保持哨兵, 让上层 Plan D 兜底决定是否重试
             cleaned = _strip_model_artifacts(raw_text).strip()
             return cleaned if cleaned else "(模型返回为空)"
         except Exception as e:
@@ -97,7 +97,7 @@ class LLM:
             max_tokens=max_tokens,
         )
 
-    # ---- Agentic Tool Use 循环 ----
+    # ---- Agentic Tool Use 循环 (LangGraph StateGraph) ----
 
     async def agent_loop(
         self,
@@ -110,6 +110,12 @@ class LLM:
     ) -> str:
         """多轮 Agentic 循环：LLM 自主决定是否调用工具，直到产出最终回复。
 
+        基于 LangGraph StateGraph 实现:
+          - agent 节点: 调 Anthropic API, 解析 text/tool_use
+          - tools 节点: 执行工具, 注入 tool_result
+          - 条件边: 有 tool_calls → tools; 无 tool_calls → END
+          - 末轮强制禁用 tools (B-1 方案), 与旧 for 循环行为一致
+
         Args:
             messages: 对话历史消息列表
             system: 系统提示词
@@ -121,138 +127,83 @@ class LLM:
         Returns:
             最终文本回复
         """
-        # 无工具时降级为普通聊天
         if not tools or not tool_registry:
             log.debug("%s agent_loop: 无工具配置，降级为普通聊天", trace.prefix())
             return await self.chat(messages, system, max_tokens)
 
         tools_schema = [t for t in tools if isinstance(t, dict)]
-        working_messages = list(messages)  # 拷贝，避免污染原始消息
         loop_t0 = time.monotonic()
 
         log.info(
-            "%s Agent Loop 开始 | 消息数=%d 工具数=%d 最大轮次=%d",
+            "%s Agent Loop (LangGraph) | 消息数=%d 工具数=%d 最大轮次=%d",
             trace.prefix(),
-            len(working_messages),
+            len(messages),
             len(tools_schema),
             max_rounds,
         )
 
-        for round_i in range(1, max_rounds + 1):
-            self.call_count += 1
-            round_t0 = time.monotonic()
+        # ---- 图状态定义 ----
+        class _State(TypedDict):
+            messages: Annotated[list[dict], operator.add]
+            round: int
+            final_text: str
 
-            # ---- 末轮强制收尾 (B-1 方案) ----
-            # step-3.7-flash 等模型在带 tools 参数时, 拿到 tool_result 后倾向继续 tool_use
-            # 而不出 text, 出现 R2 (以及后续轮) 反复调工具的"死循环"。
-            # 最后一轮临时禁用 tools 调一次, 让模型必须出 text:
-            #   - 有 text → 直接用 (用户得到的是模型自己的"智能收尾"答复)
-            #   - 无 text (兜底) → 返回"处理超时"提示
-            # 灵感: LangGraph chat_agent_executor._are_more_steps_needed
-            #       (remaining_steps < 2 && has_tool_calls 时直接 override 响应)
-            is_final_round = round_i == max_rounds
-            tools_for_this_round: list[Any] = [] if is_final_round else tools_schema
+        # ---- agent 节点: 调 LLM, 解析响应 ----
+        async def _agent_node(state: _State) -> dict:
+            self.call_count += 1
+            round_i = state["round"] + 1
+            is_final = round_i >= max_rounds
+            tools_now: list[Any] = [] if is_final else tools_schema
 
             try:
                 kwargs: dict[str, Any] = {
                     "model": self.model,
                     "max_tokens": max_tokens,
-                    "messages": working_messages,
-                    "tools": tools_for_this_round,
+                    "messages": state["messages"],
+                    "tools": tools_now,
                 }
                 if system:
                     kwargs["system"] = system
-
                 response = await self.client.messages.create(**kwargs)
             except Exception as e:
-                elapsed = time.monotonic() - round_t0
-                log.error(
-                    "%s Round %d/%d LLM 调用失败 (%.3fs): %s",
-                    trace.prefix(),
-                    round_i,
-                    max_rounds,
-                    elapsed,
-                    e,
-                    exc_info=True,
-                )
                 raise LLMError(f"Round {round_i} LLM 调用失败: {e}") from e
 
-            # ---- 解析响应 (用 _parse_response 统一处理 thinking/text/tool_use) ----
             parsed = _parse_response(response)
             text_parts = parsed.texts
             tool_calls = parsed.tool_calls
 
-            round_elapsed = time.monotonic() - round_t0
-
-            # ---- 末轮强制收尾: 哪怕模型在 tools=[] 模式下还调了工具, 也不再执行 ----
-            if is_final_round:
-                # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML / <think> 噪声
-                final_text = _strip_model_artifacts("\n".join(text_parts)).strip()
-                total_elapsed = time.monotonic() - loop_t0
-                if final_text:
-                    log.info(
-                        "%s Round %d/%d 末轮强制收尾, 取到 text %d 字符 (%.3fs) | 总 %.3fs",
-                        trace.prefix(),
-                        round_i,
-                        max_rounds,
-                        len(final_text),
-                        round_elapsed,
-                        total_elapsed,
+            # 末轮: 强制收尾, 不再执行工具
+            if is_final:
+                final = _strip_model_artifacts("\n".join(text_parts)).strip()
+                if not final:
+                    log.warning(
+                        "%s Round %d/%d 末轮强制收尾仍无 text, fallback",
+                        trace.prefix(), round_i, max_rounds,
                     )
-                    return final_text
-                # 末轮 + 过滤后空 (整段都是 XML 或本来就没 text): 兜底,
-                # 不让 "(模型返回为空)" 这种内部哨兵漏给用户
-                log.warning(
-                    "%s Round %d/%d 末轮强制收尾仍无 text, fallback (%.3fs)",
-                    trace.prefix(),
-                    round_i,
-                    max_rounds,
-                    round_elapsed,
-                )
-                return "⚠️ 处理超时，请重试"
-
-            # ---- 判断是否需要继续循环 ----
-            if not tool_calls:
-                # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML / <think> 噪声
-                final_text = _strip_model_artifacts("\n".join(text_parts)).strip()
-                total_elapsed = time.monotonic() - loop_t0
+                    final = "⚠️ 处理超时，请重试"
                 log.info(
-                    "%s Round %d/%d → 纯文本回复 (%.3fs) | 总耗时 %.3fs | 输出 %d 字符",
-                    trace.prefix(),
-                    round_i,
-                    max_rounds,
-                    round_elapsed,
-                    total_elapsed,
-                    len(final_text),
+                    "%s Round %d/%d 末轮强制收尾, text %d 字符",
+                    trace.prefix(), round_i, max_rounds, len(final),
                 )
-                if final_text:
-                    return final_text
-                # step-3.7-flash 等模型偶发 R1 直接出空 text (无 tool_call 也没 text),
-                # 或整段都是 <tool_call> XML (剥后空): 走这里 — 不再把
-                # "(模型返回为空)" 这种内部哨兵漏给用户, 统一兜底
-                log.warning(
-                    "%s Round %d/%d → 纯文本回复但 text 为空, fallback (%.3fs)",
-                    trace.prefix(),
-                    round_i,
-                    max_rounds,
-                    round_elapsed,
-                )
-                return "⚠️ 处理超时，请重试"
+                return {"final_text": final}
 
-            # ---- 有工具调用 → 执行 → 注入结果 → 继续下一轮 ----
-            tool_names = [tc["name"] for tc in tool_calls]
+            # 无工具调用 → 提取文本, 结束
+            if not tool_calls:
+                final = _strip_model_artifacts("\n".join(text_parts)).strip()
+                if not final:
+                    log.warning(
+                        "%s Round %d/%d → text 为空, fallback",
+                        trace.prefix(), round_i, max_rounds,
+                    )
+                    final = "⚠️ 处理超时，请重试"
+                return {"final_text": final}
+
+            # 有工具调用 → 构造 assistant 消息, 传递给 tools 节点
             log.info(
-                "%s Round %d/%d → %d 个工具调用 [%s] (%.3fs)",
-                trace.prefix(),
-                round_i,
-                max_rounds,
-                len(tool_calls),
-                ", ".join(tool_names),
-                round_elapsed,
+                "%s Round %d/%d → %d 个工具调用 [%s]",
+                trace.prefix(), round_i, max_rounds,
+                len(tool_calls), ", ".join(tc["name"] for tc in tool_calls),
             )
-
-            # 把 LLM 这一轮的完整响应加入历史（含文本 + 工具调用意图）
-            # 用 SDK 的 TypedDict 标注，保留裸 dict 形式（runtime 不验证，pylance/mypy 能检查）
             assistant_content: list[TextBlockParam | ToolUseBlockParam] = []
             if text_parts:
                 assistant_content.append({"type": "text", "text": "\n".join(text_parts)})
@@ -260,63 +211,68 @@ class LLM:
                 assistant_content.append(
                     cast(
                         "ToolUseBlockParam",
-                        {
-                            "type": "tool_use",
-                            "id": tc["id"],
-                            "name": tc["name"],
-                            "input": tc["input"],
-                        },
+                        {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["input"]},
                     )
                 )
-            working_messages.append(
-                cast("MessageParam", {"role": "assistant", "content": assistant_content})
-            )
+            return {
+                "messages": [cast("MessageParam", {"role": "assistant", "content": assistant_content})],
+                "round": round_i,
+            }
 
-            # 逐个执行工具，收集结果
+        # ---- tools 节点: 执行工具, 收集 tool_result ----
+        async def _tools_node(state: _State) -> dict:
+            new_msgs: list[dict] = []
+            last_msg = state["messages"][-1]
+            content = last_msg.get("content", [])
+            tool_calls = [
+                c for c in content
+                if isinstance(c, dict) and c.get("type") == "tool_use"
+            ]
             for tc in tool_calls:
                 result_str = await tool_registry.execute(tc["name"], tc["input"])
                 tool_result_content: list[ToolResultBlockParam] = [
                     cast(
                         "ToolResultBlockParam",
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tc["id"],
-                            "content": result_str,
-                        },
+                        {"type": "tool_result", "tool_use_id": tc["id"], "content": result_str},
                     )
                 ]
-                working_messages.append(
+                new_msgs.append(
                     cast("MessageParam", {"role": "user", "content": tool_result_content})
                 )
+            return {"messages": new_msgs}
 
-        # 达到最大轮次限制
-        total_elapsed = time.monotonic() - loop_t0
-        log.warning(
-            "%s Agent Loop 达到最大轮次 %d (总耗时 %.3fs)，强制结束",
-            trace.prefix(),
-            max_rounds,
-            total_elapsed,
+        # ---- 条件边: agent 之后去 tools 还是 END ----
+        def _should_continue(state: _State) -> str:
+            if state.get("final_text"):
+                return END
+            return "tools"
+
+        # ---- 编译并执行 ----
+        graph = StateGraph(_State)
+        graph.add_node("agent", _agent_node)
+        graph.add_node("tools", _tools_node)
+        graph.add_edge(START, "agent")
+        graph.add_conditional_edges("agent", _should_continue, {END: END, "tools": "tools"})
+        graph.add_edge("tools", "agent")
+
+        app = graph.compile()
+        result = await app.ainvoke(
+            {"messages": list(messages), "round": 0, "final_text": ""},
+            {"recursion_limit": max_rounds * 2 + 1},
         )
-        # 取最后一轮的文本部分作为最终回复
-        last_texts = []
-        for msg in reversed(working_messages):
-            if msg.get("role") == "assistant":
-                content = msg.get("content", [])
-                if isinstance(content, list):
-                    for c in content:
-                        if (
-                            isinstance(c, dict)
-                            and c.get("type") == "text"
-                            and c.get("text", "").strip()
-                        ):
-                            last_texts.append(c["text"])
-                elif isinstance(content, str) and content.strip():
-                    last_texts.append(content)
-                break
-        # 过滤 step-3.7-flash 训练痕迹的 <tool_call> XML / <think> 噪声;
-        # 剥后空走兜底, 不让噪声漏给用户
-        cleaned = _strip_model_artifacts("\n".join(reversed(last_texts))).strip()
-        return cleaned if cleaned else "⚠️ 处理超时，请重试"
+
+        final_text = result.get("final_text", "")
+        total_elapsed = time.monotonic() - loop_t0
+        if not final_text:
+            log.warning(
+                "%s Agent Loop 未产出 final_text, fallback (总耗时 %.3fs)",
+                trace.prefix(), total_elapsed,
+            )
+            final_text = "⚠️ 处理超时，请重试"
+
+        log.info("%s Agent Loop 完成, 输出 %d 字符 (总耗时 %.3fs)",
+                 trace.prefix(), len(final_text), total_elapsed)
+        return final_text
 
 
 # ============================================================
@@ -360,16 +316,13 @@ def _parse_response(response) -> ParsedResponse:
 
 
 def _strip_tool_call_xml(text: str) -> str:
-    """过滤 step-3.7-flash 等国产模型意外输出的 <tool_call>...</tool_call> XML 字符串
+    """过滤 step-3.7-flash 等国产模型意外输出的 invoke XML 字符串
 
     背景:
       step-3.7-flash / Qwen / DeepSeek 等模型训练时用 ChatML 模板, 偶发在
       tools=[] 模式下把"伪 tool call"按训练痕迹直接输出成 XML 字符串
       (而非结构化 tool_use block)。Anthropic SDK 只看 tool_use block, 不会
       parse 这段, 所以会作为普通 text 漏给用户。
-
-      业界做法: Qwen-Agent / Step-Agent-SDK 在 SDK 层做 XML → 结构化 call 的
-      反向解析。mmag 走的是 Anthropic SDK, 没这能力, 所以在 return 前兜底过滤。
 
     设计:
       - 非贪婪 + re.DOTALL: 一次只剥一个块, 不会误伤中间的有效文本
@@ -392,7 +345,7 @@ def _strip_thinking_tags(text: str) -> str:
 
     设计同 _strip_tool_call_xml:
       - 非贪婪 + re.DOTALL: 一次剥一个块, 不误伤中间的有效文本
-      - 快路径: 不含 "<think>" 子串时直接返回
+      - 快路径: 不含 "<think" 子串时直接返回
       - 剥后空由调用方走兜底
     """
     if "<think>" not in text:
