@@ -112,6 +112,19 @@ class MMClient:
             log.error(f"发送消息失败: {e}")
             return None
 
+    def send_typing(self, channel_id: str) -> bool:
+        """发送 typing indicator (频道内显示"正在输入...")
+
+        Mattermost typing indicator ~3s 后过期,调用方需定期重发。
+        """
+        user_id = self.get_me()["id"]
+        try:
+            self._post(f"/users/{user_id}/typing", json={"channel_id": channel_id})
+            return True
+        except Exception as e:
+            log.debug(f"typing indicator 失败: {e}")
+            return False
+
     def get_posts(self, channel_id: str, limit: int = 30) -> list[dict]:
         """获取频道最近消息(limit 不分页,一次性)"""
         return self.get_posts_page(channel_id, page=0, per_page=limit)

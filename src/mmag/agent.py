@@ -470,7 +470,14 @@ class Agent:
         if self._is_explicit_invocation(post):
             trace.set_context(msg_type="mention")
             log.info("%s → 触发: 显式召唤 (@/DM/thread)", trace.prefix())
-            await self._respond(post, tag="mention")
+            await self._send_get_ack(post)
+            typing_task = asyncio.create_task(
+                self._typing_loop(post["channel_id"])
+            )
+            try:
+                await self._respond(post, tag="mention")
+            finally:
+                typing_task.cancel()
             trace.clear()
             return
 
@@ -1079,6 +1086,36 @@ class Agent:
                 config.typing_delay_max - config.typing_delay_min
             )
         await asyncio.sleep(duration)
+
+    async def _send_get_ack(self, post: dict):
+        """发送 "get" 线程回执 — 让用户知道已收到、正在处理
+
+        - 以 thread reply 发送 (root_id = 原消息 id),不占主聊天流
+        - 不记入 message_log / stats,不污染 LLM 上下文
+        """
+        try:
+            self.mm.send_post(
+                channel_id=post["channel_id"],
+                message="get",
+                root_id=post.get("id", ""),
+                props={PROP_FROM_BOT: PROP_TRUE},
+            )
+        except Exception as e:
+            log.debug("get ack 发送失败: %s", e)
+
+    async def _typing_loop(self, channel_id: str):
+        """持续发送 typing indicator,直到被 cancel
+
+        Mattermost typing indicator ~3s 过期,每 2.5s 重发。
+        """
+        try:
+            while True:
+                self.mm.send_typing(channel_id)
+                await asyncio.sleep(2.5)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log.debug("typing loop 异常: %s", e)
 
     async def reply(self, post: dict, message: str) -> str | None:
         """发送消息到频道 (主聊天流，非线程)，返回 post_id 或 None"""
