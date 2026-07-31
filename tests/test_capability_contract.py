@@ -20,6 +20,8 @@ from mmag.capabilities import (
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
+from mmag.sdk_tools import create_sdk_tools
+from mmag.tools import build_builtin_tools
 
 
 def _client():
@@ -44,6 +46,25 @@ def test_get_channel_info_declares_policy_metadata_once():
     assert spec.input_schema["required"] == ("channel_id",)
     with pytest.raises(FrozenInstanceError):
         spec.name = "changed"
+
+
+def test_builtin_capability_visibility_is_identical_for_both_runtimes():
+    client, memory = _client(), MagicMock()
+
+    legacy_names = [tool.name for tool in build_builtin_tools(client, memory)]
+    sdk_names = [tool.name for tool in create_sdk_tools(client, memory)]
+
+    assert legacy_names == sdk_names
+    assert legacy_names == [
+        "get_posts",
+        "search_messages",
+        "search_knowledge",
+        "get_channel_info",
+        "save_knowledge",
+        "get_user_profile",
+        "analyze_link",
+        "send_file",
+    ]
 
 
 @pytest.mark.asyncio
