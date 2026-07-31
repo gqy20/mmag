@@ -8,10 +8,10 @@
 
 > 触发条件: 网络抖动 / Token 过期 / LLM 限流时可能导致消息丢失、Agent 失能、用户体验下降
 
-### 1. MMClient REST 调用无重试
-- 位置: `src/mmag/client.py:47-55, 98-105, 113-116, 127-136`
-- 问题: `_get` / `_post` / `send_post` / `send_ephemeral` / `get_posts_page` 全部无重试;`raise_for_status()` 失败直接抛 `HTTPError`,Mattermost 瞬时 502/网络抖动会丢消息
-- 方案参考: `tenacity` 库指数退避 / 手写 retry decorator
+### 1. MMClient 读取与文件调用仍无统一重试
+- 已完成：`send_post` 使用 Mattermost `pending_post_id`，对连接错误、超时、429/5xx 做最多 3 次指数退避，避免重试产生重复回复
+- 剩余：`_get` / `get_posts_page` / 文件上传下载仍没有统一 timeout/retry policy；读取失败可能造成消息或附件缺失
+- 方案参考: 在异步 Client 迁移时按读写语义建立统一 retry policy，写请求必须先具备幂等键
 
 ### 2. WebSocket 重连无次数上限,401 无告警
 - 位置: `src/mmag/ws_client.py:43-48, 90-111`
@@ -209,7 +209,7 @@
 ### 27. 测试基础设施薄弱
 - 无 `conftest.py`,fixture 散落在 `test_url_analyzer.py:1` 内联,无法跨文件复用
 - 已完成：GitHub Actions、`make verify`、锁文件、branch coverage 40% 门槛和 mypy 基线
-- 剩余：共享 fixture 仍未收口，失败重试与重复事件契约仍缺失
+- 剩余：共享 fixture 仍未收口；后续需随 Runtime contract tests 建立可复用测试工厂
 
 ### 28. discover.py 内部细节
 - `src/mmag/discover.py:60-77` 5 个 `_get` 透传方法,均直接调 `MMClient._get` 私有方法(破坏封装)
@@ -243,6 +243,7 @@
 | 2026-07-31 | SQLite 版本化 migration：旧库升级、FTS 重建、幂等、回滚和未来版本拒绝 |
 | 2026-07-31 | 安全边界收紧：Secret 零片段日志、真实路径边界、SDK/外部 MCP 显式白名单 |
 | 2026-07-31 | `Memory.log_message` 主表与 FTS 多步写入失败时完整回滚 |
-| 2026-07-31 | CI / `make verify` 工程门禁：Ruff、197 个离线测试、42.81% 分支覆盖率、mypy、wheel smoke |
+| 2026-07-31 | CI / `make verify` 工程门禁：Ruff、204 个离线测试、43.59% 分支覆盖率、mypy、wheel smoke |
 | 2026-07-31 | `prompts.yml` 打入 wheel，并支持 `PROMPTS_PATH` 覆盖；提交可复现 `uv.lock` |
 | 2026-07-31 | ToolRegistry 正确收集 async generator，并清零 26 个源码文件的 mypy 错误 |
+| 2026-07-31 | 重复 posted 事件持久化去重；Mattermost 回复以 `pending_post_id` 实现安全有界重试 |

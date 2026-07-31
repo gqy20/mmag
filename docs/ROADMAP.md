@@ -4,7 +4,7 @@
 >
 > 更新时间：2026-07-31
 >
-> 当前阶段：Phase 0 收口
+> 当前阶段：Step 2 Runtime 契约
 >
 > 架构依据：[`AI_NATIVE_REFACTORING.md`](./AI_NATIVE_REFACTORING.md)
 
@@ -26,11 +26,12 @@
 - [x] 建立 40% 分支覆盖率与 `src/mmag` mypy 基线；
 - [x] 提交 `uv.lock`，固定 CI 与本地开发依赖；
 - [x] 将默认 Prompt 打入 wheel，并在隔离目录验证包、CLI 模块和 Prompt 加载；
-- [x] 默认离线测试基线达到 `197 passed, 2 deselected`，实际分支覆盖率 `42.81%`。
+- [x] 重复 posted 事件在 Runtime 前按持久化 post ID 去重；
+- [x] Mattermost 回复使用 `pending_post_id` 对网络错误、超时、429/5xx 做有界幂等重试；
+- [x] 默认离线测试基线达到 `204 passed, 2 deselected`，实际分支覆盖率 `43.59%`。
 
-当前还没有完成：
+下一阶段尚未完成：
 
-- [ ] 消息主链的失败重试和重复事件契约；
 - [ ] Runtime/Capability 统一；
 - [ ] WebSocket 入口与长任务执行解耦。
 
@@ -63,7 +64,7 @@ Managed Agent 与 Router
 
 前一阶段的退出标准，是后一阶段开始大规模改动的前置条件。
 
-## 4. Step 1：收口 Phase 0 工程门禁（进行中）
+## 4. Step 1：收口 Phase 0 工程门禁（已完成）
 
 ### 目标
 
@@ -71,13 +72,13 @@ Managed Agent 与 Router
 
 ### 工作项
 
-- [x] 引入 `pytest-cov`，当前分支覆盖率 `42.81%`，初始阈值 40%；
+- [x] 引入 `pytest-cov`，当前分支覆盖率 `43.59%`，初始阈值 40%；
 - [x] 引入宽松模式 `mypy`，检查 `src/mmag`，当前 26 个源码文件零错误；
 - [x] 建立 `.github/workflows/ci.yml`，使用锁定依赖执行统一门禁；
 - [x] 增加 wheel smoke test：隔离解包后验证 `import mmag`、CLI 模块和 Prompt 加载；
 - [x] 将 `prompts.yml` 打为包资源，并支持 `PROMPTS_PATH` 显式覆盖；
 - [x] 覆盖附件、工具和多轮调用契约；
-- [ ] 补齐失败重试和重复事件契约；
+- [x] 补齐失败重试和重复事件契约；
 - [x] 提供 `make verify` 统一门禁命令，使本地与 CI 使用相同入口。
 
 ### 实施思路
@@ -95,7 +96,7 @@ Managed Agent 与 Router
 - [x] wheel 解包后可以正常导入包与 CLI 模块并加载 Prompt；
 - [x] coverage 和类型检查有明确、不会倒退的基线；
 - [x] SQLite migration 和现有消息主链通过全部回归测试；
-- [ ] 失败重试和重复事件行为由契约测试固定。
+- [x] 失败重试和重复事件行为由契约测试固定。
 
 ## 5. Step 2：建立统一 Runtime 契约
 

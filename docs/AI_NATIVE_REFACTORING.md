@@ -19,16 +19,17 @@
 - 已建立版本化 SQLite migration，覆盖新库初始化、旧字段补齐、旧消息/FTS 迁移、幂等、失败回滚和未来版本拒绝；
 - `Memory` 不再负责建表和历史 schema 升级；业务消息与 FTS 写入也具备失败回滚；
 - Secret 日志、文件路径和 MCP 工具已经改为显式安全边界；
-- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `197 passed, 2 deselected`、42.81% 分支覆盖率、26 个源码文件 mypy 零错误；
+- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `204 passed, 2 deselected`、43.59% 分支覆盖率、26 个源码文件 mypy 零错误；
 - `uv.lock` 已提交，默认 Prompt 已作为 wheel 资源发布并通过隔离 smoke test。
+- 重复 posted 事件已在执行前去重，Mattermost 回复已具备带 `pending_post_id` 的安全有界重试。
 
-尚未完成：失败重试与重复事件契约，以及 Runtime/Capability 统一。
+Phase 0 已完成，当前进入 Runtime 契约；Capability 统一仍未开始。
 
 下一步不直接拆分 `Agent` 或引入多 Agent，而是按以下依赖顺序推进：
 
 | 顺序 | 实施包 | 核心产出 | 为什么先做 |
 |---|---|---|---|
-| 1 | 收口 Phase 0 工程门禁（主体完成） | CI、coverage 基线、类型检查基线、wheel smoke test | 让后续每次重构都有自动回归门禁 |
+| 1 | 收口 Phase 0 工程门禁（完成） | CI、coverage 基线、类型检查基线、wheel smoke test | 让后续每次重构都有自动回归门禁 |
 | 2 | Runtime 契约 | `RunRequest`、`AgentResult`、`AgentRuntime` 与统一错误模型 | 先稳定调用边界，再替换内部实现 |
 | 3 | Capability 单一来源 | `CapabilitySpec`、执行器、一个只读能力的双 Runtime binding | 用垂直切片验证工具不再重复定义 |
 | 4 | Runtime 适配与切换 | SDK/LangGraph Adapter、默认路径和回退策略 | 消除上层对两套 Runtime 细节的判断 |
@@ -602,7 +603,7 @@ infrastructure/adapters → application → domain
 
 - [x] 建立隔离的 test suite，PoC 和真实服务测试不进入默认集合；
 - [x] 增加首条离线 `Message → Route → Runtime → Reply` 主链契约测试；
-- [ ] 补齐附件、工具、多轮、重试和幂等场景；
+- [x] 补齐附件、工具、多轮、重试和幂等场景；
 - [x] 引入数据库 schema version 和正式 migration；
 - [x] 建立 CI：ruff、pytest、coverage、类型检查；
 - [x] 修复 wheel 未包含运行资源的问题；
@@ -786,7 +787,7 @@ infrastructure/adapters → application → domain
 5. **数据演进必须可验证**：所有持久化变化继续使用 forward-only migration，并覆盖旧库升级和失败回滚。
 6. **保持模块化单体**：当前优先建立清晰模块边界，不提前引入微服务、分布式队列或复杂控制面。
 
-### 15.2 实施包 A：收口 Phase 0（主体完成）
+### 15.2 实施包 A：收口 Phase 0（完成）
 
 目标：把本地已通过的基线变成每次变更都必须通过的工程门禁。
 
@@ -797,7 +798,7 @@ infrastructure/adapters → application → domain
 - [x] 构建 wheel 后在隔离目录执行包、CLI 模块和 `prompts.yml` 加载 smoke test；
 - [x] 将 external/PoC 测试保留为显式任务，不让密钥和公网依赖进入默认 CI；
 - [x] 覆盖附件、工具和多轮调用；
-- [ ] 补齐失败重试和重复事件测试。
+- [x] 补齐失败重试和重复事件测试。
 
 验收标准：
 
@@ -805,7 +806,7 @@ infrastructure/adapters → application → domain
 - [x] 默认 CI 不访问真实 Mattermost、LLM 或公网；
 - [x] wheel 解包后无需仓库源码目录即可导入并加载运行资源；
 - [x] 门禁失败能明确指出是代码质量、行为、类型还是打包问题；
-- [ ] 失败重试和重复事件行为有稳定契约。
+- [x] 失败重试和重复事件行为有稳定契约。
 
 ### 15.3 实施包 B：建立 Runtime 契约
 
