@@ -52,7 +52,7 @@ def create_send_file_capability(
     """Create the governed file-delivery capability.
 
     ``context_provider`` lets a persistent SDK transport expose its currently
-    serialized request while direct and legacy calls use the task-local
+    serialized request while direct and LangGraph calls use the task-local
     ContextVar provider.
     """
 

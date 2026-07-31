@@ -1,4 +1,4 @@
-"""Focused repositories extracted from the legacy Memory facade."""
+"""Focused repositories extracted from the original Memory facade."""
 
 from __future__ import annotations
 

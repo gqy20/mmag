@@ -11,20 +11,22 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from ..capabilities import AuthorizationDecision
-from ..llm import LLMError, _strip_model_artifacts
+from ..llm import LLMError
+from ..model_artifacts import strip_model_artifacts
 from .base import (
     AgentResult,
     AgentRuntimeError,
     RunRequest,
     RuntimeStatus,
     RuntimeTimeoutError,
+    recover_exhausted,
+    remaining_seconds,
+    thaw,
     translate_runtime_error,
 )
 from .langgraph_state import (
     LangGraphState,
     last_tool_calls,
-    remaining_seconds,
-    thaw,
     thaw_messages,
     tool_result,
 )
@@ -124,16 +126,14 @@ class LangGraphRuntimeAdapter:
         state_result = await graph.ainvoke(state, self._config(thread_id, request.max_rounds))
         result = self._to_result(state_result)
         if result.status is RuntimeStatus.EXHAUSTED:
-            try:
-                recovered = await self.backend.chat(
-                    messages=thaw_messages(request.messages),
-                    system=request.system_prompt,
-                    max_tokens=request.fallback_max_tokens,
-                )
-                if recovered and not recovered.startswith("(模型返回为空)"):
-                    return AgentResult(text=recovered, runtime=self.runtime_name)
-            except Exception:
-                pass
+            recovered = await recover_exhausted(
+                self.backend,
+                request,
+                thaw_messages(request.messages),
+                result.text,
+            )
+            if recovered != result.text:
+                return AgentResult(text=recovered, runtime=self.runtime_name)
         return result
 
     async def resume(self, thread_id: str, decision: Mapping[str, Any]) -> AgentResult:
@@ -179,7 +179,7 @@ class LangGraphRuntimeAdapter:
                 raise
             raise LLMError(f"Round {round_number} LLM 调用失败: {error}") from error
 
-        text = _strip_model_artifacts("\n".join(parsed.texts)).strip()
+        text = strip_model_artifacts("\n".join(parsed.texts)).strip()
         if final_round or not parsed.tool_calls:
             return {"final_text": text or _EXHAUSTED_TEXT, "round": round_number}
 

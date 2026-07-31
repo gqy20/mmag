@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
-
-if TYPE_CHECKING:
-    from datetime import datetime
+from typing import Any, Protocol, runtime_checkable
 
 
 def _freeze(value: Any) -> Any:
@@ -18,6 +16,48 @@ def _freeze(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
     return value
+
+
+def thaw(value: Any) -> Any:
+    """Return mutable JSON-like values from immutable Runtime contracts."""
+    if isinstance(value, Mapping):
+        return {key: thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [thaw(item) for item in value]
+    return value
+
+
+def remaining_seconds(request: RunRequest) -> float | None:
+    """Calculate the remaining Runtime deadline using matching timezone semantics."""
+    deadline = request.context.deadline
+    if deadline is None:
+        return None
+    now = datetime.now(deadline.tzinfo) if deadline.tzinfo else datetime.now()
+    return (deadline - now).total_seconds()
+
+
+async def recover_exhausted(
+    backend: Any,
+    request: RunRequest,
+    messages: list[dict[str, Any]],
+    text: str,
+    *,
+    exhausted_prefix: str = "⚠️ 处理超时",
+) -> str:
+    """Attempt one text-only recovery without masking the exhausted result."""
+    if not text.startswith(exhausted_prefix):
+        return text
+    try:
+        recovered = await backend.chat(
+            messages=messages,
+            system=request.system_prompt,
+            max_tokens=request.fallback_max_tokens,
+        )
+    except Exception:
+        return text
+    if recovered and not recovered.startswith("(模型返回为空)"):
+        return recovered
+    return text
 
 
 @dataclass(frozen=True, slots=True)

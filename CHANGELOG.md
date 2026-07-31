@@ -7,6 +7,7 @@
 - LangGraph 成为默认 Agent Runtime，接入官方 SQLite checkpointer、稳定 thread id 和原生 interrupt/resume
 - 人工审批在 Capability 副作用前暂停，支持 approve/edit/reject、Mattermost 批准/拒绝命令及进程重启后恢复
 - 移除无 checkpoint 的旧 LangGraph 循环与 `LegacyRuntimeAdapter`，Claude Agent SDK 改为显式 opt-in
+- 清理重构残留：Capability binding 统一 LangGraph 命名，移除单子类 Adapter 层与未使用 API，合并 Runtime/执行器/模型输出过滤的重复实现
 - 引入持久 Inbox/Outbox、按会话分区的并发调度和独立 Delivery worker；慢任务不再阻塞 WebSocket，投递重试不重跑 Agent
 - 新增统一 LifecycleService、五类状态机、乐观版本、命令幂等、append-only 转换历史和重启 reconciliation
 - 新增企业 Scope/Context、审批快照与恢复令牌、Artifact/Audit 模型，以及 Message/Profile/Knowledge/Summary/URL Repository 边界
@@ -28,10 +29,10 @@
 - 重连重放的 Mattermost post 在执行前按持久化 ID 去重，避免重复模型调用与回复
 - Mattermost 创建消息携带稳定 `pending_post_id`，连接错误、超时、429/5xx 最多重试 3 次，业务 4xx 不重试
 - 新增不可变 `RunContext` / `RunRequest` / `AgentResult`、`AgentRuntime` Protocol 和统一 Runtime 错误模型
-- Claude SDK 与 LangGraph Legacy 通过 Adapter 实现同一契约，统一 deadline、fallback 和错误翻译
+- Claude SDK 与 LangGraph 通过 Runtime 边界实现同一契约，统一 deadline、fallback 和错误翻译
 - `Agent` 与 `MemoryCompactor` 已迁移到 Runtime Port，不再依赖后端私有异常和返回结构
 - 新增不可变 `CapabilitySpec`、统一 `CapabilityExecutor`、策略元数据与稳定错误结果
-- `get_channel_info` 已成为首个 Capability 垂直切片，由同一规格生成 Legacy ToolRegistry 与 Claude SDK binding
+- `get_channel_info` 已成为首个 Capability 垂直切片，由同一规格生成 LangGraph ToolRegistry 与 Claude SDK binding
 - `search_knowledge` 已迁移到 Capability Catalog，统一默认条数、上限、结果格式与两端绑定
 - `get_posts` 已迁移到 Capability Catalog，缓存优先、REST 回退与日志回填不再双重维护，并移出异步事件循环
 - `search_messages` 已迁移到 Capability Catalog，统一过滤条件、毫秒转换和结果格式，并修复 SDK 忽略零时间戳的行为漂移
@@ -40,9 +41,9 @@
 - `save_knowledge` 已迁移为 `WRITE` Capability；统一 Authorizer 支持允许、拒绝和待审批，并在副作用前完成裁决
 - `send_file` 已迁移为声明 `mattermost:file:write` 的 Capability；请求级不可变上下文替代全局 `ToolContext.current_post`
 - Claude SDK 持久 MCP transport 通过查询串行化桥接请求上下文，避免并发请求的文件意图、频道和线程串线
-- 外部 MCP discovery 统一转换为 `CapabilitySpec`，SDK/Legacy 共享 schema、来源、授权和错误结果
+- 外部 MCP discovery 统一转换为 `CapabilitySpec`，LangGraph/SDK 共享 schema、来源、授权和错误结果
 - SDK 权限白名单由实际绑定能力动态生成，删除硬编码 `sdk_crawl_tools.py` 及 `crawl-mcp` 重依赖
-- 八个内置能力改由单一有序 Catalog 生成，SDK/Legacy 不再分别维护装配清单，`send_file` 两端可见
+- 八个内置能力改由单一有序 Catalog 生成，LangGraph/SDK 不再分别维护装配清单，`send_file` 两端可见
 
 ## 0.1.0 (2026-06-11) — 初始发布
 

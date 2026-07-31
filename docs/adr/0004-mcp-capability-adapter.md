@@ -18,7 +18,7 @@
 
 ## 结果
 
-- SDK 与 Legacy 对外部 MCP 具有相同的可见性、完整 JSON Schema 和 Policy 结果；
+- SDK 与 LangGraph 对外部 MCP 具有相同的可见性、完整 JSON Schema 和 Policy 结果；
 - 拒绝或待审批发生在 `session.call_tool` 副作用之前；
 - MCP 返回内容进入共享来源归一化逻辑；
 - 未声明只读的第三方能力默认按写能力治理；

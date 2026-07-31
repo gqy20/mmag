@@ -1,4 +1,4 @@
-"""Adapters from capability specs to the legacy and SDK tool surfaces."""
+"""Adapters from capability specs to the LangGraph and SDK tool surfaces."""
 
 from __future__ import annotations
 
@@ -13,12 +13,12 @@ if TYPE_CHECKING:
     from ..tools.registry import Tool
 
 
-def bind_legacy_capability(
+def bind_langgraph_capability(
     spec: CapabilitySpec,
     *,
     executor: CapabilityExecutor | None = None,
 ) -> Tool:
-    """Expose a capability through the legacy ToolRegistry contract."""
+    """Expose a capability through the LangGraph ToolRegistry contract."""
     from ..tools.registry import Tool
 
     runner = executor or CapabilityExecutor()

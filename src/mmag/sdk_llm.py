@@ -1,10 +1,9 @@
 """
 SDK LLM Adapter — 封装 Claude Agent SDK 持久客户端，提供与 LLM 类完全一致的公共 API。
 
-公共 API:
+Runtime Adapter 使用的 API:
   - agent_loop(messages, system, tools, tool_registry, max_rounds) -> str
   - chat(messages, system, max_tokens) -> str
-  - chat_with_system(system_prompt, user_message, max_tokens) -> str
 
 生命周期:
   - start(tool_funcs) -> connect()
@@ -15,7 +14,6 @@ SDK LLM Adapter — 封装 Claude Agent SDK 持久客户端，提供与 LLM 类�
 from __future__ import annotations
 
 import asyncio
-import re
 import time
 import uuid
 from contextlib import suppress
@@ -34,6 +32,7 @@ from claude_agent_sdk.types import ClaudeAgentOptions, McpServerConfig, TextBloc
 from .capabilities import CapabilityContext, get_capability_context
 from .config import config
 from .logger import get_logger
+from .model_artifacts import strip_model_artifacts
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -48,36 +47,6 @@ log = get_logger(__name__)
 
 class SDKLLMError(Exception):
     """SDK LLM 调用失败的领域异常 — 对标 LLMError"""
-
-
-# ============================================================
-# 国产模型训练痕迹过滤（从 llm.py 原样搬运）
-# ============================================================
-
-_TOOL_CALL_XML_PATTERN = r"<invoke\s+.*?\s*>[\s\S]*?</invoke>"
-_RE_TOOL_CALL_XML = re.compile(_TOOL_CALL_XML_PATTERN)
-
-_THINKING_PATTERN = r"<think[\s\S]*?</think\s*>"
-_RE_THINKING = re.compile(_THINKING_PATTERN)
-
-
-def _strip_tool_call_xml(text: str) -> str:
-    """过滤 step-3.7-flash 等国产模型意外输出的 invoke XML 字符串"""
-    if "<invoke" not in text:
-        return text
-    return _RE_TOOL_CALL_XML.sub("", text)
-
-
-def _strip_thinking_tags(text: str) -> str:
-    """过滤 step-3.7-flash 等模型把 thinking 过程作为普通 text 输出的部分"""
-    if "<think" not in text:
-        return text
-    return _RE_THINKING.sub("", text)
-
-
-def _strip_model_artifacts(text: str) -> str:
-    """组合入口: 一次剥掉所有已知的国产模型训练痕迹输出"""
-    return _strip_thinking_tags(_strip_tool_call_xml(text))
 
 
 # ============================================================
@@ -278,13 +247,7 @@ async def _tool_permission_callback(
 
 
 class SDKLLM:
-    """Claude Agent SDK adapter — 持久客户端, agentic loop 由 SDK 内部处理。
-
-    公共 API 与 LLM 类完全对齐:
-      - agent_loop() → SDK query + receive_response (agentic)
-      - chat()        → SDK query + receive_response (单轮/重试用)
-      - chat_with_system() → chat 的快捷封装
-    """
+    """Optional persistent Claude SDK client used through its Runtime adapter."""
 
     def __init__(self):
         self.client: ClaudeSDKClient | None = None
@@ -604,7 +567,7 @@ class SDKLLM:
             )
 
             # 过滤国产模型训练痕迹
-            cleaned = _strip_model_artifacts(raw_text).strip()
+            cleaned = strip_model_artifacts(raw_text).strip()
 
             if not cleaned:
                 if is_error:
@@ -629,17 +592,7 @@ class SDKLLM:
                 await self.reconnect()
 
             raw_text, _is_error = await self._execute_query(content)
-            cleaned = _strip_model_artifacts(raw_text).strip()
+            cleaned = strip_model_artifacts(raw_text).strip()
             return cleaned if cleaned else "(模型返回为空)"
         except Exception as e:
             raise SDKLLMError(str(e)) from e
-
-    async def chat_with_system(
-        self, system_prompt: str, user_message: str, max_tokens: int = 1024
-    ) -> str:
-        """带系统提示词的对话快捷方法（MemoryCompactor 兼容）。"""
-        return await self.chat(
-            messages=[{"role": "user", "content": user_message}],
-            system=system_prompt,
-            max_tokens=max_tokens,
-        )

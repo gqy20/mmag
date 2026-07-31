@@ -159,60 +159,31 @@ class CapabilityExecutor:
 
     async def execute(self, spec: CapabilitySpec, arguments: Mapping[str, Any]) -> CapabilityResult:
         started_at = time.monotonic()
-        validation_error = _validate_arguments(spec.input_schema, arguments)
-        if validation_error:
-            return self._result(
-                started_at,
-                CapabilityStatus.INVALID_INPUT,
-                message=validation_error,
-            )
-
-        try:
-            authorization = self.authorizer.authorize(spec, arguments)
-            if authorization.decision is AuthorizationDecision.DENY:
-                return self._result(
-                    started_at,
-                    CapabilityStatus.FORBIDDEN,
-                    message=authorization.reason or f"Capability '{spec.name}' is forbidden",
-                )
-            if authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL:
-                return self._result(
-                    started_at,
-                    CapabilityStatus.APPROVAL_REQUIRED,
-                    message=(authorization.reason or f"Capability '{spec.name}' requires approval"),
-                )
-            async with asyncio.timeout(spec.timeout_seconds):
-                value = spec.handler(**dict(arguments))
-                if inspect.isawaitable(value):
-                    value = await value
-                value = _apply_source_policy(spec, value, dict(arguments))
-        except TimeoutError:
-            return self._result(
-                started_at,
-                CapabilityStatus.TIMEOUT,
-                message=f"Capability '{spec.name}' timed out",
-            )
-        except Exception as exc:
-            return self._result(
-                started_at,
-                CapabilityStatus.ERROR,
-                message=f"Capability '{spec.name}' failed: {exc}",
-            )
-
-        return self._result(started_at, CapabilityStatus.SUCCESS, data=value)
+        invalid = self._invalid_result(spec, arguments, started_at)
+        if invalid is not None:
+            return invalid
+        authorization = self.authorizer.authorize(spec, arguments)
+        blocked = self._blocked_result(spec, authorization, started_at)
+        if blocked is not None:
+            return blocked
+        return await self._invoke(spec, arguments, started_at)
 
     async def execute_approved(
         self, spec: CapabilitySpec, arguments: Mapping[str, Any]
     ) -> CapabilityResult:
         """Execute a previously approved call without evaluating policy twice."""
         started_at = time.monotonic()
-        validation_error = _validate_arguments(spec.input_schema, arguments)
-        if validation_error:
-            return self._result(
-                started_at,
-                CapabilityStatus.INVALID_INPUT,
-                message=validation_error,
-            )
+        invalid = self._invalid_result(spec, arguments, started_at)
+        if invalid is not None:
+            return invalid
+        return await self._invoke(spec, arguments, started_at)
+
+    async def _invoke(
+        self,
+        spec: CapabilitySpec,
+        arguments: Mapping[str, Any],
+        started_at: float,
+    ) -> CapabilityResult:
         try:
             async with asyncio.timeout(spec.timeout_seconds):
                 value = spec.handler(**dict(arguments))
@@ -232,6 +203,31 @@ class CapabilityExecutor:
                 message=f"Capability '{spec.name}' failed: {exc}",
             )
         return self._result(started_at, CapabilityStatus.SUCCESS, data=value)
+
+    def _invalid_result(
+        self,
+        spec: CapabilitySpec,
+        arguments: Mapping[str, Any],
+        started_at: float,
+    ) -> CapabilityResult | None:
+        error = _validate_arguments(spec.input_schema, arguments)
+        if error is None:
+            return None
+        return self._result(started_at, CapabilityStatus.INVALID_INPUT, message=error)
+
+    def _blocked_result(
+        self,
+        spec: CapabilitySpec,
+        authorization: CapabilityAuthorization,
+        started_at: float,
+    ) -> CapabilityResult | None:
+        if authorization.decision is AuthorizationDecision.DENY:
+            message = authorization.reason or f"Capability '{spec.name}' is forbidden"
+            return self._result(started_at, CapabilityStatus.FORBIDDEN, message=message)
+        if authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL:
+            message = authorization.reason or f"Capability '{spec.name}' requires approval"
+            return self._result(started_at, CapabilityStatus.APPROVAL_REQUIRED, message=message)
+        return None
 
     @staticmethod
     def _result(

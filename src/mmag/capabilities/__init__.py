@@ -12,7 +12,7 @@ from .base import (
     DeclaredPermissionAuthorizer,
     SourcePolicy,
 )
-from .bindings import bind_legacy_capability, bind_sdk_capability
+from .bindings import bind_langgraph_capability, bind_sdk_capability
 from .builtin import create_builtin_capabilities
 from .catalog import (
     create_get_channel_info_capability,
@@ -43,7 +43,7 @@ __all__ = [
     "CapabilityStatus",
     "DeclaredPermissionAuthorizer",
     "SourcePolicy",
-    "bind_legacy_capability",
+    "bind_langgraph_capability",
     "bind_sdk_capability",
     "bind_capability_context",
     "create_analyze_link_capability",

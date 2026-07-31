@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import operator
-from collections.abc import Mapping
-from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, TypedDict
 
 if TYPE_CHECKING:
-    from .base import RunRequest
+    from collections.abc import Mapping
+
+from .base import thaw
 
 
 class LangGraphState(TypedDict):
@@ -35,21 +35,5 @@ def tool_result(tool_call_id: str, content: str) -> dict[str, Any]:
     }
 
 
-def thaw(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {key: thaw(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [thaw(item) for item in value]
-    return value
-
-
 def thaw_messages(messages: tuple[Mapping[str, Any], ...]) -> list[dict[str, Any]]:
     return [dict(thaw(message)) for message in messages]
-
-
-def remaining_seconds(request: RunRequest) -> float | None:
-    deadline = request.context.deadline
-    if deadline is None:
-        return None
-    now = datetime.now(deadline.tzinfo) if deadline.tzinfo else datetime.now()
-    return (deadline - now).total_seconds()

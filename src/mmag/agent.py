@@ -53,7 +53,6 @@ from .memory import Memory
 from .memory_compactor import MemoryCompactor
 from .prompts import prompts
 from .runtimes import (
-    AgentRuntime,
     AgentRuntimeError,
     ClaudeSDKRuntimeAdapter,
     LangGraphRuntimeAdapter,
@@ -180,14 +179,13 @@ class Agent:
     """Mattermost AI Agent 主类 — 支持 Agentic Tool Use"""
 
     def __init__(self):
-        self.config = config
         self.mm = MMClient()
-        self.llm = LLM()
-        self.sdk_llm = SDKLLM()  # SDK adapter (与 LLM 共存, 通过 config.use_sdk_llm 切换)
+        llm = LLM()
+        self.sdk_llm: SDKLLM | None = None
         self.memory = Memory(config.memory_db_path)
         self.control_store = SQLiteControlPlane(config.memory_db_path)
-        self.lifecycle = LifecycleService(self.control_store)
-        self.approvals = ApprovalService(self.control_store, self.lifecycle)
+        lifecycle = LifecycleService(self.control_store)
+        approvals = ApprovalService(self.control_store, lifecycle)
         self.policy_engine = PolicyEngine()
         self.capability_executor = CapabilityExecutor(
             PolicyCapabilityAuthorizer(self.policy_engine)
@@ -208,21 +206,20 @@ class Agent:
 
         # LangGraph 是默认运行时；SDK 作为显式 opt-in 的备选路由。
         self.langgraph_runtime = LangGraphRuntimeAdapter(
-            self.llm,
+            llm,
             tool_registry=self.tool_registry,
             checkpoint_path=config.memory_db_path,
         )
-        self.model_gateway = ModelGateway(
+        self.runtime = ModelGateway(
             {"default": self.langgraph_runtime},
             ledger=QuotaLedger(default_limit_usd=config.model_budget_usd),
         )
         self.approval_coordinator = LangGraphApprovalCoordinator(
             self.control_store,
-            self.lifecycle,
-            self.approvals,
-            self.model_gateway,
+            lifecycle,
+            approvals,
+            self.runtime,
         )
-        self.runtime: AgentRuntime = self.model_gateway
         for spec in (
             AgentSpec(
                 "research",
@@ -268,7 +265,7 @@ class Agent:
             memory=self.memory,
             runtime=self.runtime,
             mm_client=self.mm,
-            config=self.config,
+            config=config,
         )
 
         # WebSocket 客户端 (启动时构造, 调用 ws.run() 进入事件循环)
@@ -324,28 +321,32 @@ class Agent:
         # 阶段 3.5: 初始化 SDK LLM Client (持久连接)
         log.info("[3.5/5] 初始化 SDK LLM Client...")
         if config.use_sdk_llm:
+            sdk_llm = SDKLLM()
+            self.sdk_llm = sdk_llm
             try:
                 from .sdk_tools import create_sdk_tools
 
                 sdk_tool_funcs = create_sdk_tools(
                     self.mm,
                     self.memory,
-                    context_provider=self.sdk_llm.get_capability_context,
+                    context_provider=sdk_llm.get_capability_context,
                     executor=self.capability_executor,
                 )
                 sdk_tool_funcs.extend(self.mcp_bridge.get_sdk_bindings())
 
-                await self.sdk_llm.start(
+                await sdk_llm.start(
                     tool_funcs=sdk_tool_funcs,
                 )
-                self.model_gateway.runtimes["default"] = ClaudeSDKRuntimeAdapter(
-                    self.sdk_llm,
+                self.runtime.runtimes["default"] = ClaudeSDKRuntimeAdapter(
+                    sdk_llm,
                     tool_registry=self.tool_registry,
                 )
                 self.compactor.runtime = self.runtime
                 log.info("       ✅ SDK LLM 就绪 (持久连接)")
             except Exception as e:
                 log.error("       ❌ SDK LLM 初始化失败, 回退到 LangGraph: %s", e)
+                await sdk_llm.stop()
+                self.sdk_llm = None
                 config.use_sdk_llm = False  # 自动降级
         else:
             log.info("       ⏭️ SDK LLM 未启用, 使用默认 LangGraph Runtime")
@@ -1513,7 +1514,7 @@ class Agent:
                 log.error("pipeline.close 失败: %s", e, exc_info=True)
 
         # 1.5) 关闭 SDK LLM 持久连接
-        if hasattr(self, "sdk_llm"):
+        if getattr(self, "sdk_llm", None) is not None:
             try:
                 await self.sdk_llm.stop()
             except Exception as e:

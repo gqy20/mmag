@@ -43,9 +43,6 @@ def _make_agent(runtime_result: str = "已完成") -> Agent:
     agent.compactor.maybe_compact = AsyncMock()
     agent.tool_registry = MagicMock()
     agent.tool_registry.get_schema_list.return_value = []
-    agent.sdk_llm = MagicMock()
-    agent.sdk_llm.agent_loop = AsyncMock(return_value=runtime_result)
-    agent.llm = MagicMock()
     agent.runtime = MagicMock()
     agent.runtime.run = AsyncMock(return_value=AgentResult(text=runtime_result, runtime="test"))
 
@@ -77,13 +74,12 @@ def _posted_event() -> dict:
 async def test_explicit_message_runs_offline_pipeline_and_delivers_reply():
     agent = _make_agent("任务完成")
 
-    with patch.multiple(config, mm_channel_id="", mm_team_id="", use_sdk_llm=True):
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
         await agent._on_posted(_posted_event())
 
     assert agent.stats == {"messages": 1, "responses": 1, "dropped_messages": 0}
     agent.compactor.maybe_compact.assert_awaited_once_with("channel-1")
     agent.runtime.run.assert_awaited_once()
-    agent.sdk_llm.agent_loop.assert_not_awaited()
     agent.mm.send_post.assert_called_once_with(
         channel_id="channel-1",
         message="任务完成",
@@ -96,7 +92,7 @@ async def test_explicit_message_delivers_user_visible_error_when_runtime_fails()
     agent = _make_agent()
     agent.runtime.run.side_effect = RuntimeUnavailableError("model unavailable", runtime="test")
 
-    with patch.multiple(config, mm_channel_id="", mm_team_id="", use_sdk_llm=True):
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
         await agent._on_posted(_posted_event())
 
     agent.mm.send_post.assert_called_once_with(
@@ -111,7 +107,7 @@ async def test_duplicate_post_is_not_persisted_or_replied_twice():
     agent = _make_agent("任务完成")
     agent.memory.has_message.side_effect = [False, True]
 
-    with patch.multiple(config, mm_channel_id="", mm_team_id="", use_sdk_llm=True):
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
         await agent._on_posted(_posted_event())
         await agent._on_posted(_posted_event())
 
@@ -127,7 +123,7 @@ async def test_duplicate_post_is_not_persisted_or_replied_twice():
 async def test_explicit_message_builds_provider_neutral_run_request():
     agent = _make_agent("任务完成")
 
-    with patch.multiple(config, mm_channel_id="", mm_team_id="", use_sdk_llm=True):
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
         await agent._on_posted(_posted_event())
 
     request = agent.runtime.run.await_args.args[0]
@@ -151,7 +147,7 @@ async def test_runtime_executes_with_originating_message_capability_context():
 
     agent.runtime.run.side_effect = observe_context
 
-    with patch.multiple(config, mm_channel_id="", mm_team_id="", use_sdk_llm=True):
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
         await agent._on_posted(_posted_event())
 
     assert observed is not None

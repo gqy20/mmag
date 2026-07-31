@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -11,9 +10,7 @@ from anthropic import AsyncAnthropic
 
 from .config import config
 from .logger import get_logger, trace
-
-_RE_TOOL_CALL_XML = re.compile(r"<tool_call>\s*.*?\s*</tool_call>", re.DOTALL)
-_RE_THINKING = re.compile(r"<think>.*?</think>", re.DOTALL)
+from .model_artifacts import strip_model_artifacts
 
 log = get_logger(__name__)
 
@@ -56,7 +53,7 @@ class LLM:
                 tools=[],
                 max_tokens=max_tokens,
             )
-            cleaned = _strip_model_artifacts("\n".join(parsed.texts)).strip()
+            cleaned = strip_model_artifacts("\n".join(parsed.texts)).strip()
             log.debug(
                 "%s LLM 单轮调用 (%.3fs, %d 字符输出)",
                 trace.prefix(),
@@ -72,15 +69,6 @@ class LLM:
                 exc_info=True,
             )
             raise
-
-    async def chat_with_system(
-        self, system_prompt: str, user_message: str, max_tokens: int = 1024
-    ) -> str:
-        return await self.chat(
-            messages=[{"role": "user", "content": user_message}],
-            system=system_prompt,
-            max_tokens=max_tokens,
-        )
 
     async def complete(
         self,
@@ -121,21 +109,3 @@ def _parse_response(response: Any) -> ParsedResponse:
                 {"id": block.id, "name": block.name, "input": dict(block.input)}
             )
     return parsed
-
-
-def _strip_tool_call_xml(text: str) -> str:
-    """Remove text-form tool calls emitted by some Anthropic-compatible models."""
-    if "<tool_call>" not in text:
-        return text
-    return _RE_TOOL_CALL_XML.sub("", text)
-
-
-def _strip_thinking_tags(text: str) -> str:
-    """Remove text-form reasoning emitted by some Anthropic-compatible models."""
-    if "<think>" not in text:
-        return text
-    return _RE_THINKING.sub("", text)
-
-
-def _strip_model_artifacts(text: str) -> str:
-    return _strip_thinking_tags(_strip_tool_call_xml(text))

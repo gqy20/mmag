@@ -5,11 +5,9 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from ..runtimes import RuntimeStatus
 from .models import EntityType, LifecycleEntity
 
 if TYPE_CHECKING:
-    from ..runtimes import AgentResult
     from .store import SQLiteControlPlane
 
 
@@ -140,11 +138,3 @@ class LifecycleService:
                 )
             )
         return tuple(recovered)
-
-    @staticmethod
-    def state_for_result(result: AgentResult) -> str:
-        if result.status is RuntimeStatus.WAITING_APPROVAL:
-            return "waiting_approval"
-        if result.status is RuntimeStatus.EXHAUSTED:
-            return "exhausted"
-        return "succeeded"

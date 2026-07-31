@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from .capabilities import (
     CapabilityExecutor,
     CapabilitySpec,
-    bind_legacy_capability,
+    bind_langgraph_capability,
     bind_sdk_capability,
     create_mcp_capability,
 )
@@ -179,7 +179,7 @@ class MCPClientBridge:
         return tuple(self._capabilities.values())
 
     def get_sdk_bindings(self) -> list:
-        """Generate SDK bindings from the same specs and executor as Legacy."""
+        """Generate SDK bindings from the same specs and executor as LangGraph."""
         return [
             bind_sdk_capability(spec, executor=self.executor)
             for spec in self._capabilities.values()
@@ -299,7 +299,7 @@ class MCPClientBridge:
                 self._sessions.pop(item.name, None)
                 return 0
 
-            # 4) 发现结果先进入 Capability，再派生 Legacy/SDK bindings。
+            # 4) 发现结果先进入 Capability，再派生 LangGraph/SDK bindings。
             registered = self._register_discovered_tools(item.name, session, tools)
             if registered == 0:
                 await self._close_conn(item.name, transport, session)
@@ -345,7 +345,7 @@ class MCPClientBridge:
                 continue
             spec = create_mcp_capability(server_name, tool, session)
             self._capabilities[spec.name] = spec
-            self.registry.register(bind_legacy_capability(spec, executor=self.executor))
+            self.registry.register(bind_langgraph_capability(spec, executor=self.executor))
             registered += 1
         return registered
 

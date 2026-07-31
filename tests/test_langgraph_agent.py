@@ -2,7 +2,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from mmag.llm import LLM, LLMError, _strip_model_artifacts
+from mmag.llm import LLM, LLMError
+from mmag.model_artifacts import strip_model_artifacts
 
 
 class FakeBlock:
@@ -75,4 +76,4 @@ async def test_provider_error_is_wrapped():
 
 
 def test_artifact_filter_preserves_normal_text():
-    assert _strip_model_artifacts("normal response") == "normal response"
+    assert strip_model_artifacts("normal response") == "normal response"

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from mmag.capabilities import CapabilityEffect, CapabilityExecutor, CapabilitySpec
-from mmag.capabilities.bindings import bind_legacy_capability
+from mmag.capabilities.bindings import bind_langgraph_capability
 from mmag.control_plane import (
     ApprovalService,
     EntityType,
@@ -89,7 +89,7 @@ def _runtime(
     )
     executor = CapabilityExecutor(PolicyCapabilityAuthorizer(policy))
     registry = ToolRegistry()
-    registry.register(bind_legacy_capability(spec, executor=executor))
+    registry.register(bind_langgraph_capability(spec, executor=executor))
     backend = AsyncMock()
     backend.complete = AsyncMock(side_effect=responses)
     backend.chat = AsyncMock()

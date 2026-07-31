@@ -244,8 +244,8 @@
 | 2026-07-31 | `prompts.yml` 打入 wheel，并支持 `PROMPTS_PATH` 覆盖；提交可复现 `uv.lock` |
 | 2026-07-31 | ToolRegistry 正确收集 async generator，并清零 26 个源码文件的 mypy 错误 |
 | 2026-07-31 | 重复 posted 事件持久化去重；Mattermost 回复以 `pending_post_id` 实现安全有界重试 |
-| 2026-07-31 | 统一 Runtime 契约与 SDK/Legacy Adapter；`Agent`、`MemoryCompactor` 迁移到 Runtime Port |
-| 2026-07-31 | 建立 Capability 核心契约；`get_channel_info` 由同一 Spec 生成 Legacy/SDK binding |
+| 2026-07-31 | 统一 Runtime 契约与 LangGraph/SDK Adapter；`Agent`、`MemoryCompactor` 迁移到 Runtime Port |
+| 2026-07-31 | 建立 Capability 核心契约；`get_channel_info` 由同一 Spec 生成 LangGraph/SDK binding |
 | 2026-07-31 | `search_knowledge` 迁移到 Capability Catalog，统一默认值、上限与双 Runtime 输出 |
 | 2026-07-31 | `get_posts` 迁移到 Capability Catalog，统一缓存/REST/回填策略并移出异步事件循环 |
 | 2026-07-31 | `search_messages` 迁移到 Capability Catalog，统一过滤与时间语义并修复 SDK 零时间戳漂移 |
