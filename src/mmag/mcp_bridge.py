@@ -150,9 +150,19 @@ class MCPClientBridge:
         # 之后 registry 中就有了 mcp_xxx_yyy 形式的工具，LLM 可直接调用
     """
 
-    def __init__(self, registry: ToolRegistry):
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        *,
+        allowed_tools: set[str] | frozenset[str] | tuple[str, ...] = (),
+    ):
         self.registry = registry
+        self.allowed_tools = frozenset(allowed_tools)
         self._sessions: dict[str, _McpConn] = {}  # name → (transport, session)
+
+    def is_tool_allowed(self, server_name: str, tool_name: str) -> bool:
+        """Return whether an external MCP tool is explicitly enabled."""
+        return f"mcp_{server_name}_{tool_name}" in self.allowed_tools
 
     async def load_and_connect(self) -> int:
         """读取 .mcp.json 并连接所有配置的 Server
@@ -160,6 +170,10 @@ class MCPClientBridge:
         Returns:
             成功连接并注册工具的 Server 数量
         """
+        if not self.allowed_tools:
+            log.info("外部 MCP 工具未配置白名单，跳过连接")
+            return 0
+
         items = read_mcp_config()
         if not items:
             return 0
@@ -230,9 +244,7 @@ class MCPClientBridge:
                 url = item.raw_config.get("url", "")
                 headers = item.raw_config.get("headers", {})
                 resolved_headers = {
-                    k: v
-                    for k, v in headers.items()
-                    if isinstance(k, str) and isinstance(v, str)
+                    k: v for k, v in headers.items() if isinstance(k, str) and isinstance(v, str)
                 }
                 transport = sse_client(url, headers=resolved_headers)
                 streams = await transport.__aenter__()
@@ -270,6 +282,9 @@ class MCPClientBridge:
             registered = 0
             for tool in tools:
                 tool_name = f"mcp_{item.name}_{tool.name}"
+                if not self.is_tool_allowed(item.name, tool.name):
+                    log.warning("MCP 工具未在白名单中，跳过注册: %s", tool_name)
+                    continue
                 input_schema = tool.inputSchema or {}
                 handler = self._make_handler(session, tool.name, item.name)
 

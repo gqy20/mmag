@@ -101,7 +101,10 @@ class Agent:
         log.info(f"工具系统就绪: {len(builtin_tools)} 个内置工具")
 
         # MCP 外部工具桥接（读取 .mcp.json，连接外部 Server）
-        self.mcp_bridge = MCPClientBridge(self.tool_registry)
+        self.mcp_bridge = MCPClientBridge(
+            self.tool_registry,
+            allowed_tools=config.mcp_allowed_tools,
+        )
 
         # 运行状态
         self.start_time = time.time()

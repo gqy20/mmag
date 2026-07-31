@@ -44,8 +44,9 @@ _FIELD_TO_ENV: dict[str, str] = {
     "max_text_attachment_chars": "MAX_TEXT_ATTACHMENT_CHARS",
     "max_tool_rounds": "MAX_TOOL_ROUNDS",
     "use_sdk_llm": "USE_SDK_LLM",
+    "mcp_allowed_tools": "MCP_ALLOWED_TOOLS",
 }
-# 敏感字段（值要脱敏打印，只显示前后几位）
+# 敏感字段（日志只记录是否配置，不输出任何值片段）
 _SECRET_FIELD_NAMES: frozenset[str] = frozenset({"mm_token", "anthropic_api_key"})
 
 
@@ -109,14 +110,10 @@ class Config:
     # 太多图会爆 token,1 张图 ≈ 1500 token,4 张 ≈ 6000 token。
     max_images_per_msg: int = int(os.getenv("MAX_IMAGES_PER_MSG", "4"))
     # 单张图片字节上限,超过就跳过(避免下载时间过长 / token 过贵)。
-    max_image_bytes: int = int(
-        os.getenv("MAX_IMAGE_BYTES", str(5 * 1024 * 1024))
-    )  # 默认 5MB
+    max_image_bytes: int = int(os.getenv("MAX_IMAGE_BYTES", str(5 * 1024 * 1024)))  # 默认 5MB
     # 文本附件 (markdown/txt/json 等) 的字符上限, 超过会截断。
     # 50000 字符 ≈ 12K token, 兼顾完整性与 context 预算。
-    max_text_attachment_chars: int = int(
-        os.getenv("MAX_TEXT_ATTACHMENT_CHARS", "50000")
-    )
+    max_text_attachment_chars: int = int(os.getenv("MAX_TEXT_ATTACHMENT_CHARS", "50000"))
     # ── Agent Loop ──
     # Agentic 工具调用的最大轮数(每轮 = 1 次 LLM + N 次工具 + 1 次结果回填)。
     # 调高 → 复杂任务可拆更多步,但单次请求耗时和 token 都线性增加;
@@ -125,6 +122,12 @@ class Config:
     # ── SDK LLM ──
     # 是否使用 Claude Agent SDK 替代手写 LLM 循环 (默认启用)
     use_sdk_llm: bool = os.getenv("USE_SDK_LLM", "true").lower() in ("true", "1", "yes")
+    # Legacy Runtime 的外部 MCP 工具白名单，名称格式为 mcp_<server>_<tool>
+    mcp_allowed_tools: tuple[str, ...] = tuple(
+        dict.fromkeys(
+            name.strip() for name in os.getenv("MCP_ALLOWED_TOOLS", "").split(",") if name.strip()
+        )
+    )
 
     @property
     def ws_url(self) -> str:
