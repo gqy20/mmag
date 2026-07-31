@@ -139,7 +139,7 @@ class Agent:
         # 记忆压缩器 (长期记忆层管理)
         self.compactor = MemoryCompactor(
             memory=self.memory,
-            llm=self.llm,
+            runtime=self.runtime,
             mm_client=self.mm,
             config=self.config,
         )
@@ -210,6 +210,7 @@ class Agent:
                     self.sdk_llm,
                     tool_registry=self.tool_registry,
                 )
+                self.compactor.runtime = self.runtime
                 log.info("       ✅ SDK LLM 就绪 (持久连接)")
             except Exception as e:
                 log.error("       ❌ SDK LLM 初始化失败, 回退到 legacy LLM: %s", e)

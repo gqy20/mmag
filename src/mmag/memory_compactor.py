@@ -26,11 +26,11 @@ from typing import TYPE_CHECKING
 
 from .client import PROP_FROM_BOT, PROP_SUMMARY, PROP_TRUE
 from .logger import get_logger, trace
+from .runtimes import AgentRuntime, RunContext, RunRequest
 
 if TYPE_CHECKING:
     from .client import MMClient
     from .config import Config
-    from .llm import LLM
     from .memory import Memory
 
 log = get_logger(__name__)
@@ -45,7 +45,7 @@ class MemoryCompactor:
 
     Args:
         memory: Memory 实例 (负责 SQLite 读写)
-        llm: LLM 实例 (负责摘要生成)
+        runtime: AgentRuntime 实例 (负责摘要生成)
         mm_client: MMClient 实例 (负责发摘要线程回复)
         config: 全局配置
     """
@@ -53,12 +53,12 @@ class MemoryCompactor:
     def __init__(
         self,
         memory: Memory,
-        llm: LLM,
+        runtime: AgentRuntime,
         mm_client: MMClient,
         config: Config,
     ) -> None:
         self.memory = memory
-        self.llm = llm
+        self.runtime = runtime
         self.mm = mm_client
         self.config = config
         # 每频道消息计数器 — 累计到 summary_interval 触发摘要后归零
@@ -216,17 +216,26 @@ class MemoryCompactor:
         )
 
         try:
-            result = await self.llm.chat_with_system(
-                system_prompt=(
-                    "你是一个对话摘要助手。你的任务是将团队聊天记录压缩为"
-                    "精炼的结构化摘要, 保留关键信息和决策, 去除冗余。"
-                    "如果提供了前序对话背景, 请用它来理解上下文, 但只对"
-                    "当前待摘要的对话部分输出摘要。"
-                ),
-                user_message=prompt,
-                max_tokens=1024,
+            result = await self.runtime.run(
+                RunRequest(
+                    context=RunContext(
+                        trace_id=trace.current,
+                        actor_id="mmag:memory-compactor",
+                        conversation_id=channel_id,
+                        scope=f"mattermost:channel/{channel_id}",
+                    ),
+                    messages=({"role": "user", "content": prompt},),
+                    system_prompt=(
+                        "你是一个对话摘要助手。你的任务是将团队聊天记录压缩为"
+                        "精炼的结构化摘要, 保留关键信息和决策, 去除冗余。"
+                        "如果提供了前序对话背景, 请用它来理解上下文, 但只对"
+                        "当前待摘要的对话部分输出摘要。"
+                    ),
+                    max_rounds=1,
+                    max_tokens=1024,
+                )
             )
-            return result
+            return result.text
         except Exception as e:
             # 失败时返回 None — 调用方 (._periodic_summary) 会跳过此批次,
             # 避免把错误字符串当合法摘要写入 conversation_segments 污染长期记忆
