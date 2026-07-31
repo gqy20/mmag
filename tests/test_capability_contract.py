@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, call
 import pytest
 
 from mmag.capabilities import (
+    CapabilityAuthorization,
     CapabilityEffect,
+    CapabilityExecutor,
     CapabilityStatus,
     SourcePolicy,
     bind_legacy_capability,
@@ -16,6 +18,7 @@ from mmag.capabilities import (
     create_get_user_profile_capability,
     create_search_knowledge_capability,
     create_search_messages_capability,
+    create_save_knowledge_capability,
 )
 
 
@@ -275,3 +278,48 @@ async def test_analyze_link_applies_source_policy_equally_to_both_bindings(monke
             "kind": "webpage",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_save_knowledge_is_one_declared_write_capability_for_both_bindings():
+    memory = MagicMock()
+    spec = create_save_knowledge_capability(memory)
+    arguments = {"channel_id": "channel-1", "key": "deploy", "value": "Use make deploy"}
+
+    legacy_result = await bind_legacy_capability(spec).handler(**arguments)
+    sdk_result = json.loads(
+        (await bind_sdk_capability(spec).handler(arguments))["content"][0]["text"]
+    )
+
+    assert spec.effect is CapabilityEffect.WRITE
+    assert spec.permission == "memory:knowledge:write"
+    assert legacy_result == sdk_result == {
+        "status": "ok",
+        "key": "deploy",
+        "message": "已记住: deploy",
+    }
+    assert memory.add_knowledge.call_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("authorization", "expected_status"),
+    [
+        (CapabilityAuthorization.deny("write disabled"), CapabilityStatus.FORBIDDEN),
+        (
+            CapabilityAuthorization.require_approval("approval required"),
+            CapabilityStatus.APPROVAL_REQUIRED,
+        ),
+    ],
+)
+async def test_write_policy_stops_handler_before_side_effect(authorization, expected_status):
+    memory = MagicMock()
+    authorizer = MagicMock()
+    authorizer.authorize.return_value = authorization
+    executor = CapabilityExecutor(authorizer=authorizer)
+    tool = bind_legacy_capability(create_save_knowledge_capability(memory), executor=executor)
+
+    result = await tool.handler(channel_id="channel-1", key="deploy", value="secret")
+
+    assert result["error"]["code"] == expected_status
+    memory.add_knowledge.assert_not_called()
