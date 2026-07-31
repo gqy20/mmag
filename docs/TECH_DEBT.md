@@ -96,8 +96,8 @@
   - `mcp[cli]` 引入 click/typer 等本项目用不到的 CLI 工具 → 改 `mcp`
   - `requests` 与 `httpx` **并存**:`client.py` 用 `requests`,`url_analyzer.py` 用 `httpx`
   - 所有依赖用 `>=` 而非 `~=`,**无版本上限**
-  - 无 `mypy` / `pyright` / `coverage` 等静态检查工具
-- 方案参考: 删 `mcp[cli]` extra / 统一 `httpx` / 加版本上限 / 引入 mypy
+  - ~~无 `mypy` / `pyright` / `coverage` 等静态检查工具~~（已建立 mypy 与 branch coverage 基线）
+- 方案参考: 删 `mcp[cli]` extra / 统一 `httpx` / 加版本上限；持续提高类型与覆盖率门槛
 
 ### 11. __init__.py 副作用过重
 - 位置: `src/mmag/__init__.py:7-8`
@@ -208,9 +208,8 @@
 
 ### 27. 测试基础设施薄弱
 - 无 `conftest.py`,fixture 散落在 `test_url_analyzer.py:1` 内联,无法跨文件复用
-- 无 CI 配置(`.github/workflows/` 不存在),测试无法在 CI 中运行
-- `pyproject.toml` 配 `pytest` + `pytest-asyncio` 但未充分利用
-- 无覆盖率报告
+- 已完成：GitHub Actions、`make verify`、锁文件、branch coverage 40% 门槛和 mypy 基线
+- 剩余：共享 fixture 仍未收口，失败重试与重复事件契约仍缺失
 
 ### 28. discover.py 内部细节
 - `src/mmag/discover.py:60-77` 5 个 `_get` 透传方法,均直接调 `MMClient._get` 私有方法(破坏封装)
@@ -244,3 +243,6 @@
 | 2026-07-31 | SQLite 版本化 migration：旧库升级、FTS 重建、幂等、回滚和未来版本拒绝 |
 | 2026-07-31 | 安全边界收紧：Secret 零片段日志、真实路径边界、SDK/外部 MCP 显式白名单 |
 | 2026-07-31 | `Memory.log_message` 主表与 FTS 多步写入失败时完整回滚 |
+| 2026-07-31 | CI / `make verify` 工程门禁：Ruff、197 个离线测试、42.81% 分支覆盖率、mypy、wheel smoke |
+| 2026-07-31 | `prompts.yml` 打入 wheel，并支持 `PROMPTS_PATH` 覆盖；提交可复现 `uv.lock` |
+| 2026-07-31 | ToolRegistry 正确收集 async generator，并清零 26 个源码文件的 mypy 错误 |

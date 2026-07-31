@@ -22,13 +22,15 @@
 - [x] 将 schema、migration 和 CJK FTS 预处理从 `Memory` 下沉到 infrastructure；
 - [x] 修复消息/FTS 半事务、Secret 日志和路径前缀越界问题；
 - [x] SDK 与外部 MCP 工具改为显式白名单，未知能力默认拒绝；
-- [x] 默认离线测试基线达到 `194 passed, 2 deselected`，Ruff 通过。
+- [x] 建立 GitHub Actions 与 `make verify` 统一工程门禁；
+- [x] 建立 40% 分支覆盖率与 `src/mmag` mypy 基线；
+- [x] 提交 `uv.lock`，固定 CI 与本地开发依赖；
+- [x] 将默认 Prompt 打入 wheel，并在隔离目录验证包、CLI 模块和 Prompt 加载；
+- [x] 默认离线测试基线达到 `197 passed, 2 deselected`，实际分支覆盖率 `42.81%`。
 
 当前还没有完成：
 
-- [ ] 自动化 CI 门禁；
-- [ ] coverage 和类型检查基线；
-- [ ] wheel 运行资源打包验证；
+- [ ] 消息主链的失败重试和重复事件契约；
 - [ ] Runtime/Capability 统一；
 - [ ] WebSocket 入口与长任务执行解耦。
 
@@ -61,7 +63,7 @@ Managed Agent 与 Router
 
 前一阶段的退出标准，是后一阶段开始大规模改动的前置条件。
 
-## 4. Step 1：收口 Phase 0 工程门禁（下一步）
+## 4. Step 1：收口 Phase 0 工程门禁（进行中）
 
 ### 目标
 
@@ -69,13 +71,14 @@ Managed Agent 与 Router
 
 ### 工作项
 
-- [ ] 引入 `pytest-cov`，记录当前覆盖率并设置初始阈值；
-- [ ] 引入宽松模式 `mypy`，只检查 `src/mmag`，先生成可控基线；
-- [ ] 建立 `.github/workflows/ci.yml`，依次执行 Ruff、默认离线测试、coverage、mypy 和 wheel 构建；
-- [ ] 增加 wheel smoke test：隔离安装后验证 `import mmag`、CLI 和 Prompt 加载；
-- [ ] 将 `prompts.yml` 改为明确的包资源或可配置外部资源，消除对仓库目录结构的依赖；
-- [ ] 为消息主链补附件、工具、多轮、失败重试和重复事件测试；
-- [ ] 提供 `make verify` 统一门禁命令，使本地与 CI 使用相同入口。
+- [x] 引入 `pytest-cov`，当前分支覆盖率 `42.81%`，初始阈值 40%；
+- [x] 引入宽松模式 `mypy`，检查 `src/mmag`，当前 26 个源码文件零错误；
+- [x] 建立 `.github/workflows/ci.yml`，使用锁定依赖执行统一门禁；
+- [x] 增加 wheel smoke test：隔离解包后验证 `import mmag`、CLI 模块和 Prompt 加载；
+- [x] 将 `prompts.yml` 打为包资源，并支持 `PROMPTS_PATH` 显式覆盖；
+- [x] 覆盖附件、工具和多轮调用契约；
+- [ ] 补齐失败重试和重复事件契约；
+- [x] 提供 `make verify` 统一门禁命令，使本地与 CI 使用相同入口。
 
 ### 实施思路
 
@@ -87,11 +90,12 @@ Managed Agent 与 Router
 
 ### 退出标准
 
-- [ ] 干净环境中一条命令可以执行完整工程门禁；
-- [ ] CI 默认流程完全离线且稳定；
-- [ ] wheel 安装后可以正常导入、显示 CLI 帮助并加载 Prompt；
-- [ ] coverage 和类型检查有明确、不会倒退的基线；
-- [ ] SQLite migration 和消息主链仍通过全部回归测试。
+- [x] 干净环境中一条命令可以执行完整工程门禁；
+- [x] CI 默认流程完全离线且稳定；
+- [x] wheel 解包后可以正常导入包与 CLI 模块并加载 Prompt；
+- [x] coverage 和类型检查有明确、不会倒退的基线；
+- [x] SQLite migration 和现有消息主链通过全部回归测试；
+- [ ] 失败重试和重复事件行为由契约测试固定。
 
 ## 5. Step 2：建立统一 Runtime 契约
 

@@ -99,7 +99,21 @@ make run
 | `make run` | 启动 Agent，连接 Mattermost 并开始监听 |
 | `make discover` | 探测服务器上的 Team / Channel / User ID |
 | `make install` | 以 editable 模式安装包 |
+| `make test` | 运行默认离线测试集 |
+| `make verify` | 执行与 CI 一致的 Ruff、coverage、mypy 和 wheel smoke 门禁 |
 | `make clean` | 清理缓存和编译文件 |
+
+### 开发与验证
+
+```bash
+# 按锁文件安装开发依赖
+uv sync --locked --dev
+
+# 提交前执行完整工程门禁
+make verify
+```
+
+默认测试不连接真实 Mattermost、LLM 或公网；这类验证标记为 `external`，需要显式执行。当前 coverage 分支覆盖率基线为 40%，类型检查覆盖 `src/mmag`。构建出的 wheel 会在临时目录解包，验证包、CLI 模块和内置 `prompts.yml` 均可脱离源码树加载。
 
 ### Discover 高级用法
 
@@ -201,6 +215,8 @@ Bot 具备跨会话持久记忆：
 - **消息永久存储**：`message_log` 表只增不删，启动时 backfill 补全 Mattermost 端所有历史；FTS5 虚表（unicode61）支持中英文 BM25 全文检索
 - **Schema 演进**：启动时按版本顺序执行原子 migration；支持旧库字段补齐、`message_cache` 数据/FTS 迁移、失败回滚及未来版本拒绝
 - **MCP 权限**：SDK 内置 MCP 仅允许已知 mmag 能力；外部 MCP 默认不连接，需通过 `MCP_ALLOWED_TOOLS` 精确授权 `mcp_<server>_<tool>`
+- **Prompt 资源**：默认使用 wheel 内置 `prompts.yml`；开发时可设置 `PROMPTS_PATH` 显式覆盖
+- **工程门禁**：`make verify` 是本地与 CI 的统一入口，依赖由提交到仓库的 `uv.lock` 固定
 - **长期运行注意**：message_log 持续累积，生产环境建议定期 `VACUUM INTO` 归档老消息（参考月度一次），避免 SQLite 库文件膨胀影响性能（数据保留周期按团队合规要求自行决定）
 - **LLM 适配**：`AsyncAnthropic` 原生异步客户端（SDK 内置 `max_retries=2`）；Agentic Tool Use 循环 + ThinkingBlock 自动过滤
 - **LLM 兼容**：通过 `ANTHROPIC_BASE_URL` 支持 StepFun 等兼容接口；调用失败抛 `LLMError` 由 agent 层转成用户友好提示
