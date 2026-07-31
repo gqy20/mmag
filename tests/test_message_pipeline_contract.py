@@ -34,6 +34,7 @@ def _make_agent(runtime_result: str = "已完成") -> Agent:
     agent.mm.send_post.return_value = "reply-1"
 
     agent.memory = MagicMock()
+    agent.memory.has_message.return_value = False
     agent.memory.log_message.return_value = True
     agent.memory.get_user_profile_decoded.return_value = None
     agent.memory.get_user_profile.return_value = {}
@@ -102,3 +103,19 @@ async def test_explicit_message_delivers_user_visible_error_when_runtime_fails()
         message="⚠️ LLM 服务暂时不可用，请稍后再试。",
         props={"from_bot": "true"},
     )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_post_is_not_persisted_or_replied_twice():
+    agent = _make_agent("任务完成")
+    agent.memory.has_message.side_effect = [False, True]
+
+    with patch.multiple(config, mm_channel_id="", mm_team_id="", use_sdk_llm=True):
+        await agent._on_posted(_posted_event())
+        await agent._on_posted(_posted_event())
+
+    assert agent.stats == {"messages": 1, "responses": 1, "dropped_messages": 0}
+    assert agent.memory.has_message.call_count == 2
+    agent.memory.log_message.assert_called_once()
+    agent.sdk_llm.agent_loop.assert_awaited_once()
+    agent.mm.send_post.assert_called_once()

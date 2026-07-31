@@ -3,6 +3,22 @@
 from mmag.memory import Memory
 
 
+def test_has_message_tracks_persisted_post_ids():
+    memory = Memory(":memory:")
+    post = {
+        "id": "post-1",
+        "channel_id": "channel-1",
+        "user_id": "user-1",
+        "username": "alice",
+        "message": "hello",
+        "create_at": 1_753_929_600_000,
+    }
+
+    assert memory.has_message("post-1") is False
+    assert memory.log_message(post) is True
+    assert memory.has_message("post-1") is True
+
+
 def test_log_message_rolls_back_main_row_when_fts_write_fails():
     memory = Memory(":memory:")
     memory._conn.execute("DROP TABLE message_log_fts")
