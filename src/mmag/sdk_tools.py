@@ -15,7 +15,10 @@ from typing import Any
 from claude_agent_sdk import tool
 
 from .capabilities.bindings import bind_sdk_capability
-from .capabilities.catalog import create_get_channel_info_capability
+from .capabilities.catalog import (
+    create_get_channel_info_capability,
+    create_search_knowledge_capability,
+)
 from .logger import get_logger
 
 log = get_logger(__name__)
@@ -26,8 +29,6 @@ log = get_logger(__name__)
 
 GET_POSTS_DEFAULT_LIMIT = 30
 GET_POSTS_MAX_LIMIT = 100
-SEARCH_KNOWLEDGE_DEFAULT_LIMIT = 5
-SEARCH_KNOWLEDGE_MAX_LIMIT = 10
 SEARCH_MESSAGES_DEFAULT_LIMIT = 20
 SEARCH_MESSAGES_MAX_LIMIT = 50
 
@@ -150,22 +151,7 @@ def _make_sdk_search_messages(memory):
 
 
 def _make_sdk_search_knowledge(memory):
-    @tool(
-        "search_knowledge",
-        "搜索团队知识库中的信息。用于查找之前记录的决策、流程、约定等知识。",
-        {"channel_id": str, "query": str, "limit": int},
-    )
-    async def sdk_search_knowledge(args):
-        result = await asyncio.to_thread(
-            memory.get_relevant_knowledge,
-            args["channel_id"],
-            args["query"],
-            min(args.get("limit", SEARCH_KNOWLEDGE_DEFAULT_LIMIT), SEARCH_KNOWLEDGE_MAX_LIMIT),
-        )
-        formatted = await asyncio.to_thread(_format_knowledge, result)
-        return _sdk_tool_return(formatted)
-
-    return sdk_search_knowledge
+    return bind_sdk_capability(create_search_knowledge_capability(memory))
 
 
 def _make_sdk_get_channel_info(mm_client):
@@ -401,23 +387,6 @@ def _format_search_results(results: list[dict]) -> dict:
         for r in results
     ]
     return {"count": len(messages), "messages": messages}
-
-
-def _format_knowledge(results: list[dict]) -> dict:
-    """格式化知识检索结果"""
-    if not results:
-        return {"count": 0, "items": [], "note": "未找到相关知识"}
-
-    items = [
-        {
-            "key": r["key"],
-            "value": r["value"],
-            "confidence": r.get("_score", r.get("confidence", 0)),
-        }
-        for r in results
-    ]
-
-    return {"count": len(items), "items": items}
 
 
 def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:

@@ -9,7 +9,7 @@ from .base import (
     SourcePolicy,
 )
 from .bindings import bind_legacy_capability, bind_sdk_capability
-from .catalog import create_get_channel_info_capability
+from .catalog import create_get_channel_info_capability, create_search_knowledge_capability
 
 __all__ = [
     "CapabilityEffect",
@@ -21,4 +21,5 @@ __all__ = [
     "bind_legacy_capability",
     "bind_sdk_capability",
     "create_get_channel_info_capability",
+    "create_search_knowledge_capability",
 ]

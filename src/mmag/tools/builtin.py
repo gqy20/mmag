@@ -13,7 +13,10 @@
 from __future__ import annotations
 
 from ..capabilities.bindings import bind_legacy_capability
-from ..capabilities.catalog import create_get_channel_info_capability
+from ..capabilities.catalog import (
+    create_get_channel_info_capability,
+    create_search_knowledge_capability,
+)
 from ..logger import get_logger
 from .registry import Tool
 
@@ -27,8 +30,6 @@ log = get_logger(__name__)
 
 GET_POSTS_DEFAULT_LIMIT = 30       # 不传 limit 时的默认消息数
 GET_POSTS_MAX_LIMIT = 100          # 一次最多拉多少条
-SEARCH_KNOWLEDGE_DEFAULT_LIMIT = 5  # 不传 limit 时的默认知识条目数
-SEARCH_KNOWLEDGE_MAX_LIMIT = 10    # 一次最多返回多少条
 SEARCH_MESSAGES_DEFAULT_LIMIT = 20 # 不传 limit 时的默认消息数
 SEARCH_MESSAGES_MAX_LIMIT = 50     # 一次最多返回多少条
 
@@ -88,32 +89,7 @@ def _make_get_posts_tool(mm_client, memory) -> Tool:
 
 
 def _make_search_knowledge_tool(memory) -> Tool:
-    return Tool(
-        name="search_knowledge",
-        description=("搜索团队知识库中的信息。用于查找之前记录的决策、流程、约定等知识。"),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "channel_id": {
-                    "type": "string",
-                    "description": "频道 ID（在哪个频道的知识库中搜索）",
-                },
-                "query": {
-                    "type": "string",
-                    "description": "搜索关键词",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": f"返回结果数量上限 (默认 {SEARCH_KNOWLEDGE_DEFAULT_LIMIT}, 最大 {SEARCH_KNOWLEDGE_MAX_LIMIT})",
-                    "default": SEARCH_KNOWLEDGE_DEFAULT_LIMIT,
-                },
-            },
-            "required": ["channel_id", "query"],
-        },
-        handler=lambda channel_id, query, limit=SEARCH_KNOWLEDGE_DEFAULT_LIMIT: _format_knowledge(
-            memory.get_relevant_knowledge(channel_id, query, min(limit, SEARCH_KNOWLEDGE_MAX_LIMIT))
-        ),
-    )
+    return bind_legacy_capability(create_search_knowledge_capability(memory))
 
 
 def _make_search_messages_tool(memory) -> Tool:
@@ -313,24 +289,6 @@ def _format_search_results(results: list[dict]) -> dict:
         for r in results
     ]
     return {"count": len(messages), "messages": messages}
-
-
-def _format_knowledge(results: list[dict]) -> dict:
-    """格式化知识检索结果"""
-    if not results:
-        return {"count": 0, "items": [], "note": "未找到相关知识"}
-
-    items = []
-    for r in results:
-        items.append(
-            {
-                "key": r["key"],
-                "value": r["value"],
-                "confidence": r.get("_score", r.get("confidence", 0)),
-            }
-        )
-
-    return {"count": len(items), "items": items}
 
 
 def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:
