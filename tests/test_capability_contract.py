@@ -11,6 +11,7 @@ from mmag.capabilities import (
     bind_legacy_capability,
     bind_sdk_capability,
     create_get_channel_info_capability,
+    create_get_posts_capability,
     create_search_knowledge_capability,
 )
 
@@ -105,3 +106,45 @@ async def test_search_knowledge_uses_one_default_and_limit_policy_for_both_bindi
         call("channel-1", "deploy", 5),
         call("channel-1", "deploy", 10),
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_posts_bindings_share_cache_hit_behavior():
+    memory, client = MagicMock(), MagicMock()
+    memory.get_recent_messages.return_value = [
+        {"username": "alice", "message": f"message-{index}", "create_at": index}
+        for index in range(18)
+    ]
+    spec = create_get_posts_capability(client, memory)
+
+    legacy_result = await bind_legacy_capability(spec).handler(channel_id="channel-1")
+    sdk_result = json.loads(
+        (await bind_sdk_capability(spec).handler({"channel_id": "channel-1"}))["content"][0][
+            "text"
+        ]
+    )
+
+    assert spec.permission == "mattermost:post:read"
+    assert spec.input_schema["properties"]["limit"]["default"] == 30
+    assert spec.input_schema["properties"]["limit"]["maximum"] == 100
+    assert legacy_result == sdk_result
+    assert legacy_result["count"] == 18
+    client.get_posts.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_posts_caps_rest_fallback_and_backfills_cache():
+    memory, client = MagicMock(), MagicMock()
+    memory.get_recent_messages.return_value = []
+    client.get_posts.return_value = [
+        {"id": "post-1", "user_id": "user-1", "message": "hello", "create_at": 1}
+    ]
+    client.get_username.return_value = "alice"
+    memory.log_message.return_value = True
+
+    spec = create_get_posts_capability(client, memory)
+    result = await bind_legacy_capability(spec).handler(channel_id="channel-1", limit=999)
+
+    client.get_posts.assert_called_once_with("channel-1", limit=100)
+    memory.log_message.assert_called_once()
+    assert result["messages"][0] == {"user": "alice", "message": "hello", "time": 1}
