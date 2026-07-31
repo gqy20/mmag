@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
 from ..logger import get_logger, trace
 
@@ -253,7 +253,7 @@ class Tool:
 
     name: str
     description: str
-    input_schema: dict[str, Any]
+    input_schema: Mapping[str, Any]
     handler: Callable[..., Any]
 
 

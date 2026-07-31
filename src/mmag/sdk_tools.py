@@ -14,6 +14,8 @@ from typing import Any
 
 from claude_agent_sdk import tool
 
+from .capabilities.bindings import bind_sdk_capability
+from .capabilities.catalog import create_get_channel_info_capability
 from .logger import get_logger
 
 log = get_logger(__name__)
@@ -167,17 +169,7 @@ def _make_sdk_search_knowledge(memory):
 
 
 def _make_sdk_get_channel_info(mm_client):
-    @tool(
-        "get_channel_info",
-        "获取频道的详细信息，包括名称、类型、成员数等。用于了解当前所在频道的基本信息。",
-        {"channel_id": str},
-    )
-    async def sdk_get_channel_info(args):
-        ch = await asyncio.to_thread(mm_client.get_channel, args["channel_id"])
-        formatted = await asyncio.to_thread(_format_channel, ch)
-        return _sdk_tool_return(formatted)
-
-    return sdk_get_channel_info
+    return bind_sdk_capability(create_get_channel_info_capability(mm_client))
 
 
 def _make_sdk_save_knowledge(memory):
@@ -426,19 +418,6 @@ def _format_knowledge(results: list[dict]) -> dict:
     ]
 
     return {"count": len(items), "items": items}
-
-
-def _format_channel(ch: dict) -> dict:
-    """格式化频道信息"""
-    from ..client import channel_type_label
-
-    return {
-        "id": ch.get("id", ""),
-        "name": ch.get("name", ""),
-        "display_name": ch.get("display_name", ""),
-        "type": ch.get("type", ""),
-        "type_label": channel_type_label(ch.get("type", "")),
-    }
 
 
 def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:

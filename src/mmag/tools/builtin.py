@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from ..capabilities.bindings import bind_legacy_capability
+from ..capabilities.catalog import create_get_channel_info_capability
 from ..logger import get_logger
 from .registry import Tool
 
@@ -170,22 +172,8 @@ def _make_search_messages_tool(memory) -> Tool:
 
 
 def _make_get_channel_info_tool(mm_client) -> Tool:
-    return Tool(
-        name="get_channel_info",
-        description=(
-            "获取频道的详细信息，包括名称、类型、成员数等。用于了解当前所在频道的基本信息。"
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "channel_id": {
-                    "type": "string",
-                    "description": "频道 ID",
-                },
-            },
-            "required": ["channel_id"],
-        },
-        handler=lambda channel_id: _format_channel(mm_client.get_channel(channel_id)),
+    return bind_legacy_capability(
+        create_get_channel_info_capability(mm_client),
     )
 
 
@@ -343,19 +331,6 @@ def _format_knowledge(results: list[dict]) -> dict:
         )
 
     return {"count": len(items), "items": items}
-
-
-def _format_channel(ch: dict) -> dict:
-    """格式化频道信息"""
-    from ..client import channel_type_label
-
-    return {
-        "id": ch.get("id", ""),
-        "name": ch.get("name", ""),
-        "display_name": ch.get("display_name", ""),
-        "type": ch.get("type", ""),
-        "type_label": channel_type_label(ch.get("type", "")),
-    }
 
 
 def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:
