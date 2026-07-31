@@ -13,6 +13,7 @@ from .base import (
     SourcePolicy,
 )
 from .bindings import bind_legacy_capability, bind_sdk_capability
+from .builtin import create_builtin_capabilities
 from .catalog import (
     create_get_channel_info_capability,
     create_get_posts_capability,
@@ -46,6 +47,7 @@ __all__ = [
     "bind_sdk_capability",
     "bind_capability_context",
     "create_analyze_link_capability",
+    "create_builtin_capabilities",
     "create_get_channel_info_capability",
     "create_get_posts_capability",
     "create_get_user_profile_capability",
