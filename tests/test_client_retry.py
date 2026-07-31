@@ -47,3 +47,15 @@ def test_send_post_does_not_retry_business_4xx():
     assert result is None
     client._post.assert_called_once()
     sleep.assert_not_called()
+
+
+def test_send_post_stops_after_bounded_attempts():
+    client = MMClient(base_url="https://mattermost.example", token="token")
+    client._post = MagicMock(side_effect=requests.ConnectionError("offline"))
+
+    with patch("time.sleep") as sleep:
+        result = client.send_post("channel-1", "hello")
+
+    assert result is None
+    assert client._post.call_count == 3
+    assert sleep.call_count == 2

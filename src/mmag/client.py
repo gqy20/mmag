@@ -4,6 +4,8 @@ Mattermost REST API 客户端
 
 import asyncio
 import mimetypes
+import time
+import uuid
 from typing import Any
 
 import requests
@@ -33,6 +35,20 @@ PROP_FROM_BOT = "from_bot"
 PROP_SUMMARY = "summary"
 PROP_TRUE = "true"
 
+_POST_MAX_ATTEMPTS = 3
+_POST_RETRY_BASE_SECONDS = 0.25
+
+
+def _is_retryable_post_error(error: Exception) -> bool:
+    """Only retry transport failures, rate limits, and server errors."""
+    if isinstance(error, (requests.ConnectionError, requests.Timeout)):
+        return True
+    if not isinstance(error, requests.HTTPError):
+        return False
+    response = error.response
+    status = getattr(response, "status_code", None) if response is not None else None
+    return status == 429 or (isinstance(status, int) and status >= 500)
+
 
 class MMClient:
     """Mattermost REST API + 元数据缓存
@@ -59,6 +75,7 @@ class MMClient:
         return resp.json()
 
     def _post(self, path: str, **kwargs) -> Any:
+        kwargs.setdefault("timeout", 30)
         resp = self.session.post(f"{self.base_url}/api/v4{path}", **kwargs)
         resp.raise_for_status()
         return resp.json()
@@ -100,6 +117,9 @@ class MMClient:
         payload: dict[str, Any] = {
             "channel_id": channel_id,
             "message": message,
+            # Mattermost uses this client-generated ID to deduplicate retried
+            # create-post requests within its pending-post cache window.
+            "pending_post_id": uuid.uuid4().hex,
         }
         if root_id:
             payload["root_id"] = root_id
@@ -107,14 +127,27 @@ class MMClient:
             payload["props"] = props
         if file_ids:
             payload["file_ids"] = file_ids
-        try:
-            result = self._post("/posts", json=payload)
-            post_id = result.get("id")
-            log.debug(f"消息已发送: {post_id[:12]}... → {channel_id[:8]}")
-            return post_id
-        except Exception as e:
-            log.error(f"发送消息失败: {e}")
-            return None
+        for attempt in range(_POST_MAX_ATTEMPTS):
+            try:
+                result = self._post("/posts", json=payload)
+                post_id = result.get("id")
+                log.debug(f"消息已发送: {post_id[:12]}... → {channel_id[:8]}")
+                return post_id
+            except Exception as e:
+                can_retry = _is_retryable_post_error(e)
+                if not can_retry or attempt == _POST_MAX_ATTEMPTS - 1:
+                    log.error(f"发送消息失败: {e}")
+                    return None
+                delay = _POST_RETRY_BASE_SECONDS * (2**attempt)
+                log.warning(
+                    "发送消息瞬时失败，%.2fs 后重试 (%d/%d): %s",
+                    delay,
+                    attempt + 2,
+                    _POST_MAX_ATTEMPTS,
+                    e,
+                )
+                time.sleep(delay)
+        return None
 
     def upload_file(
         self, channel_id: str, filename: str, data: bytes, content_type: str = "",
