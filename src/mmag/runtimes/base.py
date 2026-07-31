@@ -29,6 +29,7 @@ class RunContext:
     conversation_id: str
     scope: str
     deadline: datetime | None = None
+    run_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +66,7 @@ class RunRequest:
 class RuntimeStatus(StrEnum):
     COMPLETED = "completed"
     EXHAUSTED = "exhausted"
+    WAITING_APPROVAL = "waiting_approval"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +83,7 @@ class AgentResult:
     status: RuntimeStatus = RuntimeStatus.COMPLETED
     artifacts: tuple[Mapping[str, Any], ...] = ()
     capability_calls: tuple[Mapping[str, Any], ...] = ()
+    interruptions: tuple[Mapping[str, Any], ...] = ()
     usage: TokenUsage = field(default_factory=TokenUsage)
 
 

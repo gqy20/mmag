@@ -31,7 +31,7 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 3. 恢复时停止旧实例，将备份恢复到新路径，再启动单个实例。
 4. 启动过程会运行 forward-only migration，并 reconciliation 遗留的
    `RUNNING`、`SENDING` 和未投递记录。
-5. 恢复演练必须验证 Inbox 不重复执行、Outbox 可继续投递、审批仍可读取。
+5. 恢复演练必须验证 Inbox 不重复执行、Outbox 可继续投递、审批仍可读取，并能用原 `thread_id` 从 LangGraph SQLite checkpoint 恢复。
 
 ## 升级与回滚
 

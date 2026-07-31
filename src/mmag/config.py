@@ -124,9 +124,9 @@ class Config:
     # 调低 → 快速失败,长任务会被强制收尾(返回最后一轮文本)。
     max_tool_rounds: int = int(os.getenv("MAX_TOOL_ROUNDS", "10"))  # 默认 10
     # ── SDK LLM ──
-    # 是否使用 Claude Agent SDK 替代手写 LLM 循环 (默认启用)
-    use_sdk_llm: bool = os.getenv("USE_SDK_LLM", "true").lower() in ("true", "1", "yes")
-    # Legacy Runtime 的外部 MCP 工具白名单，名称格式为 mcp_<server>_<tool>
+    # LangGraph 是默认运行时；Claude Agent SDK 仅在显式开启时替代默认路由。
+    use_sdk_llm: bool = os.getenv("USE_SDK_LLM", "false").lower() in ("true", "1", "yes")
+    # LangGraph Runtime 的外部 MCP 工具白名单，名称格式为 mcp_<server>_<tool>
     mcp_allowed_tools: tuple[str, ...] = tuple(
         dict.fromkeys(
             name.strip() for name in os.getenv("MCP_ALLOWED_TOOLS", "").split(",") if name.strip()

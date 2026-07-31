@@ -1,4 +1,4 @@
-"""Adapters for the existing LangGraph and Claude SDK backends."""
+"""Adapter for the optional Claude Agent SDK backend."""
 
 from __future__ import annotations
 
@@ -88,10 +88,6 @@ class _BackendRuntimeAdapter:
             else RuntimeStatus.COMPLETED
         )
         return AgentResult(text=text, runtime=self.runtime_name, status=status)
-
-
-class LegacyRuntimeAdapter(_BackendRuntimeAdapter):
-    runtime_name = "langgraph"
 
 
 class ClaudeSDKRuntimeAdapter(_BackendRuntimeAdapter):

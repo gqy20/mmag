@@ -1,6 +1,6 @@
 """Unified runtime contract and adapters."""
 
-from .adapters import ClaudeSDKRuntimeAdapter, LegacyRuntimeAdapter
+from .adapters import ClaudeSDKRuntimeAdapter
 from .base import (
     AgentResult,
     AgentRuntime,
@@ -16,13 +16,14 @@ from .base import (
     TokenUsage,
     translate_runtime_error,
 )
+from .langgraph import LangGraphRuntimeAdapter
 
 __all__ = [
     "AgentResult",
     "AgentRuntime",
     "AgentRuntimeError",
     "ClaudeSDKRuntimeAdapter",
-    "LegacyRuntimeAdapter",
+    "LangGraphRuntimeAdapter",
     "RunContext",
     "RunRequest",
     "RuntimeInternalError",

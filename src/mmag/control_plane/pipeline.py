@@ -138,18 +138,19 @@ class MessagePipeline:
         try:
             messages = await self.processor(event)
             self.store.complete_event(event.event_id, messages)
-            self.lifecycle.transition(
-                EntityType.AGENT_RUN,
-                f"run:{event.event_id}",
-                "succeeded",
-                command_id=f"run-success:{event.event_id}",
-            )
-            self.lifecycle.transition(
-                EntityType.TASK,
-                f"task:{event.event_id}",
-                "succeeded",
-                command_id=f"task-success:{event.event_id}",
-            )
+            for entity_type, prefix in (
+                (EntityType.AGENT_RUN, "run"),
+                (EntityType.TASK, "task"),
+            ):
+                entity_id = f"{prefix}:{event.event_id}"
+                entity = self.store.get_lifecycle_entity(entity_type, entity_id)
+                if entity.state == "running":
+                    self.lifecycle.transition(
+                        entity_type,
+                        entity_id,
+                        "succeeded",
+                        command_id=f"{prefix}-success:{event.event_id}",
+                    )
             self._delivery_wake.set()
         except Exception as error:
             self.store.mark_inbox_failed(event.event_id, str(error))

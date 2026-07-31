@@ -148,6 +148,15 @@ class CapabilityExecutor:
     def __init__(self, authorizer: CapabilityAuthorizer | None = None) -> None:
         self.authorizer = authorizer or DeclaredPermissionAuthorizer()
 
+    def authorize(
+        self, spec: CapabilitySpec, arguments: Mapping[str, Any]
+    ) -> CapabilityAuthorization:
+        """Validate and authorize without invoking the capability handler."""
+        validation_error = _validate_arguments(spec.input_schema, arguments)
+        if validation_error:
+            return CapabilityAuthorization.deny(validation_error)
+        return self.authorizer.authorize(spec, arguments)
+
     async def execute(self, spec: CapabilitySpec, arguments: Mapping[str, Any]) -> CapabilityResult:
         started_at = time.monotonic()
         validation_error = _validate_arguments(spec.input_schema, arguments)
@@ -190,6 +199,38 @@ class CapabilityExecutor:
                 message=f"Capability '{spec.name}' failed: {exc}",
             )
 
+        return self._result(started_at, CapabilityStatus.SUCCESS, data=value)
+
+    async def execute_approved(
+        self, spec: CapabilitySpec, arguments: Mapping[str, Any]
+    ) -> CapabilityResult:
+        """Execute a previously approved call without evaluating policy twice."""
+        started_at = time.monotonic()
+        validation_error = _validate_arguments(spec.input_schema, arguments)
+        if validation_error:
+            return self._result(
+                started_at,
+                CapabilityStatus.INVALID_INPUT,
+                message=validation_error,
+            )
+        try:
+            async with asyncio.timeout(spec.timeout_seconds):
+                value = spec.handler(**dict(arguments))
+                if inspect.isawaitable(value):
+                    value = await value
+                value = _apply_source_policy(spec, value, dict(arguments))
+        except TimeoutError:
+            return self._result(
+                started_at,
+                CapabilityStatus.TIMEOUT,
+                message=f"Capability '{spec.name}' timed out",
+            )
+        except Exception as exc:
+            return self._result(
+                started_at,
+                CapabilityStatus.ERROR,
+                message=f"Capability '{spec.name}' failed: {exc}",
+            )
         return self._result(started_at, CapabilityStatus.SUCCESS, data=value)
 
     @staticmethod

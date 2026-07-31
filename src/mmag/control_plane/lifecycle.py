@@ -143,6 +143,8 @@ class LifecycleService:
 
     @staticmethod
     def state_for_result(result: AgentResult) -> str:
+        if result.status is RuntimeStatus.WAITING_APPROVAL:
+            return "waiting_approval"
         if result.status is RuntimeStatus.EXHAUSTED:
             return "exhausted"
         return "succeeded"

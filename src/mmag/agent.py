@@ -25,6 +25,7 @@ from .config import _log_config_loading, _secret_status, config
 from .control_plane import (
     ApprovalService,
     InboundEvent,
+    LangGraphApprovalCoordinator,
     LifecycleService,
     MessagePipeline,
     OutboundMessage,
@@ -55,9 +56,10 @@ from .runtimes import (
     AgentRuntime,
     AgentRuntimeError,
     ClaudeSDKRuntimeAdapter,
-    LegacyRuntimeAdapter,
+    LangGraphRuntimeAdapter,
     RunContext,
     RunRequest,
+    RuntimeStatus,
 )
 from .sdk_llm import SDKLLM
 from .tools import ToolRegistry, build_builtin_tools
@@ -188,7 +190,7 @@ class Agent:
         self.approvals = ApprovalService(self.control_store, self.lifecycle)
         self.policy_engine = PolicyEngine()
         self.capability_executor = CapabilityExecutor(
-            PolicyCapabilityAuthorizer(self.policy_engine, self.approvals)
+            PolicyCapabilityAuthorizer(self.policy_engine)
         )
 
         # 工具注册系统
@@ -204,14 +206,21 @@ class Agent:
         )
         self.agent_router = AgentRouter(self.agent_registry)
 
-        # 应用层只依赖 AgentRuntime；启动阶段可在 SDK/Legacy Adapter 间切换。
-        backend_runtime: AgentRuntime = LegacyRuntimeAdapter(
+        # LangGraph 是默认运行时；SDK 作为显式 opt-in 的备选路由。
+        self.langgraph_runtime = LangGraphRuntimeAdapter(
             self.llm,
             tool_registry=self.tool_registry,
+            checkpoint_path=config.memory_db_path,
         )
         self.model_gateway = ModelGateway(
-            {"default": backend_runtime},
+            {"default": self.langgraph_runtime},
             ledger=QuotaLedger(default_limit_usd=config.model_budget_usd),
+        )
+        self.approval_coordinator = LangGraphApprovalCoordinator(
+            self.control_store,
+            self.lifecycle,
+            self.approvals,
+            self.model_gateway,
         )
         self.runtime: AgentRuntime = self.model_gateway
         for spec in (
@@ -293,6 +302,9 @@ class Agent:
             self.running = False
             return
 
+        await self.langgraph_runtime.start()
+        log.info("       ✅ LangGraph Runtime 就绪 (SQLite checkpoint + native HITL)")
+
         # 阶段 3: 连接 MCP 外部工具 Server
         log.info("[3/5] 加载 MCP 外部工具...")
         try:
@@ -333,10 +345,10 @@ class Agent:
                 self.compactor.runtime = self.runtime
                 log.info("       ✅ SDK LLM 就绪 (持久连接)")
             except Exception as e:
-                log.error("       ❌ SDK LLM 初始化失败, 回退到 legacy LLM: %s", e)
+                log.error("       ❌ SDK LLM 初始化失败, 回退到 LangGraph: %s", e)
                 config.use_sdk_llm = False  # 自动降级
         else:
-            log.info("       ⏭️ SDK LLM 未启用 (use_sdk_llm=False), 使用 legacy LLM")
+            log.info("       ⏭️ SDK LLM 未启用, 使用默认 LangGraph Runtime")
 
         # 阶段 4: 预加载频道消息到缓存
         log.info("[4/5] 预加载频道消息...")
@@ -665,6 +677,13 @@ class Agent:
 
         log.info("%s [%s] %s", trace.prefix(), post["username"], message[:80])
 
+        approval_command = self._approval_command(message)
+        if approval_command is not None:
+            trace.set_context(msg_type="approval")
+            await self._handle_approval_command(post, approval_command)
+            trace.clear()
+            return
+
         # ====== 触发判定: 显式召唤(硬规则,不走 LLM 决策)======
         if self._is_explicit_invocation(post):
             trace.set_context(msg_type="mention")
@@ -758,6 +777,7 @@ class Agent:
                 conversation_id=channel_id,
                 scope=f"mattermost:{team_id}/{channel_id}",
                 deadline=datetime.now(UTC) + timedelta(seconds=config.runtime_deadline_seconds),
+                run_id=f"mattermost:{post.get('id', trace.current)}",
             ),
             messages=tuple(prompt_context["messages"]),
             system_prompt=prompt_context["system"],
@@ -806,7 +826,10 @@ class Agent:
                     max_rounds=rounds,
                 ),
             )
-            response = runtime_result.text
+            if runtime_result.status is RuntimeStatus.WAITING_APPROVAL:
+                response = self._register_approval_interrupt(post, runtime_result)
+            else:
+                response = runtime_result.text
         except AgentRuntimeError as e:
             # LLM 调用失败 (网络/SDK异常) — 给用户友好提示 + log 留底
             log.error("%s [%s] LLM 调用失败: %s", trace.prefix(), tag, e, exc_info=True)
@@ -826,6 +849,73 @@ class Agent:
         else:
             result = await self.reply(post, response)
             log.info("%s [%s] 回复已发送 post_id=%s", trace.prefix(), tag, result)
+
+    def _register_approval_interrupt(self, post: dict, runtime_result) -> str:
+        """Persist one native LangGraph interrupt as an auditable approval request."""
+        approval = self.approval_coordinator.register(
+            runtime_result,
+            requested_by=post.get("user_id", ""),
+            scope_id=self._post_scope(post),
+        )
+        return (
+            f"⏸️ 操作等待人工审批：`{approval.capability_name}`\n"
+            f"审批 ID：`{approval.id}`\n"
+            f"回复 `批准 {approval.id}` 或 `拒绝 {approval.id}`。"
+        )
+
+    async def resume_approval(
+        self,
+        request_id: str,
+        *,
+        approved: bool,
+        actor_id: str,
+        scope_id: str,
+        reason: str = "",
+    ):
+        """Decide an approval and resume its exact LangGraph checkpoint."""
+        return await self.approval_coordinator.resume(
+            request_id,
+            approved=approved,
+            actor_id=actor_id,
+            scope_id=scope_id,
+            trace_id=trace.current,
+            reason=reason,
+        )
+
+    def _post_scope(self, post: dict) -> str:
+        channel_id = post.get("channel_id", "")
+        channel = self.mm.get_channel(channel_id)
+        return f"mattermost:{channel.get('team_id') or '-'}/{channel_id}"
+
+    async def _handle_approval_command(self, post: dict, command: tuple[bool, str]) -> None:
+        approved, request_id = command
+        try:
+            result = await self.resume_approval(
+                request_id,
+                approved=approved,
+                actor_id=post.get("user_id", ""),
+                scope_id=self._post_scope(post),
+            )
+            response = (
+                self._register_approval_interrupt(post, result)
+                if result.status is RuntimeStatus.WAITING_APPROVAL
+                else result.text
+            )
+        except (KeyError, PermissionError, ValueError) as error:
+            response = f"⚠️ 无法处理审批：{error}"
+        await self.reply(post, response or "✅ 审批已处理。")
+
+    @staticmethod
+    def _approval_command(message: str) -> tuple[bool, str] | None:
+        parts = message.strip().split()
+        if len(parts) != 2:
+            return None
+        action = parts[0].lower()
+        if action in {"批准", "approve"}:
+            return True, parts[1]
+        if action in {"拒绝", "reject"}:
+            return False, parts[1]
+        return None
 
     async def _run_request(self, post: dict, request: RunRequest):
         """Execute one Runtime request with immutable, task-local capability context."""
@@ -1428,6 +1518,12 @@ class Agent:
                 await self.sdk_llm.stop()
             except Exception as e:
                 log.error("sdk_llm.stop 失败: %s", e, exc_info=True)
+
+        if hasattr(self, "langgraph_runtime"):
+            try:
+                await self.langgraph_runtime.close()
+            except Exception as e:
+                log.error("langgraph_runtime.close 失败: %s", e, exc_info=True)
 
         # 2) 关闭 MCP 外部连接 (会注销注入的 mcp_* 工具)
         if hasattr(self, "mcp_bridge"):

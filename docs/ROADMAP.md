@@ -4,7 +4,7 @@
 >
 > 更新时间：2026-07-31
 >
-> 当前阶段：Step 4–7 平台控制面基线完成，进入生产验证与增量演进
+> 当前阶段：Step 4–7 平台控制面基线完成，LangGraph 原生 HITL 已接通，进入生产验证
 >
 > 架构依据：[`AI_NATIVE_REFACTORING.md`](./AI_NATIVE_REFACTORING.md)
 
@@ -29,11 +29,13 @@
 - [x] 重复 posted 事件在 Runtime 前按持久化 post ID 去重；
 - [x] Mattermost 回复使用 `pending_post_id` 对网络错误、超时、429/5xx 做有界幂等重试；
 - [x] 默认离线测试基线达到 `255 passed, 2 deselected`，实际分支覆盖率 `59.15%`；
-- [x] 建立不可变 Runtime 输入/输出、统一错误模型和 SDK/Legacy Adapter；
+- [x] 建立不可变 Runtime 输入/输出与统一错误模型；
+- [x] LangGraph 成为默认 Runtime，接入 SQLite checkpoint、原生 interrupt/resume；
+- [x] 审批支持 approve/edit/reject，并覆盖跨 Runtime 重建恢复；
 - [x] `Agent` 与 `MemoryCompactor` 已只依赖 `AgentRuntime` Port；
 - [x] 建立 Capability 核心契约，八个内置能力均已迁移到单一 Spec；
 - [x] 删除全局 `ToolContext.current_post`，文件能力改用请求级不可变上下文。
-- [x] 外部 MCP discovery 已适配为 Capability，SDK/Legacy 共享 Spec、Policy 和可见性。
+- [x] 外部 MCP discovery 已适配为 Capability，共享 Spec、Policy 和可见性。
 
 下一阶段尚未完成：
 
@@ -116,9 +118,9 @@ Managed Agent 与 Router
 - [x] 定义 `AgentResult`：文本、结构化产物、能力调用、usage 和状态；
 - [x] 定义 `AgentRuntime` Protocol；
 - [x] 统一 timeout、rate-limit、rejected、unavailable 和 internal 错误语义；
-- [x] 为 SDKLLM 和 Legacy LLM 建立 Adapter；
+- [x] 为 SDKLLM 和 LangGraph 建立统一 Runtime 边界；
 - [x] 让 `Agent`、`MemoryCompactor` 等调用方依赖 Runtime Port；
-- [x] 形成默认 Runtime 与 Legacy 退出策略 ADR。
+- [x] 修订 Runtime ADR，确立 LangGraph 默认路径并移除 Legacy Adapter。
 
 ### 实施思路
 
@@ -146,13 +148,13 @@ Managed Agent 与 Router
 - [x] 统一两条 Runtime 的返回结构、错误和来源信息；
 - [x] 逐个迁移共享内置工具，删除重复 handler/formatter；
 - [x] 收紧 MCP 默认权限和文件路径判断。
-- [x] 外部 MCP 先进入 Capability Catalog/Policy，再生成 Legacy 与 SDK binding。
+- [x] 外部 MCP 先进入 Capability Catalog/Policy，再生成 LangGraph 与 SDK binding。
 
 ### 实施思路
 
 不先设计覆盖所有未来 Agent 的万能抽象。首个切片只需要证明“一份 schema + 一份 handler + 多 Runtime binding”成立，再根据第二、第三个能力暴露出的差异扩展协议。
 
-当前八个内置能力由同一个有序 Catalog 创建，再派生 SDK/Legacy binding；每项能力只有一个 Spec、JSON Schema 和 handler。统一执行器负责参数校验、deadline、来源和稳定错误码；`CapabilityAuthorizer` 已能在副作用前返回允许、拒绝或待审批。默认策略只拒绝未声明权限的写能力，按用户/作用域授权仍需在企业 Context 阶段接入。
+当前八个内置能力由同一个有序 Catalog 创建，再派生 LangGraph/SDK binding；每项能力只有一个 Spec、JSON Schema 和 handler。统一执行器负责参数校验、deadline、来源和稳定错误码；`CapabilityAuthorizer` 在副作用前返回允许、拒绝或待审批，LangGraph 将待审批转换为原生 interrupt。
 
 `send_file` 也已成为声明 `mattermost:file:write` 的 Capability。普通异步链路用 `ContextVar` 绑定不可变 `CapabilityContext`；Claude SDK 的持久 MCP reader 无法继承后续 task context，因此 SDK 查询通过实例级锁串行执行，并在查询生命周期内桥接、清理同一份上下文。该设计消除了跨频道覆盖 `current_post` 的竞态，但不等于 Step 4 的跨会话并行调度已经完成。
 

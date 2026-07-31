@@ -22,7 +22,8 @@ Mattermost WebSocket → InboundEvent → Inbox → conversation scheduler
 - WebSocket 回调只负责持久接收；同会话串行、跨会话并发
 - Agent 执行与 Delivery 状态独立，失败投递不会重复调用模型
 - Lifecycle、审批、审计、配额和企业 Context 共用 SQLite 控制面
-- LLM 循环在 `llm.py:agent_loop`,最多 `MAX_TOOL_ROUNDS` 轮,达到上限返回 "处理超时"
+- LangGraph 是默认 Agent Runtime，使用 SQLite checkpoint、稳定 `thread_id` 和原生 interrupt/resume
+- 待审工具在副作用前暂停；Mattermost 支持 `批准/拒绝 <approval_id>` 恢复原 Run
 - 工具系统统一在 `ToolRegistry`,内置工具 + MCP 注入工具走同一调度
 - 记忆读写双向:消息实时写入 + 启动 backfill 补全,LLM 检索走 FTS5 BM25
 
@@ -61,6 +62,7 @@ PIPELINE_MAX_CONCURRENCY=8     # 跨会话并发
 PIPELINE_MAX_PENDING=256       # 入口背压上限
 RUNTIME_DEADLINE_SECONDS=120   # 单次 Agent Run deadline
 MODEL_BUDGET_USD=100           # 每 actor 的进程内成本上限
+USE_SDK_LLM=false              # 默认 LangGraph；仅显式需要时启用 Claude Agent SDK
 ```
 
 > **不知道 Team/Channel ID？** 先运行 `make discover` 自动探测。
@@ -146,13 +148,13 @@ Bot 支持三种触发方式：
 │   ├── memory_compactor.py     # 长期记忆压缩器
 │   ├── infrastructure/
 │   │   └── sqlite/             # SQLite 连接、版本化迁移与 FTS 预处理
-│   ├── runtimes/               # Provider-neutral Runtime 契约与 SDK/Legacy Adapter
+│   ├── runtimes/               # LangGraph 默认 Runtime、HITL 与可选 SDK Adapter
 │   ├── capabilities/           # 单一能力规格、统一执行器与 Runtime bindings
 │   ├── control_plane/          # Inbox/Outbox、Lifecycle、Context、Approval
 │   ├── governance/             # Policy、Secret、Model Gateway、Quota、运维原语
 │   ├── managed_agents.py       # Agent Registry、Router、handoff 与 Link Agent
 │   ├── repositories.py         # 专用 Memory Repository 边界
-│   ├── llm.py                  # LLM 适配器 (AsyncAnthropic + Agentic Tool Use)
+│   ├── llm.py                  # Anthropic 模型客户端（图编排位于 runtimes/）
 │   ├── client.py               # Mattermost REST API 客户端 (元数据缓存)
 │   ├── url_analyzer.py         # 链接分析 (GitHub / Trafilatura / SSRF 防护)
 │   ├── mcp_bridge.py           # MCP 外部工具桥接 (.mcp.json)
@@ -176,8 +178,9 @@ Bot 支持三种触发方式：
 - [AI Native 重构方案](docs/AI_NATIVE_REFACTORING.md)：目标架构、设计原则与阶段依赖；
 - [实施路线图](docs/ROADMAP.md)：当前完成情况、下一步任务和各阶段退出标准；
 - [技术债清单](docs/TECH_DEBT.md)：具体问题、风险和建议拆分方向；
-- [Runtime 选择 ADR](docs/adr/0001-runtime-selection.md)：默认 Runtime、失败边界和 Legacy 退出条件；
-- [Capability 授权 ADR](docs/adr/0002-capability-authorization.md)：写能力三态裁决、默认策略和审批扩展边界；
+- [Runtime 选择 ADR](docs/adr/0001-runtime-selection.md)：LangGraph 默认 Runtime 与可选 SDK 边界；
+- [Capability 授权 ADR](docs/adr/0002-capability-authorization.md)：写能力三态裁决与副作用前审批；
+- [LangGraph HITL ADR](docs/adr/0005-langgraph-native-hitl.md)：checkpoint、interrupt、resume 与生命周期同步；
 - [请求级 Capability Context ADR](docs/adr/0003-request-scoped-capability-context.md)：异步上下文隔离与持久 SDK 桥接策略；
 - [MCP Capability Adapter ADR](docs/adr/0004-mcp-capability-adapter.md)：外部工具发现、双 Runtime binding 与统一 Policy；
 - [Mattermost ID 指南](docs/MATTERMOST_ID_GUIDE.md)：Team、Channel 和 User ID 的获取与配置。
@@ -214,9 +217,9 @@ Bot 具备跨会话持久记忆：
 - **断线续传**：通过 `connection_id` + `sequence_number` 实现断线后恢复
 - **消息永久存储**：`message_log` 表只增不删，启动时 backfill 补全 Mattermost 端所有历史；FTS5 虚表（unicode61）支持中英文 BM25 全文检索
 - **Schema 演进**：启动时按版本顺序执行原子 migration；支持旧库字段补齐、`message_cache` 数据/FTS 迁移、失败回滚及未来版本拒绝
-- **MCP 权限**：外部 MCP 默认不连接，需通过 `MCP_ALLOWED_TOOLS` 精确授权 `mcp_<server>_<tool>`；命中后统一进入 Capability Policy，并在 SDK/Legacy 中保持相同可见性
+- **MCP 权限**：外部 MCP 默认不连接，需通过 `MCP_ALLOWED_TOOLS` 精确授权 `mcp_<server>_<tool>`；命中后统一进入 Capability Policy
 - **消息可靠性**：重复 `posted` 事件在 Runtime 调用前按持久化 post ID 去重；创建回复使用 `pending_post_id` 对瞬时故障做有界幂等重试
-- **Runtime 边界**：应用层统一使用不可变 `RunRequest` / `AgentResult` 和 `AgentRuntime`，SDK/Legacy 的异常与 fallback 由 Adapter 收口
+- **Runtime 边界**：应用层统一使用不可变 `RunRequest` / `AgentResult`；LangGraph 默认持久运行，Claude SDK 仅显式启用
 - **Prompt 资源**：默认使用 wheel 内置 `prompts.yml`；开发时可设置 `PROMPTS_PATH` 显式覆盖
 - **工程门禁**：`make verify` 是本地与 CI 的统一入口，依赖由提交到仓库的 `uv.lock` 固定
 - **长期运行注意**：message_log 持续累积，生产环境建议定期 `VACUUM INTO` 归档老消息（参考月度一次），避免 SQLite 库文件膨胀影响性能（数据保留周期按团队合规要求自行决定）

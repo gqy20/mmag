@@ -5,12 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mmag.llm import LLMError
 from mmag.runtimes import (
     AgentResult,
     AgentRuntime,
     ClaudeSDKRuntimeAdapter,
-    LegacyRuntimeAdapter,
     RunContext,
     RunRequest,
     RuntimeInternalError,
@@ -85,21 +83,14 @@ def test_runtime_errors_are_classified(error, expected):
     assert isinstance(translate_runtime_error(error, runtime="test"), expected)
 
 
-@pytest.mark.parametrize(
-    ("adapter_type", "runtime_name"),
-    [
-        (LegacyRuntimeAdapter, "langgraph"),
-        (ClaudeSDKRuntimeAdapter, "claude-sdk"),
-    ],
-)
 @pytest.mark.asyncio
-async def test_adapters_return_the_same_structured_result(adapter_type, runtime_name):
-    adapter, backend, registry = _adapter(adapter_type)
+async def test_claude_adapter_returns_structured_result():
+    adapter, backend, registry = _adapter(ClaudeSDKRuntimeAdapter)
 
     result = await adapter.run(_request())
 
     assert isinstance(adapter, AgentRuntime)
-    assert result == AgentResult(text="done", runtime=runtime_name)
+    assert result == AgentResult(text="done", runtime="claude-sdk")
     backend.agent_loop.assert_awaited_once_with(
         messages=[{"role": "user", "content": "hello"}],
         system="system",
@@ -110,10 +101,9 @@ async def test_adapters_return_the_same_structured_result(adapter_type, runtime_
     )
 
 
-@pytest.mark.parametrize("adapter_type", [LegacyRuntimeAdapter, ClaudeSDKRuntimeAdapter])
 @pytest.mark.asyncio
-async def test_adapters_own_the_no_tools_fallback(adapter_type):
-    adapter, backend, _registry = _adapter(adapter_type)
+async def test_claude_adapter_owns_the_no_tools_fallback():
+    adapter, backend, _registry = _adapter(ClaudeSDKRuntimeAdapter)
     backend.agent_loop.return_value = "⚠️ 处理超时，请重试"
 
     result = await adapter.run(_request())
@@ -126,27 +116,23 @@ async def test_adapters_own_the_no_tools_fallback(adapter_type):
     )
 
 
-@pytest.mark.parametrize(
-    ("adapter_type", "backend_error"),
-    [(LegacyRuntimeAdapter, LLMError), (ClaudeSDKRuntimeAdapter, SDKLLMError)],
-)
 @pytest.mark.asyncio
-async def test_adapters_translate_backend_errors(adapter_type, backend_error):
-    adapter, backend, _registry = _adapter(adapter_type)
-    error = backend_error("request failed")
+async def test_claude_adapter_translates_backend_errors():
+    adapter, backend, _registry = _adapter(ClaudeSDKRuntimeAdapter)
+    error = SDKLLMError("request failed")
     error.__cause__ = TimeoutError("deadline exceeded")
     backend.agent_loop.side_effect = error
 
     with pytest.raises(RuntimeTimeoutError) as raised:
         await adapter.run(_request())
 
-    assert raised.value.runtime in {"langgraph", "claude-sdk"}
+    assert raised.value.runtime == "claude-sdk"
     assert raised.value.__cause__ is error
 
 
 @pytest.mark.asyncio
 async def test_expired_deadline_fails_before_calling_backend():
-    adapter, backend, _registry = _adapter(LegacyRuntimeAdapter)
+    adapter, backend, _registry = _adapter(ClaudeSDKRuntimeAdapter)
     context = _request().context
     expired = RunContext(
         trace_id=context.trace_id,

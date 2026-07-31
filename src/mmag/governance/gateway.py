@@ -82,3 +82,17 @@ class ModelGateway:
         result = await runtime.run(request)
         self.ledger.record(subject, result)
         return result
+
+    async def resume(
+        self,
+        thread_id: str,
+        decision: dict,
+        *,
+        route: str | None = None,
+    ) -> AgentResult:
+        selected = route or self.default_route
+        runtime = self.runtimes[selected]
+        resume = getattr(runtime, "resume", None)
+        if resume is None:
+            raise TypeError(f"runtime {selected!r} does not support durable resume")
+        return await resume(thread_id, decision)

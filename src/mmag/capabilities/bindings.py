@@ -32,6 +32,8 @@ def bind_legacy_capability(
         description=spec.description,
         input_schema=spec.input_schema,
         handler=handler,
+        capability=spec,
+        executor=runner,
     )
 
 

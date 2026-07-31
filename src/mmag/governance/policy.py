@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from typing import Any
 
     from ..capabilities import CapabilitySpec
-    from ..control_plane import ApprovalService
 
 
 class PolicyEffect(StrEnum):
@@ -100,9 +99,8 @@ def bind_governance_context(context: GovernanceContext) -> Iterator[None]:
 class PolicyCapabilityAuthorizer:
     """CapabilityAuthorizer adapter used by both runtime bindings."""
 
-    def __init__(self, engine: PolicyEngine, approvals: ApprovalService | None = None):
+    def __init__(self, engine: PolicyEngine):
         self.engine = engine
-        self.approvals = approvals
 
     def authorize(
         self, spec: CapabilitySpec, arguments: Mapping[str, Any]
@@ -112,14 +110,5 @@ class PolicyCapabilityAuthorizer:
         if decision.effect is PolicyEffect.DENY:
             return CapabilityAuthorization.deny(decision.reason)
         if decision.effect is PolicyEffect.REQUIRE_APPROVAL:
-            reason = decision.reason
-            if self.approvals is not None:
-                approval = self.approvals.request(
-                    spec.name,
-                    dict(arguments),
-                    requested_by=context.actor_id,
-                    scope_id=context.scope,
-                )
-                reason = f"{reason}; approval_id={approval.id}"
-            return CapabilityAuthorization.require_approval(reason)
+            return CapabilityAuthorization.require_approval(decision.reason)
         return CapabilityAuthorization.allow()

@@ -4,7 +4,9 @@ from collections import defaultdict
 import pytest
 
 from mmag.control_plane import (
+    EntityType,
     InboundEvent,
+    LifecycleService,
     MessagePipeline,
     OutboundMessage,
     SQLiteControlPlane,
@@ -92,4 +94,38 @@ async def test_delivery_retry_does_not_reprocess_agent(tmp_path):
     assert attempts == 2
     assert store.get_inbox("one").status == "completed"
     assert store.list_deliveries(status="delivered")[0].remote_id == "post-1"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_preserves_waiting_approval_lifecycle(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    lifecycle = LifecycleService(store)
+
+    async def process(event: InboundEvent) -> tuple[OutboundMessage, ...]:
+        for entity_type, prefix in (
+            (EntityType.AGENT_RUN, "run"),
+            (EntityType.TASK, "task"),
+        ):
+            lifecycle.transition(
+                entity_type,
+                f"{prefix}:{event.event_id}",
+                "waiting_approval",
+                command_id=f"pause:{prefix}:{event.event_id}",
+            )
+        return (OutboundMessage(event.conversation_id, "approval needed"),)
+
+    async def deliver(message: OutboundMessage) -> str:
+        return "approval-post"
+
+    pipeline = MessagePipeline(store, process, deliver)
+    await pipeline.start()
+    await pipeline.accept(_event("paused", "channel"))
+    await pipeline.join()
+    await pipeline.close()
+
+    assert store.get_lifecycle_entity(EntityType.AGENT_RUN, "run:paused").state == (
+        "waiting_approval"
+    )
+    assert store.get_lifecycle_entity(EntityType.TASK, "task:paused").state == "waiting_approval"
     store.close()

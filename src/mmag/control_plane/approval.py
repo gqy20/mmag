@@ -26,13 +26,14 @@ class ApprovalService:
         requested_by: str,
         scope_id: str = "",
         ttl_seconds: float | None = 3600,
+        resume_token: str | None = None,
     ) -> ApprovalRequest:
         now = time.time()
         request = ApprovalRequest(
             id=uuid.uuid4().hex,
             capability_name=capability_name,
             arguments=dict(arguments),
-            resume_token=uuid.uuid4().hex,
+            resume_token=resume_token or uuid.uuid4().hex,
             requested_by=requested_by,
             scope_id=scope_id,
             expires_at=now + ttl_seconds if ttl_seconds is not None else None,

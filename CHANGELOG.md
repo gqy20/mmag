@@ -4,6 +4,9 @@
 
 **工程能力**
 
+- LangGraph 成为默认 Agent Runtime，接入官方 SQLite checkpointer、稳定 thread id 和原生 interrupt/resume
+- 人工审批在 Capability 副作用前暂停，支持 approve/edit/reject、Mattermost 批准/拒绝命令及进程重启后恢复
+- 移除无 checkpoint 的旧 LangGraph 循环与 `LegacyRuntimeAdapter`，Claude Agent SDK 改为显式 opt-in
 - 引入持久 Inbox/Outbox、按会话分区的并发调度和独立 Delivery worker；慢任务不再阻塞 WebSocket，投递重试不重跑 Agent
 - 新增统一 LifecycleService、五类状态机、乐观版本、命令幂等、append-only 转换历史和重启 reconciliation
 - 新增企业 Scope/Context、审批快照与恢复令牌、Artifact/Audit 模型，以及 Message/Profile/Knowledge/Summary/URL Repository 边界

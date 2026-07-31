@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from ..capabilities import CapabilityAuthorization, CapabilityExecutor, CapabilitySpec
+
 from ..capabilities.sources import enrich_with_sources
 from ..logger import get_logger, trace
 
@@ -33,6 +35,8 @@ class Tool:
     description: str
     input_schema: Mapping[str, Any]
     handler: Callable[..., Any]
+    capability: CapabilitySpec | None = None
+    executor: CapabilityExecutor | None = None
 
 
 class ToolRegistry:
@@ -68,6 +72,15 @@ class ToolRegistry:
         """获取所有已注册的工具"""
         return list(self._tools.values())
 
+    def authorization(
+        self, name: str, input_data: dict[str, Any]
+    ) -> CapabilityAuthorization | None:
+        """Return a capability policy decision without running the tool."""
+        tool = self._tools.get(name)
+        if tool is None or tool.capability is None or tool.executor is None:
+            return None
+        return tool.executor.authorize(tool.capability, input_data)
+
     def get_schema_list(self) -> list[dict[str, Any]]:
         """获取 Anthropic API 格式的工具定义列表（用于 LLM 调用）"""
         return [
@@ -79,7 +92,9 @@ class ToolRegistry:
             for t in self._tools.values()
         ]
 
-    async def execute(self, name: str, input_data: dict[str, Any]) -> str:
+    async def execute(
+        self, name: str, input_data: dict[str, Any], *, approval_granted: bool = False
+    ) -> str:
         """
         执行指定工具并返回结果字符串。
 
@@ -100,7 +115,13 @@ class ToolRegistry:
         )
 
         try:
-            result = tool.handler(**input_data)
+            if approval_granted and tool.capability is not None and tool.executor is not None:
+                capability_result = await tool.executor.execute_approved(
+                    tool.capability, input_data
+                )
+                result = capability_result.to_payload()
+            else:
+                result = tool.handler(**input_data)
             # async generator 不是 awaitable，需要先逐项收集。
             if inspect.isasyncgen(result):
                 result = [item async for item in result]

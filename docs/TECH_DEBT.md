@@ -252,6 +252,7 @@
 | 2026-07-31 | `get_user_profile` 迁移到 Capability Catalog，并发组合画像与用户名读取 |
 | 2026-07-31 | `analyze_link` 迁移到独立 Capability；执行器按 `SourcePolicy.AUTO` 统一注入来源 |
 | 2026-07-31 | `save_knowledge` 迁移为受治理写能力；Authorizer 在副作用前统一处理允许、拒绝和待审批 |
+| 2026-07-31 | LangGraph 升级为默认持久 Runtime；原生 interrupt/checkpoint/resume 接通 Mattermost 审批与生命周期 |
 | 2026-07-31 | `send_file` 迁移为受治理写能力；请求级不可变上下文替代全局消息槽，SDK 查询桥具备串行隔离 |
 | 2026-07-31 | 当前工程门禁：Ruff、236 个离线测试、50.60% 分支覆盖率、36 个源码文件 mypy 零错误、wheel smoke |
 | 2026-07-31 | Step 3 完成：内置与外部 MCP 统一进入 Capability Catalog/Policy，删除 SDK crawl 旁路与重依赖；243 个测试、55.45% 分支覆盖率 |

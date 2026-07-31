@@ -2,6 +2,7 @@
 
 from .approval import ApprovalService
 from .context import AssembledContext, ContextAssembler, ScopeResolver
+from .langgraph_approval import LangGraphApprovalCoordinator
 from .lifecycle import (
     InvalidTransitionError,
     LifecycleError,
@@ -52,6 +53,7 @@ __all__ = [
     "LifecycleEntity",
     "LifecycleError",
     "LifecycleService",
+    "LangGraphApprovalCoordinator",
     "MessagePipeline",
     "OutboundMessage",
     "PartitionedScheduler",

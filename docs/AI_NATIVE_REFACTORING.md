@@ -23,7 +23,7 @@
 - `uv.lock` 已提交，默认 Prompt 已作为 wheel 资源发布并通过隔离 smoke test。
 - 重复 posted 事件已在执行前去重，Mattermost 回复已具备带 `pending_post_id` 的安全有界重试。
 
-Phase 0、Runtime 契约与 Capability 单一来源均已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port；八个内置能力与外部 MCP 都经过 Capability Spec、Executor 和 Policy；SDK/Legacy 的 MCP 可见性由同一 discovery 结果生成。全局 `ToolContext.current_post` 和 SDK crawl 旁路均已删除，当前进入入口、执行与投递解耦。
+Phase 0、Runtime 契约与 Capability 单一来源均已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port；八个内置能力与外部 MCP 都经过 Capability Spec、Executor 和 Policy。LangGraph 已成为默认 Runtime，并使用 SQLite checkpoint、稳定 `thread_id`、原生 `interrupt()` / `Command(resume=...)` 实现副作用前人工审批；Claude Agent SDK 保留为显式可选后端。
 
 下一步不直接拆分 `Agent` 或引入多 Agent，而是按以下依赖顺序推进：
 
@@ -116,11 +116,13 @@ flowchart LR
     A --> ATT[附件下载]
     A --> MEM[(Memory / SQLite)]
     A --> CTX[Context 构建]
-    CTX --> SEL{use_sdk_llm}
-    SEL --> SDK[Claude Agent SDK]
-    SEL --> LG[Legacy LangGraph]
+    CTX --> LG[LangGraph default Runtime]
+    LG --> REVIEW{review_tools}
+    REVIEW -->|REQUIRE_APPROVAL| CP[(SQLite checkpoint)]
+    CP -->|Command resume| REVIEW
+    REVIEW --> REG[ToolRegistry / MCP Bridge]
+    CTX -. explicit opt-in .-> SDK[Claude Agent SDK]
     SDK --> SDKTOOLS[SDK Tools / in-process MCP]
-    LG --> REG[ToolRegistry / MCP Bridge]
     SDKTOOLS --> A
     REG --> A
     A -->|REST reply| MM
@@ -138,10 +140,10 @@ flowchart LR
 | 上下文窗口 | `working_memory` + `_build_context` | 以频道为中心，耦合 MM/Memory/Prompt |
 | 长期记忆 | SQLite 消息、FTS、画像、知识、摘要 | 有价值，但 Repository 和作用域尚未分离 |
 | 多模态 | 图片、文本附件转 content blocks | 已具备入口侧能力 |
-| Legacy Agent Loop | Anthropic API + LangGraph | 一条完整但与 SDK 重叠的 Runtime |
-| SDK Agent Loop | Claude Agent SDK | 当前默认路径，有独立工具与权限实现 |
+| LangGraph Runtime | Anthropic API + LangGraph | 当前默认路径，具备持久 checkpoint 与原生 HITL |
+| SDK Agent Loop | Claude Agent SDK | 显式 opt-in 路径，不承担可恢复审批 |
 | 内置工具 | 消息、知识、链接、用户、文件等 | 两套定义，存在漂移风险 |
-| MCP | Legacy MCP Bridge + SDK in-process server | 两条链路未形成同一能力目录 |
+| MCP | Capability Catalog + MCP Bridge | schema、策略和可见性已有单一来源 |
 | 日志追踪 | 全局 `TraceContext` | 串行可用，并发不安全 |
 
 ### 4.3 主要架构问题
@@ -164,11 +166,11 @@ flowchart LR
 
 #### B. Runtime 与工具系统双轨
 
-- [`llm.py`](../src/mmag/llm.py) 使用 LangGraph 和 `ToolRegistry`；
+- [`llm.py`](../src/mmag/llm.py) 只封装模型调用，[`runtimes/langgraph.py`](../src/mmag/runtimes/langgraph.py) 统一图编排；
 - [`sdk_llm.py`](../src/mmag/sdk_llm.py) 使用 Claude Agent SDK，忽略传入的 `tools/tool_registry`；
 - [`tools/builtin.py`](../src/mmag/tools/builtin.py) 和 [`sdk_tools.py`](../src/mmag/sdk_tools.py) 重复声明工具；
 - 工具参数上限、结果格式化和来源增强也存在重复；
-- Legacy MCP 注册到 `ToolRegistry`，SDK 默认路径未消费这条注册链路。
+- MCP 先进入 Capability Catalog，再生成 Runtime binding；SDK 仅作为可选后端。
 
 这不是普通 Adapter，而是两套行为不同的系统。
 

@@ -1,25 +1,31 @@
-# ADR 0002: Capability 写入授权边界
+# ADR-0002：Capability 写入授权与原生审批边界
 
-- 状态：Accepted
+- 状态：Accepted（2026-07-31 修订）
 - 日期：2026-07-31
-
-## 背景
-
-`save_knowledge` 是首个迁移到 Capability Catalog 的写能力。SDK 原有工具名白名单只能决定工具是否可调用，Legacy ToolRegistry 没有等价的写入策略入口；只在 `CapabilitySpec` 声明 `effect=WRITE` 和权限字符串，无法阻止副作用。
 
 ## 决策
 
-所有 Capability 在参数校验后、handler 执行前经过 `CapabilityAuthorizer`。策略返回三种确定性结果：
+所有 Capability 在 handler 执行前经过 `CapabilityAuthorizer`，并返回三种确定性结果：
 
-- `ALLOW`：继续执行；
+- `ALLOW`：进入工具执行；
 - `DENY`：返回 `forbidden`，不调用 handler；
-- `REQUIRE_APPROVAL`：返回 `approval_required`，不调用 handler，并为后续审批恢复保留稳定状态。
+- `REQUIRE_APPROVAL`：LangGraph `review_tools` 节点原生暂停，不把它伪装成工具错误。
 
-默认使用 `DeclaredPermissionAuthorizer`：读取能力保持兼容；写能力必须声明非空 permission，否则拒绝。SDK 工具白名单仍作为外层工具可见性边界，Capability Authorizer 是 SDK/Legacy 共享的内层业务授权边界。
+`PolicyCapabilityAuthorizer` 只计算策略，不创建审批单。LangGraph Runtime 将待审工具名、参数、原因、`thread_id` 和 interrupt id 作为结构化中断返回；应用控制面据此持久化 `ApprovalRequest`。人工可选择 `approve`、`edit` 或 `reject`，其中批准与修改使用 `CapabilityExecutor.execute_approved()`，避免恢复后重复授权或重复创建审批单。
 
-## 结果
+## 不变量
 
-- 两个 Runtime 对写入拒绝和待审批使用同一错误结构；
-- 策略裁决发生在任何持久化副作用之前；
-- 可以注入组织、用户或作用域策略，而无需修改 Capability handler；
-- 当前默认策略不代表已经实现按用户授权或人工审批。接入企业身份与 `RunContext` 后，需替换默认 Authorizer，并持久化审批状态。
+1. `interrupt()` 前不执行 Capability handler。
+2. 恢复必须使用原 `thread_id`；interrupt id 用作审批幂等 token。
+3. 被拒绝的调用只向模型回填结构化拒绝结果，不产生外部副作用。
+4. 修改参数后重新执行 schema 校验。
+5. Task、AgentRun 与 ApprovalRequest 的业务状态必须和图的暂停/恢复同步。
+
+## 当前交互
+
+Mattermost 收到暂停结果后发送审批 ID。同一作用域内的用户可回复：
+
+- `批准 <approval_id>` / `approve <approval_id>`
+- `拒绝 <approval_id>` / `reject <approval_id>`
+
+审批人角色与更细粒度 RBAC 仍由后续企业身份策略补充；当前至少强制审批请求与回复处于同一 Mattermost scope。
