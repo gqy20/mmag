@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .capabilities import CapabilityContext, bind_capability_context
 from .client import PROP_FROM_BOT, PROP_TRUE, MMClient
 from .config import _log_config_loading, _secret_status, config
 from .llm import LLM
@@ -30,7 +31,6 @@ from .runtimes import (
     RunRequest,
 )
 from .sdk_llm import SDKLLM
-from .sdk_tools import ToolContext
 from .tools import ToolRegistry, build_builtin_tools
 from .ws_client import WebSocketClient
 
@@ -133,9 +133,6 @@ class Agent:
         self.bot_user_id = ""
         self.bot_username = ""
 
-        # 工具上下文 (Agent ↔ SDK 工具共享, 每次消息处理前更新)
-        self.tool_context = ToolContext()
-
         # 记忆压缩器 (长期记忆层管理)
         self.compactor = MemoryCompactor(
             memory=self.memory,
@@ -196,7 +193,11 @@ class Agent:
             try:
                 from .sdk_tools import create_sdk_tools
 
-                sdk_tool_funcs = create_sdk_tools(self.mm, self.memory, self.tool_context)
+                sdk_tool_funcs = create_sdk_tools(
+                    self.mm,
+                    self.memory,
+                    context_provider=self.sdk_llm.get_capability_context,
+                )
 
                 # 解析 .mcp.json 路径供外部 MCP 使用
                 _mcp_candidate = Path(__file__).resolve().parents[2] / ".mcp.json"
@@ -495,9 +496,6 @@ class Agent:
 
         log.info("%s [%s] %s", trace.prefix(), post["username"], message[:80])
 
-        # 更新工具上下文 (send_file 等工具需要感知当前用户消息)
-        self.tool_context.current_post = post
-
         # ====== 触发判定: 显式召唤(硬规则,不走 LLM 决策)======
         if self._is_explicit_invocation(post):
             trace.set_context(msg_type="mention")
@@ -560,7 +558,8 @@ class Agent:
         await self.typing_indicator(post["channel_id"])
         context = self._build_context(post, mention=False)
         try:
-            result = await self.runtime.run(
+            result = await self._run_request(
+                post,
                 self._build_run_request(
                     post,
                     context,
@@ -630,7 +629,8 @@ class Agent:
             len(context["messages"]),
         )
         try:
-            runtime_result = await self.runtime.run(
+            runtime_result = await self._run_request(
+                post,
                 self._build_run_request(
                     post,
                     context,
@@ -658,6 +658,19 @@ class Agent:
         else:
             result = await self.reply(post, response)
             log.info("%s [%s] 回复已发送 post_id=%s", trace.prefix(), tag, result)
+
+    async def _run_request(self, post: dict, request: RunRequest):
+        """Execute one Runtime request with immutable, task-local capability context."""
+        context = CapabilityContext(
+            trace_id=request.context.trace_id,
+            actor_id=request.context.actor_id,
+            conversation_id=request.context.conversation_id,
+            message_id=post.get("id", ""),
+            message=post.get("message", ""),
+            scope=request.context.scope,
+        )
+        with bind_capability_context(context):
+            return await self.runtime.run(request)
 
     async def _build_attachment_blocks(
         self, file_metas: list[dict], *, max_count: int, max_bytes: int,

@@ -14,6 +14,7 @@ SDK LLM Adapter — 封装 Claude Agent SDK 持久客户端，提供与 LLM 类�
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 import uuid
@@ -29,6 +30,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import ClaudeAgentOptions, McpServerConfig, TextBlock, ToolUseBlock
 
+from .capabilities import CapabilityContext, get_capability_context
 from .config import config
 from .logger import get_logger
 
@@ -288,6 +290,15 @@ class SDKLLM:
         self._saved_tool_funcs: list | None = None
         self.call_count = 0
         self.model = config.anthropic_model
+        # ClaudeSDKClient owns a detached MCP reader task.  ContextVars from a
+        # later query do not flow into that already-running task, so the SDK
+        # transport uses one serialized, immutable request context bridge.
+        self._query_lock = asyncio.Lock()
+        self._active_capability_context: CapabilityContext | None = None
+
+    def get_capability_context(self) -> CapabilityContext | None:
+        """Expose the request currently serialized through the SDK transport."""
+        return self._active_capability_context
 
     # ---- 生命周期 ----
 
@@ -481,7 +492,21 @@ class SDKLLM:
 
     # ---- 核心查询执行 ----
 
-    async def _execute_query(self, content: list[dict]) -> tuple[str, bool]:
+    async def _execute_query(
+        self,
+        content: list[dict],
+        *,
+        capability_context: CapabilityContext | None = None,
+    ) -> tuple[str, bool]:
+        """Serialize the persistent SDK stream and scope its capability context."""
+        async with self._query_lock:
+            self._active_capability_context = capability_context
+            try:
+                return await self._execute_query_unlocked(content)
+            finally:
+                self._active_capability_context = None
+
+    async def _execute_query_unlocked(self, content: list[dict]) -> tuple[str, bool]:
         """执行 query() + receive_response() 循环。
 
         Args:
@@ -593,7 +618,10 @@ class SDKLLM:
             if not self._connected:
                 await self.reconnect()
 
-            raw_text, is_error = await self._execute_query(content)
+            raw_text, is_error = await self._execute_query(
+                content,
+                capability_context=get_capability_context(),
+            )
 
             # 过滤国产模型训练痕迹
             cleaned = _strip_model_artifacts(raw_text).strip()

@@ -21,11 +21,18 @@ from .catalog import (
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
+from .context import (
+    CapabilityContext,
+    bind_capability_context,
+    get_capability_context,
+)
+from .file import create_send_file_capability
 from .link import create_analyze_link_capability
 
 __all__ = [
     "AuthorizationDecision",
     "CapabilityAuthorization",
+    "CapabilityContext",
     "CapabilityAuthorizer",
     "CapabilityEffect",
     "CapabilityExecutor",
@@ -36,6 +43,7 @@ __all__ = [
     "SourcePolicy",
     "bind_legacy_capability",
     "bind_sdk_capability",
+    "bind_capability_context",
     "create_analyze_link_capability",
     "create_get_channel_info_capability",
     "create_get_posts_capability",
@@ -43,4 +51,6 @@ __all__ = [
     "create_search_knowledge_capability",
     "create_search_messages_capability",
     "create_save_knowledge_capability",
+    "create_send_file_capability",
+    "get_capability_context",
 ]
