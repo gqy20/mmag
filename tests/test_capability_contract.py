@@ -74,9 +74,7 @@ async def test_legacy_and_sdk_bindings_share_schema_handler_and_result():
     sdk = bind_sdk_capability(spec)
 
     legacy_result = await legacy.handler(channel_id="channel-1")
-    sdk_result = json.loads(
-        (await sdk.handler({"channel_id": "channel-1"}))["content"][0]["text"]
-    )
+    sdk_result = json.loads((await sdk.handler({"channel_id": "channel-1"}))["content"][0]["text"])
 
     assert legacy.name == sdk.name == spec.name
     assert legacy.description == sdk.description == spec.description
@@ -110,11 +108,9 @@ async def test_search_knowledge_uses_one_default_and_limit_policy_for_both_bindi
 
     legacy_result = await legacy.handler(channel_id="channel-1", query="deploy")
     sdk_result = json.loads(
-        (
-            await sdk.handler(
-                {"channel_id": "channel-1", "query": "deploy", "limit": 99}
-            )
-        )["content"][0]["text"]
+        (await sdk.handler({"channel_id": "channel-1", "query": "deploy", "limit": 99}))["content"][
+            0
+        ]["text"]
     )
 
     assert spec.effect is CapabilityEffect.READ
@@ -123,12 +119,14 @@ async def test_search_knowledge_uses_one_default_and_limit_policy_for_both_bindi
     assert spec.input_schema["required"] == ("channel_id", "query")
     assert legacy.input_schema == spec.input_schema
     assert sdk.input_schema == dict(spec.input_schema)
-    assert legacy_result == sdk_result == {
-        "count": 1,
-        "items": [
-            {"key": "deploy", "value": "Use make deploy", "confidence": 0.9}
-        ],
-    }
+    assert (
+        legacy_result
+        == sdk_result
+        == {
+            "count": 1,
+            "items": [{"key": "deploy", "value": "Use make deploy", "confidence": 0.9}],
+        }
+    )
     assert memory.get_relevant_knowledge.call_args_list == [
         call("channel-1", "deploy", 5),
         call("channel-1", "deploy", 10),
@@ -146,9 +144,7 @@ async def test_get_posts_bindings_share_cache_hit_behavior():
 
     legacy_result = await bind_legacy_capability(spec).handler(channel_id="channel-1")
     sdk_result = json.loads(
-        (await bind_sdk_capability(spec).handler({"channel_id": "channel-1"}))["content"][0][
-            "text"
-        ]
+        (await bind_sdk_capability(spec).handler({"channel_id": "channel-1"}))["content"][0]["text"]
     )
 
     assert spec.permission == "mattermost:post:read"
@@ -284,9 +280,9 @@ async def test_analyze_link_applies_source_policy_equally_to_both_bindings(monke
 
     legacy_result = await bind_legacy_capability(spec).handler(url="https://example.com/docs")
     sdk_result = json.loads(
-        (await bind_sdk_capability(spec).handler({"url": "https://example.com/docs"}))[
-            "content"
-        ][0]["text"]
+        (await bind_sdk_capability(spec).handler({"url": "https://example.com/docs"}))["content"][
+            0
+        ]["text"]
     )
 
     assert spec.source_policy is SourcePolicy.AUTO
@@ -314,11 +310,15 @@ async def test_save_knowledge_is_one_declared_write_capability_for_both_bindings
 
     assert spec.effect is CapabilityEffect.WRITE
     assert spec.permission == "memory:knowledge:write"
-    assert legacy_result == sdk_result == {
-        "status": "ok",
-        "key": "deploy",
-        "message": "已记住: deploy",
-    }
+    assert (
+        legacy_result
+        == sdk_result
+        == {
+            "status": "ok",
+            "key": "deploy",
+            "message": "已记住: deploy",
+        }
+    )
     assert memory.add_knowledge.call_count == 2
 
 

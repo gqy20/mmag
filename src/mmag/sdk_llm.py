@@ -54,10 +54,10 @@ class SDKLLMError(Exception):
 # 国产模型训练痕迹过滤（从 llm.py 原样搬运）
 # ============================================================
 
-_TOOL_CALL_XML_PATTERN = r'<invoke\s+.*?\s*>[\s\S]*?</invoke>'
+_TOOL_CALL_XML_PATTERN = r"<invoke\s+.*?\s*>[\s\S]*?</invoke>"
 _RE_TOOL_CALL_XML = re.compile(_TOOL_CALL_XML_PATTERN)
 
-_THINKING_PATTERN = r'<think[\s\S]*?</think\s*>'
+_THINKING_PATTERN = r"<think[\s\S]*?</think\s*>"
 _RE_THINKING = re.compile(_THINKING_PATTERN)
 
 
@@ -91,22 +91,26 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 _PATH_SENSITIVE_TOOLS = frozenset({"Read", "Grep", "Glob", "LSP"})
 
 # 完全不需要路径检查的工具（网络/内部状态）
-_PATH_SAFE_TOOLS = frozenset({
-    "WebFetch",   # URL 访问，不涉及本地文件
-    "WebSearch",  # 网络搜索，不涉及本地文件
-    "TodoWrite",  # SDK 内部状态，无文件系统操作
-    "Task",       # SDK 内部状态，无文件系统操作
-})
+_PATH_SAFE_TOOLS = frozenset(
+    {
+        "WebFetch",  # URL 访问，不涉及本地文件
+        "WebSearch",  # 网络搜索，不涉及本地文件
+        "TodoWrite",  # SDK 内部状态，无文件系统操作
+        "Task",  # SDK 内部状态，无文件系统操作
+    }
+)
 
 # 所有允许的 CLI 内置工具
 _CLI_SAFE_TOOLS = _PATH_SENSITIVE_TOOLS | _PATH_SAFE_TOOLS
 
 # 禁止的危险工具（无论什么情况都不允许）
-CLI_DANGEROUS_TOOLS = frozenset({
-    "Bash",       # 🔴 执行任意 shell 命令
-    "Write",      # 🔴 写入/创建任意文件
-    "Edit",       # 🔴 编辑文件 (sed-like)
-})
+CLI_DANGEROUS_TOOLS = frozenset(
+    {
+        "Bash",  # 🔴 执行任意 shell 命令
+        "Write",  # 🔴 写入/创建任意文件
+        "Edit",  # 🔴 编辑文件 (sed-like)
+    }
+)
 
 # SDK 内注册到 in-process "mmag" MCP server 的已知能力。
 # 新增工具必须显式加入这里，否则权限回调默认拒绝执行。
@@ -242,7 +246,9 @@ async def _tool_permission_callback(
                 if not _is_path_allowed(p):
                     log.warning(
                         "权限拒绝 [路径越界]: %s | tool=%s | path=%s",
-                        tool_name, tool_name, p,
+                        tool_name,
+                        tool_name,
+                        p,
                     )
                     return PermissionResultDeny(
                         message=(
@@ -250,7 +256,9 @@ async def _tool_permission_callback(
                             f"仅允许读取 {_PROJECT_ROOT} 及其子目录下的文件"
                         ),
                     )
-            log.debug("权限放行 [安全-路径OK]: %s (%d 个路径已校验)", tool_name, len(candidate_paths))
+            log.debug(
+                "权限放行 [安全-路径OK]: %s (%d 个路径已校验)", tool_name, len(candidate_paths)
+            )
             return PermissionResultAllow()
         else:
             # 无路径参数（罕见但可能）→ 放行（SDK 内部会处理错误）
@@ -360,14 +368,10 @@ class SDKLLM:
         all_tool_funcs: list = list(tool_funcs) if tool_funcs else []
 
         if all_tool_funcs:
-            mmag_server = create_sdk_mcp_server(
-                name="mmag", version="0.1.0", tools=all_tool_funcs
-            )
+            mmag_server = create_sdk_mcp_server(name="mmag", version="0.1.0", tools=all_tool_funcs)
             mcp_servers["mmag"] = mmag_server
 
-        visible_mcp_tools = frozenset(
-            f"mcp__mmag__{tool_def.name}" for tool_def in all_tool_funcs
-        )
+        visible_mcp_tools = frozenset(f"mcp__mmag__{tool_def.name}" for tool_def in all_tool_funcs)
 
         options = ClaudeAgentOptions(
             model=config.anthropic_model,
@@ -398,16 +402,16 @@ class SDKLLM:
             setting_sources=[],  # 不加载项目 CLAUDE.md
             cwd=str(Path(__file__).resolve().parents[2]),  # 限制工作目录为项目根目录
             # ── Session 隔离 ──
-            session_id=str(uuid.uuid4()),                    # 独立 session ID（用于日志追踪）
-            extra_args={"no-session-persistence": None},  # 不写 session 文件到 ~/.claude/projects/ (SDK 自动加 -- 前缀) (SDK 自动加 -- 前缀)
+            session_id=str(uuid.uuid4()),  # 独立 session ID（用于日志追踪）
+            extra_args={
+                "no-session-persistence": None
+            },  # 不写 session 文件到 ~/.claude/projects/ (SDK 自动加 -- 前缀) (SDK 自动加 -- 前缀)
         )
         return options
 
     # ---- 内容构建 ----
 
-    def _build_content_blocks(
-        self, messages: list[dict], system: str = ""
-    ) -> list[dict]:
+    def _build_content_blocks(self, messages: list[dict], system: str = "") -> list[dict]:
         """将消息列表转换为结构化 content blocks, 保留 image blocks。
 
         替代旧的 _build_prompt() — 不再展平为文本字符串,
@@ -424,9 +428,7 @@ class SDKLLM:
             content = msg.get("content", "")
 
             if isinstance(content, str):
-                blocks.append(
-                    {"type": "text", "text": f"[{role.capitalize()}]\n{content}"}
-                )
+                blocks.append({"type": "text", "text": f"[{role.capitalize()}]\n{content}"})
             elif isinstance(content, list):
                 text_parts: list[str] = []
                 for block in content:
@@ -457,9 +459,7 @@ class SDKLLM:
 
         return blocks
 
-    async def _message_stream(
-        self, content: list[dict]
-    ) -> AsyncIterator[dict[str, Any]]:
+    async def _message_stream(self, content: list[dict]) -> AsyncIterator[dict[str, Any]]:
         """构造 stream-json 格式的单条用户消息 (AsyncIterable)。
 
         SDK client.query(AsyncIterable) 路径会逐条 json.dumps 写入 CLI stdin,
@@ -508,11 +508,9 @@ class SDKLLM:
         result_msg: ResultMessage | None = None
 
         # Session 追踪（用于日志关联，不持久化到磁盘）
-        _session_tag = getattr(self.client, '_session_id', f'call-{self.call_count}')
+        _session_tag = getattr(self.client, "_session_id", f"call-{self.call_count}")
 
-        _image_count = sum(
-            1 for b in content if isinstance(b, dict) and b.get("type") == "image"
-        )
+        _image_count = sum(1 for b in content if isinstance(b, dict) and b.get("type") == "image")
         log.debug(
             "SDK query #%d | session=%s | blocks=%d images=%d",
             self.call_count,
@@ -566,7 +564,7 @@ class SDKLLM:
         log.debug(
             "SDK query 完成 (%.3fs) | session=%s | turns=%d tools=%d chars=%d",
             elapsed,
-            getattr(result_msg, 'session_id', _session_tag) if result_msg else _session_tag,
+            getattr(result_msg, "session_id", _session_tag) if result_msg else _session_tag,
             result_msg.num_turns if result_msg else 0,
             tool_calls_count,
             len(raw_text),
@@ -580,10 +578,10 @@ class SDKLLM:
         self,
         messages: list[dict],
         system: str = "",
-        tools: Any = None,          # API 兼容, 忽略 (SDK 内置工具)
-        tool_registry: Any = None,   # API 兼容, 忽略
+        tools: Any = None,  # API 兼容, 忽略 (SDK 内置工具)
+        tool_registry: Any = None,  # API 兼容, 忽略
         max_rounds: int | None = None,
-        max_tokens: int = 4096,      # API 兼容, 忽略
+        max_tokens: int = 4096,  # API 兼容, 忽略
     ) -> str:
         """通过 SDK 执行 agentic 循环。公共 API 与 LLM.agent_loop 完全一致。
 
@@ -622,9 +620,7 @@ class SDKLLM:
             log.error("agent_loop 异常: %s", e, exc_info=True)
             raise SDKLLMError(str(e)) from e
 
-    async def chat(
-        self, messages: list[dict], system: str = "", max_tokens: int = 1024
-    ) -> str:
+    async def chat(self, messages: list[dict], system: str = "", max_tokens: int = 1024) -> str:
         """单轮对话 via SDK。用于 Plan D 兜底和 MemoryCompactor。"""
         content = self._build_content_blocks(messages, system)
 

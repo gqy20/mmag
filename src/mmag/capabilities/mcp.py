@@ -46,8 +46,7 @@ def _mcp_payload(result: Any) -> Any:
         return structured
 
     texts = [
-        item.text if hasattr(item, "text") else str(item)
-        for item in getattr(result, "content", ())
+        item.text if hasattr(item, "text") else str(item) for item in getattr(result, "content", ())
     ]
     combined = "\n".join(texts)
     try:

@@ -47,9 +47,7 @@ def _make_agent(runtime_result: str = "已完成") -> Agent:
     agent.sdk_llm.agent_loop = AsyncMock(return_value=runtime_result)
     agent.llm = MagicMock()
     agent.runtime = MagicMock()
-    agent.runtime.run = AsyncMock(
-        return_value=AgentResult(text=runtime_result, runtime="test")
-    )
+    agent.runtime.run = AsyncMock(return_value=AgentResult(text=runtime_result, runtime="test"))
 
     agent._build_attachment_blocks = AsyncMock(return_value=None)
     agent._send_get_ack = AsyncMock()
@@ -96,9 +94,7 @@ async def test_explicit_message_runs_offline_pipeline_and_delivers_reply():
 @pytest.mark.asyncio
 async def test_explicit_message_delivers_user_visible_error_when_runtime_fails():
     agent = _make_agent()
-    agent.runtime.run.side_effect = RuntimeUnavailableError(
-        "model unavailable", runtime="test"
-    )
+    agent.runtime.run.side_effect = RuntimeUnavailableError("model unavailable", runtime="test")
 
     with patch.multiple(config, mm_channel_id="", mm_team_id="", use_sdk_llm=True):
         await agent._on_posted(_posted_event())

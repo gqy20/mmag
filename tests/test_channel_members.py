@@ -158,7 +158,8 @@ class TestBuildChannelMembersTable:
         assert "|---|" in out
         # 至少包含 1 行数据
         data_lines = [
-            line for line in out.splitlines()
+            line
+            for line in out.splitlines()
             if line.startswith("|") and "uid" not in line and "---" not in line
         ]
         assert len(data_lines) >= 2  # self + gqy

@@ -74,9 +74,7 @@ def _format_link_info(info: dict) -> dict:
             "forks": metadata.get("forks_count"),
             "language": metadata.get("language"),
             "license": (
-                (metadata.get("license") or {}).get("spdx_id")
-                if metadata.get("license")
-                else None
+                (metadata.get("license") or {}).get("spdx_id") if metadata.get("license") else None
             ),
         }
         result["repo_info"] = {

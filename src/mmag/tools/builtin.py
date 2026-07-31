@@ -10,9 +10,9 @@ if TYPE_CHECKING:
     from .registry import Tool
 
 
-def build_builtin_tools(mm_client, memory) -> list[Tool]:
+def build_builtin_tools(mm_client, memory, *, executor=None) -> list[Tool]:
     """Bind the canonical ordered catalog to Legacy ToolRegistry tools."""
     return [
-        bind_legacy_capability(spec)
+        bind_legacy_capability(spec, executor=executor)
         for spec in create_builtin_capabilities(mm_client, memory)
     ]

@@ -24,6 +24,7 @@ import glob
 import logging
 import sys
 import uuid
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 
@@ -178,31 +179,33 @@ class TraceContext:
     """
 
     def __init__(self):
-        self._current: dict[str, str] = {}
+        self._current: ContextVar[dict[str, str] | None] = ContextVar(
+            "mmag_trace_context", default=None
+        )
 
     def new(self) -> str:
         """生成新的追踪 ID 并设为当前"""
         trace_id = uuid.uuid4().hex[:12]
-        self._current["trace_id"] = trace_id
+        self._current.set({"trace_id": trace_id})
         return trace_id
 
     @property
     def current(self) -> str:
         """当前追踪 ID"""
-        return self._current.get("trace_id", "----")
+        return (self._current.get() or {}).get("trace_id", "----")
 
     def set_context(self, **kwargs):
         """设置额外上下文字段（如 channel_id, user_id）"""
-        self._current.update(kwargs)
+        self._current.set({**(self._current.get() or {}), **kwargs})
 
     def clear(self):
         """清除当前上下文"""
-        self._current.clear()
+        self._current.set({})
 
     def prefix(self) -> str:
         """生成日志前缀字符串，用于嵌入消息中"""
         parts = [f"trace={self.current}"]
-        for k, v in self._current.items():
+        for k, v in (self._current.get() or {}).items():
             if k != "trace_id":
                 parts.append(f"{k}={v}")
         return "[" + " ".join(parts) + "]"

@@ -153,10 +153,12 @@ class TestAgentLoopMultiTurn:
         llm = _make_llm()
         reg = _make_mock_registry()
         llm.client.messages.create.side_effect = [
-            FakeResponse([
-                _text_block("让我查一下"),
-                _tool_use_block("t1", "get_posts", {"channel_id": "ch1"}),
-            ]),
+            FakeResponse(
+                [
+                    _text_block("让我查一下"),
+                    _tool_use_block("t1", "get_posts", {"channel_id": "ch1"}),
+                ]
+            ),
             FakeResponse([_text_block("结果是空的")]),
         ]
 
@@ -175,10 +177,12 @@ class TestAgentLoopMultiTurn:
         llm = _make_llm()
         reg = _make_mock_registry()
         llm.client.messages.create.side_effect = [
-            FakeResponse([
-                _tool_use_block("t1", "get_posts", {"channel_id": "ch1"}),
-                _tool_use_block("t2", "search_messages", {"query": "test"}),
-            ]),
+            FakeResponse(
+                [
+                    _tool_use_block("t1", "get_posts", {"channel_id": "ch1"}),
+                    _tool_use_block("t2", "search_messages", {"query": "test"}),
+                ]
+            ),
             FakeResponse([_text_block("查完了")]),
         ]
 
@@ -253,9 +257,11 @@ class TestAgentLoopArtifactStripping:
     @pytest.mark.asyncio
     async def test_strips_thinking_tags(self):
         llm = _make_llm()
-        llm.client.messages.create.return_value = FakeResponse([
-            _text_block("<think>内心独白</think>实际回复"),
-        ])
+        llm.client.messages.create.return_value = FakeResponse(
+            [
+                _text_block("<think>内心独白</think>实际回复"),
+            ]
+        )
 
         result = await llm.agent_loop(
             messages=[{"role": "user", "content": "hi"}],
@@ -269,9 +275,11 @@ class TestAgentLoopArtifactStripping:
     @pytest.mark.asyncio
     async def test_strips_invoke_xml(self):
         llm = _make_llm()
-        llm.client.messages.create.return_value = FakeResponse([
-            _text_block('<tool_call>{"name":"test","arguments":{}}</tool_call>回复内容'),
-        ])
+        llm.client.messages.create.return_value = FakeResponse(
+            [
+                _text_block('<tool_call>{"name":"test","arguments":{}}</tool_call>回复内容'),
+            ]
+        )
 
         result = await llm.agent_loop(
             messages=[{"role": "user", "content": "hi"}],

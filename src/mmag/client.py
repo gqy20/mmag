@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import Any
 
+import httpx
 import requests
 
 from .config import config
@@ -62,12 +63,45 @@ class MMClient:
         self.base_url = (base_url or config.mm_url).rstrip("/")
         self.session = requests.Session()
         bearer = token or config.mm_token
+        self._bearer = bearer
         self.session.headers.update(
             {"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"}
         )
         self._users: dict[str, dict] = {}  # user_id → user info
         self._channels: dict[str, dict] = {}  # channel_id → channel info
         self._me: dict | None = None
+        self._async_client: httpx.AsyncClient | None = None
+
+    def _get_async_client(self) -> httpx.AsyncClient:
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(
+                base_url=f"{self.base_url}/api/v4",
+                headers={"Authorization": f"Bearer {self._bearer}"},
+                timeout=httpx.Timeout(30.0),
+            )
+        return self._async_client
+
+    async def aclose(self) -> None:
+        if self._async_client is not None:
+            await self._async_client.aclose()
+            self._async_client = None
+
+    async def _request_async(self, method: str, path: str, **kwargs) -> httpx.Response:
+        client = self._get_async_client()
+        for attempt in range(_POST_MAX_ATTEMPTS):
+            try:
+                response = await client.request(method, path, **kwargs)
+                response.raise_for_status()
+                return response
+            except (httpx.TransportError, httpx.TimeoutException, httpx.HTTPStatusError) as error:
+                status = (
+                    error.response.status_code if isinstance(error, httpx.HTTPStatusError) else 0
+                )
+                retryable = not status or status == 429 or status >= 500
+                if not retryable or attempt == _POST_MAX_ATTEMPTS - 1:
+                    raise
+                await asyncio.sleep(_POST_RETRY_BASE_SECONDS * 2**attempt)
+        raise RuntimeError("unreachable retry state")
 
     def _get(self, path: str, **params) -> Any:
         resp = self.session.get(f"{self.base_url}/api/v4{path}", params=params)
@@ -86,6 +120,12 @@ class MMClient:
             log.info(f"Bot 身份: @{self._me['username']} ({self._me['id']})")
         return self._me
 
+    async def get_me_async(self) -> dict:
+        if not self._me:
+            response = await self._request_async("GET", "/users/me")
+            self._me = response.json()
+        return self._me
+
     def get_user(self, user_id: str) -> dict:
         if user_id not in self._users:
             try:
@@ -93,6 +133,19 @@ class MMClient:
             except Exception:
                 self._users[user_id] = {"username": user_id[:8], "id": user_id}
         return self._users[user_id]
+
+    async def get_user_async(self, user_id: str) -> dict:
+        if user_id not in self._users:
+            try:
+                response = await self._request_async("GET", f"/users/{user_id}")
+                self._users[user_id] = response.json()
+            except Exception:
+                self._users[user_id] = {"username": user_id[:8], "id": user_id}
+        return self._users[user_id]
+
+    async def get_username_async(self, user_id: str) -> str:
+        user = await self.get_user_async(user_id)
+        return user.get("username", user_id[:8])
 
     def get_username(self, user_id: str) -> str:
         return self.get_user(user_id).get("username", user_id[:8])
@@ -109,8 +162,25 @@ class MMClient:
                 }
         return self._channels[channel_id]
 
+    async def get_channel_async(self, channel_id: str) -> dict:
+        if channel_id not in self._channels:
+            try:
+                response = await self._request_async("GET", f"/channels/{channel_id}")
+                self._channels[channel_id] = response.json()
+            except Exception:
+                self._channels[channel_id] = {
+                    "id": channel_id,
+                    "name": channel_id[:8],
+                    "display_name": channel_id[:8],
+                }
+        return self._channels[channel_id]
+
     def send_post(
-        self, channel_id: str, message: str, root_id: str = "", props: dict | None = None,
+        self,
+        channel_id: str,
+        message: str,
+        root_id: str = "",
+        props: dict | None = None,
         file_ids: list[str] | None = None,
     ) -> str | None:
         """发送消息到频道"""
@@ -149,8 +219,38 @@ class MMClient:
                 time.sleep(delay)
         return None
 
+    async def send_post_async(
+        self,
+        channel_id: str,
+        message: str,
+        root_id: str = "",
+        props: dict | None = None,
+        file_ids: list[str] | None = None,
+    ) -> str | None:
+        payload: dict[str, Any] = {
+            "channel_id": channel_id,
+            "message": message,
+            "pending_post_id": uuid.uuid4().hex,
+        }
+        if root_id:
+            payload["root_id"] = root_id
+        if props:
+            payload["props"] = props
+        if file_ids:
+            payload["file_ids"] = file_ids
+        try:
+            response = await self._request_async("POST", "/posts", json=payload)
+            return response.json().get("id")
+        except Exception as error:
+            log.error("异步发送消息失败: %s", error)
+            return None
+
     def upload_file(
-        self, channel_id: str, filename: str, data: bytes, content_type: str = "",
+        self,
+        channel_id: str,
+        filename: str,
+        data: bytes,
+        content_type: str = "",
     ) -> str | None:
         """上传文件到频道，返回 file_id
 
@@ -171,7 +271,9 @@ class MMClient:
             result = resp.json()
             if isinstance(result, list) and result:
                 file_id = result[0].get("id")
-                log.debug(f"文件已上传: {filename} ({len(data)} bytes) → file_id={file_id[:12] if file_id else '?'}...")
+                log.debug(
+                    f"文件已上传: {filename} ({len(data)} bytes) → file_id={file_id[:12] if file_id else '?'}..."
+                )
                 return file_id
             log.error(f"上传文件响应格式异常: {type(result)}")
             return None
@@ -192,6 +294,17 @@ class MMClient:
             log.debug(f"typing indicator 失败: {e}")
             return False
 
+    async def send_typing_async(self, channel_id: str) -> bool:
+        user_id = self.get_me()["id"]
+        try:
+            await self._request_async(
+                "POST", f"/users/{user_id}/typing", json={"channel_id": channel_id}
+            )
+            return True
+        except Exception as error:
+            log.debug("async typing indicator 失败: %s", error)
+            return False
+
     def get_posts(self, channel_id: str, limit: int = 30) -> list[dict]:
         """获取频道最近消息(limit 不分页,一次性)"""
         return self.get_posts_page(channel_id, page=0, per_page=limit)
@@ -202,9 +315,7 @@ class MMClient:
         Returns: 该页的消息列表(按 order 数组顺序,最新在前)
         """
         try:
-            data = self._get(
-                f"/channels/{channel_id}/posts", page=page, per_page=per_page
-            )
+            data = self._get(f"/channels/{channel_id}/posts", page=page, per_page=per_page)
             order = data.get("order", [])
             posts = data.get("posts", {})
             return [posts[pid] for pid in order if pid in posts]
@@ -220,7 +331,7 @@ class MMClient:
         return _download_file_sync(self.session, self.base_url, file_id)
 
     async def get_file_bytes_async(self, file_id: str) -> tuple[bytes, str] | None:
-        """异步下载附件二进制 — 把阻塞的 requests 调用扔到默认 thread pool 跑
+        """使用共享 httpx 连接池异步下载附件二进制。
 
         多图场景下, 调用方应该用 `asyncio.gather` 并发拉多张,
         比串行下载快 N 倍 (N = 图片数, 受 MM 服务器并发限制)。
@@ -234,9 +345,9 @@ class MMClient:
         if not file_id:
             return None
         try:
-            return await asyncio.to_thread(
-                _download_file_sync, self.session, self.base_url, file_id
-            )
+            response = await self._request_async("GET", f"/files/{file_id}")
+            mime = response.headers.get("Content-Type") or "application/octet-stream"
+            return response.content, mime.split(";", 1)[0].strip().lower()
         except Exception as e:
             log.error("下载附件异常 file_id=%s: %s", file_id[:12], e)
             return None
@@ -247,7 +358,9 @@ class MMClient:
 # ============================================================
 
 
-def _download_file_sync(session: requests.Session, base_url: str, file_id: str) -> tuple[bytes, str] | None:
+def _download_file_sync(
+    session: requests.Session, base_url: str, file_id: str
+) -> tuple[bytes, str] | None:
     """同步下载附件 — 提取出来便于 `asyncio.to_thread` 包装
 
     Mattermost 设计: `GET /api/v4/files/{file_id}` 直接返回文件二进制
@@ -267,9 +380,7 @@ def _download_file_sync(session: requests.Session, base_url: str, file_id: str) 
             timeout=30,
         )
         if resp.status_code != 200:
-            log.warning(
-                "下载附件失败 file_id=%s status=%d", file_id[:12], resp.status_code
-            )
+            log.warning("下载附件失败 file_id=%s status=%d", file_id[:12], resp.status_code)
             return None
         # 优先用响应头, 因为有些服务器会对 jpg 返回 application/octet-stream
         mime = resp.headers.get("Content-Type") or "application/octet-stream"

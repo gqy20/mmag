@@ -9,15 +9,44 @@ import base64
 import json
 import random
 import time
-from datetime import datetime
+from contextvars import ContextVar
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .capabilities import CapabilityContext, bind_capability_context
+from .capabilities import (
+    CapabilityContext,
+    CapabilityExecutor,
+    bind_capability_context,
+    create_analyze_link_capability,
+)
 from .client import PROP_FROM_BOT, PROP_TRUE, MMClient
 from .config import _log_config_loading, _secret_status, config
+from .control_plane import (
+    ApprovalService,
+    InboundEvent,
+    LifecycleService,
+    MessagePipeline,
+    OutboundMessage,
+    SQLiteControlPlane,
+)
+from .governance import (
+    GovernanceContext,
+    ModelGateway,
+    PolicyCapabilityAuthorizer,
+    PolicyEngine,
+    QuotaLedger,
+    bind_governance_context,
+)
 from .llm import LLM
 from .logger import get_logger, trace
+from .managed_agents import (
+    AgentRegistry,
+    AgentRouter,
+    AgentSpec,
+    LinkAgent,
+    RuntimeManagedAgent,
+)
 from .mcp_bridge import MCPClientBridge
 from .memory import Memory
 from .memory_compactor import MemoryCompactor
@@ -36,42 +65,95 @@ from .ws_client import WebSocketClient
 
 log = get_logger(__name__)
 
+_OUTBOUND_COLLECTOR: ContextVar[list[OutboundMessage] | None] = ContextVar(
+    "mmag_outbound_collector", default=None
+)
+
 
 # MIME 精确值 → 视为文本文档 (text/* 前缀单独判断)
-_TEXT_MIME_EXACT = frozenset({
-    "application/json",
-    "application/ld+json",
-    "application/xml",
-    "application/x-yaml",
-    "application/yaml",
-    "application/x-yml",
-    "application/javascript",
-    "application/x-javascript",
-    "application/x-sh",
-    "application/x-shellscript",
-    "application/x-toml",
-    "application/toml",
-    "application/x-latex",
-    "application/x-httpd-php",
-    "application/sql",
-    "application/graphql",
-})
+_TEXT_MIME_EXACT = frozenset(
+    {
+        "application/json",
+        "application/ld+json",
+        "application/xml",
+        "application/x-yaml",
+        "application/yaml",
+        "application/x-yml",
+        "application/javascript",
+        "application/x-javascript",
+        "application/x-sh",
+        "application/x-shellscript",
+        "application/x-toml",
+        "application/toml",
+        "application/x-latex",
+        "application/x-httpd-php",
+        "application/sql",
+        "application/graphql",
+    }
+)
 # 文件扩展名 → 视为文本文档 (当 MIME 不可靠时, 如 application/octet-stream)
-_TEXT_EXTENSIONS = frozenset({
-    ".md", ".markdown", ".txt", ".rst", ".log",
-    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
-    ".json", ".json5", ".jsonl",
-    ".xml", ".html", ".htm", ".css", ".csv", ".tsv",
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs",
-    ".sh", ".bash", ".zsh", ".fish",
-    ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".cc",
-    ".java", ".kt", ".scala", ".rb", ".php", ".pl",
-    ".sql", ".graphql", ".gql",
-    ".lua", ".r", ".dart", ".swift", ".clj",
-    ".vue", ".svelte",
-    ".env", ".gitignore", ".dockerfile",
-    ".tex", ".bib",
-})
+_TEXT_EXTENSIONS = frozenset(
+    {
+        ".md",
+        ".markdown",
+        ".txt",
+        ".rst",
+        ".log",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".json",
+        ".json5",
+        ".jsonl",
+        ".xml",
+        ".html",
+        ".htm",
+        ".css",
+        ".csv",
+        ".tsv",
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".mjs",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".fish",
+        ".go",
+        ".rs",
+        ".c",
+        ".h",
+        ".cpp",
+        ".hpp",
+        ".cc",
+        ".java",
+        ".kt",
+        ".scala",
+        ".rb",
+        ".php",
+        ".pl",
+        ".sql",
+        ".graphql",
+        ".gql",
+        ".lua",
+        ".r",
+        ".dart",
+        ".swift",
+        ".clj",
+        ".vue",
+        ".svelte",
+        ".env",
+        ".gitignore",
+        ".dockerfile",
+        ".tex",
+        ".bib",
+    }
+)
 
 
 def _is_text_attachment(mime: str, filename: str) -> bool:
@@ -101,19 +183,58 @@ class Agent:
         self.llm = LLM()
         self.sdk_llm = SDKLLM()  # SDK adapter (与 LLM 共存, 通过 config.use_sdk_llm 切换)
         self.memory = Memory(config.memory_db_path)
+        self.control_store = SQLiteControlPlane(config.memory_db_path)
+        self.lifecycle = LifecycleService(self.control_store)
+        self.approvals = ApprovalService(self.control_store, self.lifecycle)
+        self.policy_engine = PolicyEngine()
+        self.capability_executor = CapabilityExecutor(
+            PolicyCapabilityAuthorizer(self.policy_engine, self.approvals)
+        )
 
         # 工具注册系统
         self.tool_registry = ToolRegistry()
-        builtin_tools = build_builtin_tools(self.mm, self.memory)
+        builtin_tools = build_builtin_tools(self.mm, self.memory, executor=self.capability_executor)
         for t in builtin_tools:
             self.tool_registry.register(t)
         log.info(f"工具系统就绪: {len(builtin_tools)} 个内置工具")
 
+        self.agent_registry = AgentRegistry()
+        self.agent_registry.register(
+            LinkAgent(create_analyze_link_capability(self.memory), self.capability_executor)
+        )
+        self.agent_router = AgentRouter(self.agent_registry)
+
         # 应用层只依赖 AgentRuntime；启动阶段可在 SDK/Legacy Adapter 间切换。
-        self.runtime: AgentRuntime = LegacyRuntimeAdapter(
+        backend_runtime: AgentRuntime = LegacyRuntimeAdapter(
             self.llm,
             tool_registry=self.tool_registry,
         )
+        self.model_gateway = ModelGateway(
+            {"default": backend_runtime},
+            ledger=QuotaLedger(default_limit_usd=config.model_budget_usd),
+        )
+        self.runtime: AgentRuntime = self.model_gateway
+        for spec in (
+            AgentSpec(
+                "research",
+                "Research evidence and return sourced findings.",
+                intents=("research", "调研"),
+                max_cost_usd=2.0,
+            ),
+            AgentSpec(
+                "project-assistant",
+                "Turn project context into decisions, plans and tracked steps.",
+                intents=("project", "项目"),
+                max_cost_usd=1.0,
+            ),
+            AgentSpec(
+                "presentation",
+                "Turn structured artifacts into a presentation outline.",
+                intents=("presentation", "slides", "演示"),
+                max_cost_usd=1.0,
+            ),
+        ):
+            self.agent_registry.register(RuntimeManagedAgent(spec, self.runtime))
 
         # MCP 外部工具桥接（读取 .mcp.json，连接外部 Server）
         self.mcp_bridge = MCPClientBridge(
@@ -143,6 +264,7 @@ class Agent:
 
         # WebSocket 客户端 (启动时构造, 调用 ws.run() 进入事件循环)
         self.ws: WebSocketClient | None = None
+        self.pipeline: MessagePipeline | None = None
 
     async def start(self):
         """启动 Agent — 按 Mattermost 官方 WebSocket 协议实现"""
@@ -156,7 +278,7 @@ class Agent:
 
         # 阶段 1: 获取 Bot 身份（基于 MM_TOKEN 调 /users.me,user_id 与 username 一起返回）
         log.info("[1/5] 获取 Bot 身份...")
-        me = self.mm.get_me()
+        me = await self.mm.get_me_async()
         self.bot_user_id = me["id"]
         self.bot_username = me["username"]
         log.info(f"       ✅ Bot: @{self.bot_username} ({self.bot_user_id}) [来源: API]")
@@ -197,13 +319,14 @@ class Agent:
                     self.mm,
                     self.memory,
                     context_provider=self.sdk_llm.get_capability_context,
+                    executor=self.capability_executor,
                 )
                 sdk_tool_funcs.extend(self.mcp_bridge.get_sdk_bindings())
 
                 await self.sdk_llm.start(
                     tool_funcs=sdk_tool_funcs,
                 )
-                self.runtime = ClaudeSDKRuntimeAdapter(
+                self.model_gateway.runtimes["default"] = ClaudeSDKRuntimeAdapter(
                     self.sdk_llm,
                     tool_registry=self.tool_registry,
                 )
@@ -249,9 +372,7 @@ class Agent:
                 # 2) 从本地 message_log 读最近 N 条作为初始上下文
                 #    (不重复调 log_message — backfill 已经写过了,本就是全的;
                 #     从本地读能保证 backfill 写入的字段 [username/create_at 等] 一致)
-                posts = self.memory.get_recent_messages(
-                    ch_id, limit=config.max_context_messages
-                )
+                posts = self.memory.get_recent_messages(ch_id, limit=config.max_context_messages)
                 self.working_memory[ch_id] = posts
                 total_msgs += len(posts)
                 log.info(
@@ -268,6 +389,15 @@ class Agent:
         # 阶段 5: 启动 WebSocket 客户端 (封装了连接/握手/心跳/重连)
         log.info("[5/5] 建立 WebSocket 连接 (官方协议)...")
         self.running = True  # 必须在进入循环前设置!
+
+        self.pipeline = MessagePipeline(
+            self.control_store,
+            self._process_inbound,
+            self._deliver_outbound,
+            max_concurrency=config.pipeline_max_concurrency,
+            max_pending=config.pipeline_max_pending,
+        )
+        await self.pipeline.start()
 
         self.ws = WebSocketClient(
             url=config.ws_url,
@@ -378,7 +508,50 @@ class Agent:
         else:
             log.debug(f"       响应 (seq={seq_reply}): status={status}")
 
-    async def _on_posted(self, event: dict):
+    async def _on_posted(self, event: dict) -> None:
+        """Accept a posted event without running long work in the WebSocket reader."""
+        pipeline = getattr(self, "pipeline", None)
+        if pipeline is None:
+            await self._process_posted_event(event)
+            return
+        inbound = self._to_inbound_event(event)
+        if inbound is not None:
+            await pipeline.accept(inbound)
+
+    @staticmethod
+    def _to_inbound_event(event: dict) -> InboundEvent | None:
+        raw_post = event.get("data", {}).get("post")
+        if isinstance(raw_post, str):
+            try:
+                raw_post = json.loads(raw_post)
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(raw_post, dict):
+            return None
+        event_id = str(raw_post.get("id") or "")
+        conversation_id = str(raw_post.get("channel_id") or "")
+        if not event_id or not conversation_id:
+            return None
+        return InboundEvent(
+            event_id=event_id,
+            platform="mattermost",
+            event_type="posted",
+            conversation_id=conversation_id,
+            actor_id=str(raw_post.get("user_id") or ""),
+            occurred_at=float(raw_post.get("create_at") or time.time() * 1000) / 1000,
+            payload=event,
+        )
+
+    async def _process_inbound(self, event: InboundEvent) -> tuple[OutboundMessage, ...]:
+        collector: list[OutboundMessage] = []
+        token = _OUTBOUND_COLLECTOR.set(collector)
+        try:
+            await self._process_posted_event(dict(event.payload))
+            return tuple(collector)
+        finally:
+            _OUTBOUND_COLLECTOR.reset(token)
+
+    async def _process_posted_event(self, event: dict):
         """处理 posted 事件 — 核心消息处理入口
 
         data.post 格式 (Mattermost 9.x+):
@@ -444,7 +617,7 @@ class Agent:
         # Mattermost 在重连后可能重放 posted 事件。持久化记录是当前阶段的
         # 幂等边界，避免重复下载附件、调用 Runtime 和发送回复。
         post_id = post.get("id", "")
-        if post_id and self.memory.has_message(post_id):
+        if getattr(self, "pipeline", None) is None and post_id and self.memory.has_message(post_id):
             log.info("       ⏭️ 跳过重复消息: %s", post_id[:12])
             return
 
@@ -497,9 +670,7 @@ class Agent:
             trace.set_context(msg_type="mention")
             log.info("%s → 触发: 显式召唤 (@/DM/thread)", trace.prefix())
             await self._send_get_ack(post)
-            typing_task = asyncio.create_task(
-                self._typing_loop(post["channel_id"])
-            )
+            typing_task = asyncio.create_task(self._typing_loop(post["channel_id"]))
             try:
                 await self._respond(post, tag="mention")
             finally:
@@ -561,7 +732,7 @@ class Agent:
                     context,
                     capabilities=(),
                     max_rounds=config.max_tool_rounds,
-                )
+                ),
             )
             return result.text or ""
         except AgentRuntimeError as e:
@@ -586,6 +757,7 @@ class Agent:
                 actor_id=post.get("user_id", ""),
                 conversation_id=channel_id,
                 scope=f"mattermost:{team_id}/{channel_id}",
+                deadline=datetime.now(UTC) + timedelta(seconds=config.runtime_deadline_seconds),
             ),
             messages=tuple(prompt_context["messages"]),
             system_prompt=prompt_context["system"],
@@ -632,7 +804,7 @@ class Agent:
                     context,
                     capabilities=tuple(self.tool_registry.get_schema_list()),
                     max_rounds=rounds,
-                )
+                ),
             )
             response = runtime_result.text
         except AgentRuntimeError as e:
@@ -665,11 +837,18 @@ class Agent:
             message=post.get("message", ""),
             scope=request.context.scope,
         )
-        with bind_capability_context(context):
+        with (
+            bind_capability_context(context),
+            bind_governance_context(GovernanceContext(context.actor_id, context.scope)),
+        ):
             return await self.runtime.run(request)
 
     async def _build_attachment_blocks(
-        self, file_metas: list[dict], *, max_count: int, max_bytes: int,
+        self,
+        file_metas: list[dict],
+        *,
+        max_count: int,
+        max_bytes: int,
         max_text_chars: int = 50000,
     ) -> list[dict] | None:
         """从 Mattermost 附件元信息列表里下载图片/文本文档, 构造 content blocks
@@ -934,9 +1113,7 @@ class Agent:
             return "bot"
         return "member"
 
-    def _build_channel_members_table(
-        self, channel_id: str, current_user_id: str
-    ) -> str:
+    def _build_channel_members_table(self, channel_id: str, current_user_id: str) -> str:
         """从频道近期消息里去重提取所有出现过的 user,渲染为结构化 markdown 表格
 
         解决的问题: 之前只在 system_prompt 里注入「我」和「当前对话者」+「近期发言者」,
@@ -983,9 +1160,7 @@ class Agent:
                 note = "当前对话者"
             elif role == "bot":
                 note = "其他 bot,system_prompt 里的'自称'不一定代表真实身份"
-            lines.append(
-                f"| {uid[:8]}… | @{uname} | {role} | {note} |"
-            )
+            lines.append(f"| {uid[:8]}… | @{uname} | {role} | {note} |")
         return "\n".join(lines)
 
     def _build_context(self, post: dict, mention: bool = False) -> dict:
@@ -1008,9 +1183,7 @@ class Agent:
         recent_speakers = self._collect_recent_speakers(
             speaker_window, current_user_id, self.bot_user_id
         )
-        channel_members = self._build_channel_members_table(
-            channel_id, current_user_id
-        )
+        channel_members = self._build_channel_members_table(channel_id, current_user_id)
 
         # 系统提示词（纯人格，不包含工具信息 — 工具通过 SDK tools 参数传递）
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S (%A)")
@@ -1057,7 +1230,12 @@ class Agent:
             kb_text = "\n".join(f"  - {k['key']}: {k['value']}" for k in knowledge)
             meta_lines.append(f"📚 相关团队知识:\n{kb_text}")
         # 第一行（频道信息）同行，其余换行缩进
-        meta_prefix = "[" + meta_lines[0] + ("\n" + "\n".join(meta_lines[1:]) if len(meta_lines) > 1 else "") + "]\n"
+        meta_prefix = (
+            "["
+            + meta_lines[0]
+            + ("\n" + "\n".join(meta_lines[1:]) if len(meta_lines) > 1 else "")
+            + "]\n"
+        )
 
         # 加入当前消息（带频道元信息前缀）
         # 多模态: 如果 _on_posted 已下载图片, 用 list[ContentBlock] 注入;
@@ -1129,7 +1307,8 @@ class Agent:
         - 不记入 message_log / stats,不污染 LLM 上下文
         """
         try:
-            self.mm.send_post(
+            await asyncio.to_thread(
+                self.mm.send_post,
                 channel_id=post["channel_id"],
                 message="get",
                 root_id=post.get("id", ""),
@@ -1145,7 +1324,7 @@ class Agent:
         """
         try:
             while True:
-                self.mm.send_typing(channel_id)
+                await asyncio.to_thread(self.mm.send_typing, channel_id)
                 await asyncio.sleep(2.5)
         except asyncio.CancelledError:
             pass
@@ -1157,6 +1336,18 @@ class Agent:
         if not message:
             log.warning("       reply(): 消息为空，跳过发送")
             return None
+
+        collector = _OUTBOUND_COLLECTOR.get()
+        if collector is not None:
+            collector.append(
+                OutboundMessage(
+                    conversation_id=post["channel_id"],
+                    channel_id=post["channel_id"],
+                    text=message,
+                    props={PROP_FROM_BOT: PROP_TRUE},
+                )
+            )
+            return "outbox:pending"
 
         # 不传 root_id → 消息直接出现在主聊天流，而不是线程(Threads)
         # 如果需要线程回复（如长文分析），可手动指定 root_id
@@ -1190,6 +1381,30 @@ class Agent:
             log.error(f"       ❌ send_post 异常: {e}")
             return None
 
+    async def _deliver_outbound(self, outbound: OutboundMessage) -> str:
+        post_id = await self.mm.send_post_async(
+            channel_id=outbound.channel_id or outbound.conversation_id,
+            message=outbound.text,
+            props=dict(outbound.props),
+        )
+        if not post_id:
+            raise RuntimeError("Mattermost delivery failed")
+        self.stats["responses"] += 1
+        if not self.memory.log_message(
+            {
+                "id": post_id,
+                "channel_id": outbound.channel_id or outbound.conversation_id,
+                "user_id": self.bot_user_id,
+                "username": self.bot_username,
+                "message": outbound.text,
+                "create_at": int(time.time() * 1000),
+                "type": "",
+                "root_id": "",
+            }
+        ):
+            self.stats["dropped_messages"] += 1
+        return post_id
+
     async def stop(self):
         """停止 Agent — 按顺序释放资源,任一失败不影响后续清理"""
         self.running = False
@@ -1200,6 +1415,12 @@ class Agent:
                 await self.ws.close()
             except Exception as e:
                 log.error("ws.close 失败: %s", e, exc_info=True)
+
+        if getattr(self, "pipeline", None) is not None:
+            try:
+                await self.pipeline.close()
+            except Exception as e:
+                log.error("pipeline.close 失败: %s", e, exc_info=True)
 
         # 1.5) 关闭 SDK LLM 持久连接
         if hasattr(self, "sdk_llm"):
@@ -1223,12 +1444,20 @@ class Agent:
         except Exception as e:
             log.error("url_analyzer.close_client 失败: %s", e, exc_info=True)
 
+        try:
+            await self.mm.aclose()
+        except Exception as e:
+            log.error("mm.aclose 失败: %s", e, exc_info=True)
+
         # 4) 关闭 SQLite 连接 (最后 — 前面步骤可能还需要读 message_log)
         if hasattr(self, "memory"):
             try:
                 self.memory.close()
             except Exception as e:
                 log.error("memory.close 失败: %s", e, exc_info=True)
+
+        if hasattr(self, "control_store"):
+            self.control_store.close()
 
         log.info("Agent 已停止")
 

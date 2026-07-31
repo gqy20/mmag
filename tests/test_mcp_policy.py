@@ -17,9 +17,7 @@ from mmag.tools import ToolRegistry
 
 
 def _mcp_tool(name: str, *, read_only: bool | None = True):
-    annotations = (
-        None if read_only is None else SimpleNamespace(readOnlyHint=read_only)
-    )
+    annotations = None if read_only is None else SimpleNamespace(readOnlyHint=read_only)
     return SimpleNamespace(
         name=name,
         description=f"{name} docs",
@@ -90,9 +88,7 @@ async def test_discovered_mcp_tool_uses_one_spec_for_both_runtime_bindings():
         )
     )
 
-    registered = bridge._register_discovered_tools(
-        "docs", session, [_mcp_tool("search")]
-    )
+    registered = bridge._register_discovered_tools("docs", session, [_mcp_tool("search")])
     spec = bridge.get_capabilities()[0]
     sdk_tool = bridge.get_sdk_bindings()[0]
     legacy_result = await registry.execute(spec.name, {"query": "architecture"})
@@ -122,9 +118,7 @@ async def test_mcp_policy_denial_is_identical_and_stops_both_bindings():
     )
     session = SimpleNamespace(call_tool=AsyncMock())
 
-    bridge._register_discovered_tools(
-        "ops", session, [_mcp_tool("deploy", read_only=None)]
-    )
+    bridge._register_discovered_tools("ops", session, [_mcp_tool("deploy", read_only=None)])
     spec = bridge.get_capabilities()[0]
     legacy_result = await registry.execute(spec.name, {"query": "release"})
     sdk_result = await bridge.get_sdk_bindings()[0].handler({"query": "release"})

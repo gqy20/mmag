@@ -345,9 +345,7 @@ class MCPClientBridge:
                 continue
             spec = create_mcp_capability(server_name, tool, session)
             self._capabilities[spec.name] = spec
-            self.registry.register(
-                bind_legacy_capability(spec, executor=self.executor)
-            )
+            self.registry.register(bind_legacy_capability(spec, executor=self.executor))
             registered += 1
         return registered
 

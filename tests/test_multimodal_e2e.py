@@ -14,6 +14,7 @@
 运行真实服务测试: uv run pytest tests/test_multimodal_e2e.py -m external -v -s
 或:    uv run python tests/test_multimodal_e2e.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,15 +40,17 @@ def fetch_real_sample() -> dict | None:
     with httpx.Client(timeout=15, headers=headers) as h:
         teams = h.get(f"{config.mm_url}/api/v4/users/me/teams").json()
         for team in teams:
-            for ch in h.get(
-                f"{config.mm_url}/api/v4/teams/{team['id']}/channels"
-            ).json():
+            for ch in h.get(f"{config.mm_url}/api/v4/teams/{team['id']}/channels").json():
                 if ch.get("type") == "D":
                     continue
-                posts = h.get(
-                    f"{config.mm_url}/api/v4/channels/{ch['id']}/posts",
-                    params={"per_page": 30},
-                ).json().get("posts", {})
+                posts = (
+                    h.get(
+                        f"{config.mm_url}/api/v4/channels/{ch['id']}/posts",
+                        params={"per_page": 30},
+                    )
+                    .json()
+                    .get("posts", {})
+                )
                 for _pid, p in posts.items():
                     files_meta = (p.get("metadata") or {}).get("files") or []
                     for fmeta in files_meta:
@@ -101,8 +104,10 @@ def test_image_blocks_construction(tmp_path):
     assert image_blocks[0]["source"]["media_type"].startswith("image/")
     assert len(image_blocks[0]["source"]["data"]) > 100  # base64 不可能太短
     print(f"  ✓ 构造了 {len(image_blocks)} 个 content block")
-    print(f"  ✓ 第一张图: {image_blocks[0]['source']['media_type']}, "
-          f"{len(image_blocks[0]['source']['data'])} chars base64")
+    print(
+        f"  ✓ 第一张图: {image_blocks[0]['source']['media_type']}, "
+        f"{len(image_blocks[0]['source']['data'])} chars base64"
+    )
 
 
 # ============================================================
@@ -244,9 +249,7 @@ def test_llm_actually_sees_image(tmp_path):
         # 加 max_tokens + 1 次重试,让测试稳定。生产调用也会自然重试。
         response = ""
         for attempt in range(2):
-            response = await llm.chat(
-                messages=ctx["messages"], system=system, max_tokens=2048
-            )
+            response = await llm.chat(messages=ctx["messages"], system=system, max_tokens=2048)
             if response and len(response) > 20 and "返回为空" not in response:
                 break
             print(f"  [重试] LLM 响应过短/为空 (attempt {attempt + 1}): {response!r}")
@@ -274,6 +277,7 @@ def test_text_only_path_still_works():
 
     mm = MMClient()
     from mmag.memory import Memory
+
     memory = Memory(":memory:")
     mm.get_channel = lambda cid: {"id": cid, "display_name": "test", "name": "test"}
 
@@ -380,9 +384,7 @@ def test_json_attachment_downloaded_as_text_block(tmp_path):
     ]
 
     blocks = asyncio.run(
-        agent._build_attachment_blocks(
-            file_metas, max_count=4, max_bytes=5 * 1024 * 1024
-        )
+        agent._build_attachment_blocks(file_metas, max_count=4, max_bytes=5 * 1024 * 1024)
     )
 
     assert blocks is not None
@@ -390,7 +392,7 @@ def test_json_attachment_downloaded_as_text_block(tmp_path):
     assert len(text_blocks) >= 1
     combined = " ".join(b["text"] for b in text_blocks)
     assert "config.json" in combined
-    assert '"key"' in combined or 'key' in combined
+    assert '"key"' in combined or "key" in combined
     print("  ✓ json 附件 → text block")
 
 
@@ -467,9 +469,7 @@ def test_unsupported_mime_stays_as_placeholder(tmp_path):
     ]
 
     blocks = asyncio.run(
-        agent._build_attachment_blocks(
-            file_metas, max_count=4, max_bytes=5 * 1024 * 1024
-        )
+        agent._build_attachment_blocks(file_metas, max_count=4, max_bytes=5 * 1024 * 1024)
     )
 
     # PDF 不下载, 应返回 None (无成功 content blocks)
@@ -507,9 +507,7 @@ def test_yaml_attachment_downloaded_as_text_block(tmp_path):
     ]
 
     blocks = asyncio.run(
-        agent._build_attachment_blocks(
-            file_metas, max_count=4, max_bytes=5 * 1024 * 1024
-        )
+        agent._build_attachment_blocks(file_metas, max_count=4, max_bytes=5 * 1024 * 1024)
     )
 
     assert blocks is not None, "YAML 附件应被识别为文本文档"

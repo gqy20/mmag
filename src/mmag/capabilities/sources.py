@@ -74,8 +74,7 @@ def _mapping_sources(
         return [
             source
             for item in search_results["results"]
-            if isinstance(item, dict)
-            and (source := _image_source(item, tool_name)) is not None
+            if isinstance(item, dict) and (source := _image_source(item, tool_name)) is not None
         ]
     if data.get("title") and (url := _input_url(arguments)):
         return [{"url": url, "title": data["title"], "tool": tool_name}]

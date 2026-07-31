@@ -34,9 +34,7 @@ _FILE_REQUEST_KEYWORDS = (
     "as attachment",
 )
 
-_MISSING_INTENT = (
-    "用户未明确请求发送文件。只有在用户说'发文件/导出/下载'等时才可调用此工具。"
-)
+_MISSING_INTENT = "用户未明确请求发送文件。只有在用户说'发文件/导出/下载'等时才可调用此工具。"
 
 
 def _user_requests_file(context: CapabilityContext | None) -> bool:
@@ -77,12 +75,7 @@ def create_send_file_capability(
             data = content.encode("utf-8")
 
         if len(data) > SEND_FILE_MAX_BYTES:
-            return {
-                "error": (
-                    f"文件过大 ({len(data)} bytes), "
-                    f"上限 {SEND_FILE_MAX_BYTES} bytes"
-                )
-            }
+            return {"error": (f"文件过大 ({len(data)} bytes), 上限 {SEND_FILE_MAX_BYTES} bytes")}
 
         assert context is not None
         if not context.conversation_id:

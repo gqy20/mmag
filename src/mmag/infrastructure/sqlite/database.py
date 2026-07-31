@@ -26,6 +26,8 @@ class SQLiteDatabase:
         try:
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
             apply_migrations(connection)
         except Exception:
             connection.close()

@@ -178,12 +178,17 @@ class LLM:
                 if not final:
                     log.warning(
                         "%s Round %d/%d 末轮强制收尾仍无 text, fallback",
-                        trace.prefix(), round_i, max_rounds,
+                        trace.prefix(),
+                        round_i,
+                        max_rounds,
                     )
                     final = "⚠️ 处理超时，请重试"
                 log.info(
                     "%s Round %d/%d 末轮强制收尾, text %d 字符",
-                    trace.prefix(), round_i, max_rounds, len(final),
+                    trace.prefix(),
+                    round_i,
+                    max_rounds,
+                    len(final),
                 )
                 return {"final_text": final}
 
@@ -193,7 +198,9 @@ class LLM:
                 if not final:
                     log.warning(
                         "%s Round %d/%d → text 为空, fallback",
-                        trace.prefix(), round_i, max_rounds,
+                        trace.prefix(),
+                        round_i,
+                        max_rounds,
                     )
                     final = "⚠️ 处理超时，请重试"
                 return {"final_text": final}
@@ -201,8 +208,11 @@ class LLM:
             # 有工具调用 → 构造 assistant 消息, 传递给 tools 节点
             log.info(
                 "%s Round %d/%d → %d 个工具调用 [%s]",
-                trace.prefix(), round_i, max_rounds,
-                len(tool_calls), ", ".join(tc["name"] for tc in tool_calls),
+                trace.prefix(),
+                round_i,
+                max_rounds,
+                len(tool_calls),
+                ", ".join(tc["name"] for tc in tool_calls),
             )
             assistant_content: list[TextBlockParam | ToolUseBlockParam] = []
             if text_parts:
@@ -211,11 +221,18 @@ class LLM:
                 assistant_content.append(
                     cast(
                         "ToolUseBlockParam",
-                        {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["input"]},
+                        {
+                            "type": "tool_use",
+                            "id": tc["id"],
+                            "name": tc["name"],
+                            "input": tc["input"],
+                        },
                     )
                 )
             return {
-                "messages": [cast("MessageParam", {"role": "assistant", "content": assistant_content})],
+                "messages": [
+                    cast("MessageParam", {"role": "assistant", "content": assistant_content})
+                ],
                 "round": round_i,
             }
 
@@ -224,10 +241,7 @@ class LLM:
             new_msgs: list[Any] = []
             last_msg = state["messages"][-1]
             content = last_msg.get("content", [])
-            tool_calls = [
-                c for c in content
-                if isinstance(c, dict) and c.get("type") == "tool_use"
-            ]
+            tool_calls = [c for c in content if isinstance(c, dict) and c.get("type") == "tool_use"]
             for tc in tool_calls:
                 result_str = await tool_registry.execute(tc["name"], tc["input"])
                 tool_result_content: list[ToolResultBlockParam] = [
@@ -266,12 +280,17 @@ class LLM:
         if not final_text:
             log.warning(
                 "%s Agent Loop 未产出 final_text, fallback (总耗时 %.3fs)",
-                trace.prefix(), total_elapsed,
+                trace.prefix(),
+                total_elapsed,
             )
             final_text = "⚠️ 处理超时，请重试"
 
-        log.info("%s Agent Loop 完成, 输出 %d 字符 (总耗时 %.3fs)",
-                 trace.prefix(), len(final_text), total_elapsed)
+        log.info(
+            "%s Agent Loop 完成, 输出 %d 字符 (总耗时 %.3fs)",
+            trace.prefix(),
+            len(final_text),
+            total_elapsed,
+        )
         return final_text
 
 

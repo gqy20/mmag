@@ -136,9 +136,7 @@ def translate_runtime_error(error: Exception, *, runtime: str) -> AgentRuntimeEr
     """Translate backend-specific failures into stable application semantics."""
     chain = _error_chain(error)
     message = str(error) or type(error).__name__
-    searchable = " ".join(
-        f"{type(item).__name__} {item}".lower() for item in chain
-    )
+    searchable = " ".join(f"{type(item).__name__} {item}".lower() for item in chain)
 
     if any(isinstance(item, TimeoutError) for item in chain) or "timeout" in searchable:
         return RuntimeTimeoutError(message, runtime=runtime)

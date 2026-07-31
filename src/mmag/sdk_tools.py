@@ -14,16 +14,19 @@ from .capabilities import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from .capabilities import CapabilityExecutor
+
 
 def create_sdk_tools(
     mm_client,
     memory,
     *,
     context_provider: Callable[[], CapabilityContext | None] = get_capability_context,
+    executor: CapabilityExecutor | None = None,
 ) -> list:
     """Bind the canonical ordered catalog to Claude Agent SDK tools."""
     return [
-        bind_sdk_capability(spec)
+        bind_sdk_capability(spec, executor=executor)
         for spec in create_builtin_capabilities(
             mm_client,
             memory,

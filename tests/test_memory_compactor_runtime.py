@@ -45,9 +45,7 @@ async def test_summary_uses_provider_neutral_runtime_request():
 @pytest.mark.asyncio
 async def test_summary_runtime_failure_is_not_persistable_text():
     runtime = MagicMock()
-    runtime.run = AsyncMock(
-        side_effect=RuntimeUnavailableError("offline", runtime="test")
-    )
+    runtime.run = AsyncMock(side_effect=RuntimeUnavailableError("offline", runtime="test"))
     compactor = _compactor(runtime)
 
     result = await compactor._summarize_message_batch(

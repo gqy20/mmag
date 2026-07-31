@@ -170,9 +170,7 @@ class CapabilityExecutor:
                 return self._result(
                     started_at,
                     CapabilityStatus.APPROVAL_REQUIRED,
-                    message=(
-                        authorization.reason or f"Capability '{spec.name}' requires approval"
-                    ),
+                    message=(authorization.reason or f"Capability '{spec.name}' requires approval"),
                 )
             async with asyncio.timeout(spec.timeout_seconds):
                 value = spec.handler(**dict(arguments))

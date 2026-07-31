@@ -176,6 +176,80 @@ def _v003_migrate_message_cache(connection: sqlite3.Connection) -> None:
     connection.execute("DROP TABLE message_cache")
 
 
+_CONTROL_PLANE_SQL = (
+    """CREATE TABLE IF NOT EXISTS inbox_events (
+        event_id TEXT PRIMARY KEY, platform TEXT NOT NULL, event_type TEXT NOT NULL,
+        conversation_id TEXT NOT NULL, actor_id TEXT NOT NULL, occurred_at REAL NOT NULL,
+        payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'accepted', version INTEGER NOT NULL DEFAULT 0,
+        received_at REAL NOT NULL, updated_at REAL NOT NULL, last_error TEXT NOT NULL DEFAULT ''
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox_events(status, received_at)",
+    """CREATE TABLE IF NOT EXISTS outbox_deliveries (
+        id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+        message TEXT NOT NULL, props TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at REAL NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL DEFAULT '', remote_id TEXT NOT NULL DEFAULT '',
+        agent_run_id TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, updated_at REAL NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_deliveries(status, next_attempt_at)",
+    """CREATE TABLE IF NOT EXISTS lifecycle_entities (
+        entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, scope_id TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL DEFAULT '{}',
+        created_at REAL NOT NULL, updated_at REAL NOT NULL,
+        PRIMARY KEY(entity_type, entity_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS state_transitions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, command_id TEXT NOT NULL UNIQUE,
+        entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, from_state TEXT NOT NULL,
+        to_state TEXT NOT NULL, version INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '',
+        actor_id TEXT NOT NULL DEFAULT '', trace_id TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL,
+        FOREIGN KEY(entity_type, entity_id) REFERENCES lifecycle_entities(entity_type, entity_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_transition_entity ON state_transitions(entity_type, entity_id, version)",
+    """CREATE TABLE IF NOT EXISTS scopes (
+        id TEXT PRIMARY KEY, organization_id TEXT NOT NULL DEFAULT '', project_id TEXT NOT NULL DEFAULT '',
+        customer_id TEXT NOT NULL DEFAULT '', conversation_id TEXT NOT NULL DEFAULT '',
+        created_at REAL NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS enterprise_entities (
+        entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, scope_id TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '{}',
+        source TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 1.0,
+        created_at REAL NOT NULL, updated_at REAL NOT NULL,
+        PRIMARY KEY(entity_type, entity_id), FOREIGN KEY(scope_id) REFERENCES scopes(id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_enterprise_scope ON enterprise_entities(scope_id, entity_type)",
+    """CREATE TABLE IF NOT EXISTS approval_requests (
+        id TEXT PRIMARY KEY, capability_name TEXT NOT NULL, arguments TEXT NOT NULL,
+        resume_token TEXT NOT NULL UNIQUE, requested_by TEXT NOT NULL, scope_id TEXT NOT NULL DEFAULT '',
+        expires_at REAL, decided_by TEXT NOT NULL DEFAULT '', decision_reason TEXT NOT NULL DEFAULT '',
+        created_at REAL NOT NULL, updated_at REAL NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY, run_id TEXT NOT NULL, scope_id TEXT NOT NULL DEFAULT '',
+        kind TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}',
+        created_at REAL NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS audit_events (
+        id TEXT PRIMARY KEY, event_type TEXT NOT NULL, actor_id TEXT NOT NULL DEFAULT '',
+        scope_id TEXT NOT NULL DEFAULT '', trace_id TEXT NOT NULL DEFAULT '',
+        target TEXT NOT NULL DEFAULT '', decision TEXT NOT NULL DEFAULT '',
+        details TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_audit_scope_time ON audit_events(scope_id, created_at DESC)",
+    """CREATE TABLE IF NOT EXISTS quota_usage (
+        subject_id TEXT NOT NULL, period TEXT NOT NULL, cost_usd REAL NOT NULL DEFAULT 0,
+        input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+        updated_at REAL NOT NULL, PRIMARY KEY(subject_id, period)
+    )""",
+)
+
+
+def _v004_add_control_plane(connection: sqlite3.Connection) -> None:
+    for statement in _CONTROL_PLANE_SQL:
+        connection.execute(statement)
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -194,6 +268,12 @@ DEFAULT_MIGRATIONS = (
         name="migrate legacy message cache",
         checksum=_checksum("v003-migrate-message-cache-20260731"),
         upgrade=_v003_migrate_message_cache,
+    ),
+    Migration(
+        version=4,
+        name="add durable control plane",
+        checksum=_checksum("v004-durable-control-plane-20260731"),
+        upgrade=_v004_add_control_plane,
     ),
 )
 

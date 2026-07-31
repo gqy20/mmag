@@ -45,6 +45,10 @@ _FIELD_TO_ENV: dict[str, str] = {
     "max_tool_rounds": "MAX_TOOL_ROUNDS",
     "use_sdk_llm": "USE_SDK_LLM",
     "mcp_allowed_tools": "MCP_ALLOWED_TOOLS",
+    "pipeline_max_concurrency": "PIPELINE_MAX_CONCURRENCY",
+    "pipeline_max_pending": "PIPELINE_MAX_PENDING",
+    "runtime_deadline_seconds": "RUNTIME_DEADLINE_SECONDS",
+    "model_budget_usd": "MODEL_BUDGET_USD",
 }
 # 敏感字段（日志只记录是否配置，不输出任何值片段）
 _SECRET_FIELD_NAMES: frozenset[str] = frozenset({"mm_token", "anthropic_api_key"})
@@ -128,6 +132,10 @@ class Config:
             name.strip() for name in os.getenv("MCP_ALLOWED_TOOLS", "").split(",") if name.strip()
         )
     )
+    pipeline_max_concurrency: int = int(os.getenv("PIPELINE_MAX_CONCURRENCY", "8"))
+    pipeline_max_pending: int = int(os.getenv("PIPELINE_MAX_PENDING", "256"))
+    runtime_deadline_seconds: float = float(os.getenv("RUNTIME_DEADLINE_SECONDS", "120"))
+    model_budget_usd: float = float(os.getenv("MODEL_BUDGET_USD", "100"))
 
     @property
     def ws_url(self) -> str:

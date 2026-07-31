@@ -121,9 +121,7 @@ class TestBuildContentBlocksMultimodal:
     def test_image_before_text_order(self, sdk):
         """image block 在 text block 之前 (Anthropic 期望的顺序)"""
         img = self._make_image_block()
-        msgs = [
-            {"role": "user", "content": [img, {"type": "text", "text": "这是什么?"}]}
-        ]
+        msgs = [{"role": "user", "content": [img, {"type": "text", "text": "这是什么?"}]}]
         blocks = sdk._build_content_blocks(msgs)
         img_idx = next(i for i, b in enumerate(blocks) if b["type"] == "image")
         text_idx = next(i for i, b in enumerate(blocks) if b["type"] == "text")
@@ -159,7 +157,10 @@ class TestBuildContentBlocksMultimodal:
         assert types.count("text") >= 3
         # image 在第一个 text 块之前 (属同一条 user 消息)
         img_idx = types.index("image")
-        assert "[Assistant]" in blocks[img_idx + 2]["text"] or "[Assistant]" in blocks[img_idx + 1]["text"]
+        assert (
+            "[Assistant]" in blocks[img_idx + 2]["text"]
+            or "[Assistant]" in blocks[img_idx + 1]["text"]
+        )
 
     def test_no_text_placeholder_for_image(self, sdk):
         """确认不再出现 [图片附件: ...] 文本占位符"""
@@ -227,17 +228,13 @@ class TestPermissionPolicy:
 
     @pytest.mark.asyncio
     async def test_known_mmag_mcp_tool_is_allowed(self):
-        decision = await sdk_llm._tool_permission_callback(
-            "mcp__mmag__get_posts", {}, None
-        )
+        decision = await sdk_llm._tool_permission_callback("mcp__mmag__get_posts", {}, None)
 
         assert isinstance(decision, PermissionResultAllow)
 
     @pytest.mark.asyncio
     async def test_unknown_mcp_tool_is_denied(self):
-        decision = await sdk_llm._tool_permission_callback(
-            "mcp__untrusted__delete_all", {}, None
-        )
+        decision = await sdk_llm._tool_permission_callback("mcp__untrusted__delete_all", {}, None)
 
         assert isinstance(decision, PermissionResultDeny)
 
@@ -273,9 +270,7 @@ class TestPermissionPolicy:
 
         options = sdk._build_options([search_docs])
 
-        visible = await options.can_use_tool(
-            "mcp__mmag__mcp_docs_search", {}, None
-        )
+        visible = await options.can_use_tool("mcp__mmag__mcp_docs_search", {}, None)
         hidden = await options.can_use_tool("mcp__mmag__search_text", {}, None)
 
         assert isinstance(visible, PermissionResultAllow)

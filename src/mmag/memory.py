@@ -8,6 +8,7 @@ import time
 from .infrastructure.sqlite import SQLiteDatabase
 from .infrastructure.sqlite.fts import cjk_tokenize_for_fts as _cjk_tokenize_for_fts
 from .logger import get_logger
+from .repositories import MemoryRepositories
 
 log = get_logger(__name__)
 
@@ -19,18 +20,13 @@ class Memory:
         self.db_path = db_path
         self._database = SQLiteDatabase(db_path)
         self._conn = self._database.connect()
+        self.repositories = MemoryRepositories.create(self._conn)
 
     # ---- 消息日志（永久存储,供检索/回顾）----
 
     def has_message(self, post_id: str) -> bool:
         """Return whether a Mattermost post has already been persisted."""
-        if not post_id:
-            return False
-        row = self._conn.execute(
-            "SELECT 1 FROM message_log WHERE id=?",
-            (post_id,),
-        ).fetchone()
-        return row is not None
+        return self.repositories.messages.contains(post_id)
 
     def log_message(self, post: dict) -> bool:
         """写入一条消息到 message_log,并同步 FTS5 索引。
@@ -106,20 +102,11 @@ class Memory:
 
     def get_recent_messages(self, channel_id: str, limit: int = 30) -> list[dict]:
         """获取频道最近 N 条消息(时间正序,旧→新)"""
-        rows = self._conn.execute(
-            "SELECT * FROM message_log WHERE channel_id=? ORDER BY create_at DESC LIMIT ?",
-            (channel_id, limit),
-        ).fetchall()
-        return [dict(r) for r in reversed(rows)]
+        return self.repositories.messages.recent(channel_id, limit)
 
     def get_post_user(self, post_id: str) -> str | None:
         """根据 post_id 查 user_id,用于判断 thread root 是不是自己发的"""
-        if not post_id:
-            return None
-        row = self._conn.execute(
-            "SELECT user_id FROM message_log WHERE id=?", (post_id,)
-        ).fetchone()
-        return row["user_id"] if row else None
+        return self.repositories.messages.actor_for(post_id)
 
     def peek_recent_messages(
         self, channel_id: str, limit: int = 100, order: str = "DESC"
@@ -140,11 +127,7 @@ class Memory:
 
     def get_latest_message_ts(self, channel_id: str) -> float:
         """获取该频道本地最新消息的 create_at(秒),无则 0。给 backfill 做增量起点"""
-        row = self._conn.execute(
-            "SELECT MAX(create_at) as ts FROM message_log WHERE channel_id=?",
-            (channel_id,),
-        ).fetchone()
-        return float(row["ts"]) if row and row["ts"] else 0.0
+        return self.repositories.messages.latest_timestamp(channel_id)
 
     def search_messages(
         self,
@@ -350,23 +333,8 @@ class Memory:
         过期或不存在 → 返回 None。
         错误处理: 任何异常只 log.debug，不向上抛。
         """
-        if not url:
-            return None
         try:
-            row = self._conn.execute("SELECT * FROM url_cache WHERE url=?", (url,)).fetchone()
-            if not row:
-                return None
-            d = dict(row)
-            if d.get("expires_at", 0) < time.time():
-                # 已过期 — 视为未命中（不主动删除，让下次写入覆盖）
-                return None
-            # 解析 metadata JSON
-            try:
-                d["metadata"] = json.loads(d.get("metadata") or "{}")
-            except Exception:
-                d["metadata"] = {}
-            d["cached"] = True
-            return d
+            return self.repositories.urls.get(url)
         except Exception as e:
             log.debug(f"读取 URL 缓存失败: {e}")
             return None
@@ -647,10 +615,7 @@ class Memory:
 
     def get_user_profile(self, user_id: str) -> dict:
         """原始画像：topics/active_hours 仍是 JSON 字符串，调用方需自己解析"""
-        row = self._conn.execute(
-            "SELECT * FROM user_profiles WHERE user_id=?", (user_id,)
-        ).fetchone()
-        return dict(row) if row else {}
+        return self.repositories.profiles.get(user_id)
 
     def get_user_profile_decoded(self, user_id: str) -> dict:
         """画像（已解析 JSON 字段）
@@ -658,19 +623,7 @@ class Memory:
         与 get_user_profile 的区别: topics (list) 与 active_hours (dict) 已 json.loads,
         解析失败时各自 fallback 到空类型。供展示层 (tool handler / 格式化) 直接消费。
         """
-        profile = self.get_user_profile(user_id)
-        if not profile:
-            return {}
-        for key, default in (("topics", []), ("active_hours", {})):
-            raw = profile.get(key)
-            if not raw:
-                profile[key] = default
-                continue
-            try:
-                profile[key] = json.loads(raw)
-            except Exception:
-                profile[key] = default
-        return profile
+        return self.repositories.profiles.get(user_id, decode=True)
 
     # ---- 团队知识 ----
 
@@ -772,13 +725,7 @@ class Memory:
         self._conn.commit()
 
     def get_recent_summary(self, channel_id: str) -> str:
-        row = self._conn.execute(
-            """SELECT summary FROM conversation_segments
-               WHERE channel_id=? AND status='active'
-               ORDER BY started_at DESC LIMIT 1""",
-            (channel_id,),
-        ).fetchone()
-        return row["summary"] if row else ""
+        return self.repositories.summaries.latest(channel_id)
 
     def close(self):
         if self._conn:
