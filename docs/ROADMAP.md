@@ -28,7 +28,7 @@
 - [x] 将默认 Prompt 打入 wheel，并在隔离目录验证包、CLI 模块和 Prompt 加载；
 - [x] 重复 posted 事件在 Runtime 前按持久化 post ID 去重；
 - [x] Mattermost 回复使用 `pending_post_id` 对网络错误、超时、429/5xx 做有界幂等重试；
-- [x] 默认离线测试基线达到 `224 passed, 2 deselected`，实际分支覆盖率 `47.73%`；
+- [x] 默认离线测试基线达到 `225 passed, 2 deselected`，实际分支覆盖率 `47.95%`；
 - [x] 建立不可变 Runtime 输入/输出、统一错误模型和 SDK/Legacy Adapter；
 - [x] `Agent` 与 `MemoryCompactor` 已只依赖 `AgentRuntime` Port；
 - [x] 建立 Capability 核心契约，并完成 `get_channel_info` 双 Runtime 垂直切片。
@@ -153,12 +153,12 @@ Managed Agent 与 Router
 
 ### 下一步顺序
 
-1. 迁移 `search_knowledge`，验证带可选参数、默认值的本地读取能力；
-2. 迁移 `get_posts`、`search_messages` 和 `get_user_profile`，收口缓存/组合读取与结果格式；
-3. 迁移 `analyze_link`，让 `SourcePolicy.AUTO` 真正驱动来源注入；
-4. 迁移 `save_knowledge`，为 `WRITE` 能力接入确定性的权限检查和未来审批钩子；
-5. 单独处理 `send_file`：它依赖当前消息意图和文件边界，应与 Step 4 的不可变 `RunContext` 一起消除全局 `ToolContext.current_post`；
-6. 最后让外部 MCP 进入同一 Catalog/Policy 可见性链路，并删除两套重复工厂与 formatter。
+1. [x] 迁移 `search_knowledge`，验证带可选参数、默认值的本地读取能力；
+2. [ ] 迁移 `get_posts`、`search_messages` 和 `get_user_profile`，收口缓存/组合读取与结果格式；
+3. [ ] 迁移 `analyze_link`，让 `SourcePolicy.AUTO` 真正驱动来源注入；
+4. [ ] 迁移 `save_knowledge`，为 `WRITE` 能力接入确定性的权限检查和未来审批钩子；
+5. [ ] 单独处理 `send_file`：它依赖当前消息意图和文件边界，应与 Step 4 的不可变 `RunContext` 一起消除全局 `ToolContext.current_post`；
+6. [ ] 最后让外部 MCP 进入同一 Catalog/Policy 可见性链路，并删除两套重复工厂与 formatter。
 
 ### 退出标准
 
