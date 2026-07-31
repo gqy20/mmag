@@ -170,7 +170,7 @@
 - LLM 调用 kwargs 拼装重复 (`llm.py:50-74` vs `llm.py:88-153` 两份几乎一致的 create 调用)
 - `summary_parts` 构造瀑布式 if 链重复 (`url_analyzer.py:407-425` 与 `512-522` 结构高度相似)
 - `_respond → agent_loop` 与 `compactor → chat_with_system` 流水线重复
-- `get_channel_info`、`search_knowledge`、`get_posts`、`search_messages` 已迁移为单一 `CapabilitySpec`，不再重复 schema/handler/formatter；其余内置工具仍在 `tools/builtin.py` 与 `sdk_tools.py` 双重定义
+- `get_channel_info`、`search_knowledge`、`get_posts`、`search_messages`、`get_user_profile` 已迁移为单一 `CapabilitySpec`，不再重复 schema/handler/formatter；其余内置工具仍在 `tools/builtin.py` 与 `sdk_tools.py` 双重定义
 
 ### 20. 魔数 / 硬编码常量
 - `agent.py:240 per_page=200` / `:261 time.sleep(0.1)` / `:382 max_rounds=5` 等魔数
@@ -242,7 +242,7 @@
 | 2026-07-31 | SQLite 版本化 migration：旧库升级、FTS 重建、幂等、回滚和未来版本拒绝 |
 | 2026-07-31 | 安全边界收紧：Secret 零片段日志、真实路径边界、SDK/外部 MCP 显式白名单 |
 | 2026-07-31 | `Memory.log_message` 主表与 FTS 多步写入失败时完整回滚 |
-| 2026-07-31 | CI / `make verify` 工程门禁：Ruff、228 个离线测试、49.00% 分支覆盖率、mypy、wheel smoke |
+| 2026-07-31 | CI / `make verify` 工程门禁：Ruff、230 个离线测试、49.36% 分支覆盖率、mypy、wheel smoke |
 | 2026-07-31 | `prompts.yml` 打入 wheel，并支持 `PROMPTS_PATH` 覆盖；提交可复现 `uv.lock` |
 | 2026-07-31 | ToolRegistry 正确收集 async generator，并清零 26 个源码文件的 mypy 错误 |
 | 2026-07-31 | 重复 posted 事件持久化去重；Mattermost 回复以 `pending_post_id` 实现安全有界重试 |
@@ -251,3 +251,4 @@
 | 2026-07-31 | `search_knowledge` 迁移到 Capability Catalog，统一默认值、上限与双 Runtime 输出 |
 | 2026-07-31 | `get_posts` 迁移到 Capability Catalog，统一缓存/REST/回填策略并移出异步事件循环 |
 | 2026-07-31 | `search_messages` 迁移到 Capability Catalog，统一过滤与时间语义并修复 SDK 零时间戳漂移 |
+| 2026-07-31 | `get_user_profile` 迁移到 Capability Catalog，并发组合画像与用户名读取 |
