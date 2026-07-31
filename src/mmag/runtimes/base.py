@@ -45,12 +45,15 @@ class RunRequest:
     capabilities: tuple[Mapping[str, Any], ...] = ()
     max_rounds: int = 5
     max_tokens: int = 4096
+    fallback_max_tokens: int = 1024
 
     def __post_init__(self) -> None:
         if self.max_rounds < 1:
             raise ValueError("max_rounds must be at least 1")
         if self.max_tokens < 1:
             raise ValueError("max_tokens must be at least 1")
+        if self.fallback_max_tokens < 1:
+            raise ValueError("fallback_max_tokens must be at least 1")
         object.__setattr__(self, "messages", tuple(_freeze(message) for message in self.messages))
         object.__setattr__(
             self,

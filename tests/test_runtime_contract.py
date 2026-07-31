@@ -122,7 +122,7 @@ async def test_adapters_own_the_no_tools_fallback(adapter_type):
     backend.chat.assert_awaited_once_with(
         messages=[{"role": "user", "content": "hello"}],
         system="system",
-        max_tokens=2048,
+        max_tokens=1024,
     )
 
 

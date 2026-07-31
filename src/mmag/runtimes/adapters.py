@@ -75,7 +75,7 @@ class _BackendRuntimeAdapter:
                 recovered = await self.backend.chat(
                     messages=messages,
                     system=request.system_prompt,
-                    max_tokens=request.max_tokens,
+                    max_tokens=request.fallback_max_tokens,
                 )
                 if recovered and not recovered.startswith("(模型返回为空)"):
                     text = recovered

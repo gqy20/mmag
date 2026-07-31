@@ -15,13 +15,21 @@ from typing import Any
 
 from .client import PROP_FROM_BOT, PROP_TRUE, MMClient
 from .config import _log_config_loading, _secret_status, config
-from .llm import LLM, LLMError
+from .llm import LLM
 from .logger import get_logger, trace
 from .mcp_bridge import MCPClientBridge
 from .memory import Memory
 from .memory_compactor import MemoryCompactor
 from .prompts import prompts
-from .sdk_llm import SDKLLM, SDKLLMError
+from .runtimes import (
+    AgentRuntime,
+    AgentRuntimeError,
+    ClaudeSDKRuntimeAdapter,
+    LegacyRuntimeAdapter,
+    RunContext,
+    RunRequest,
+)
+from .sdk_llm import SDKLLM
 from .sdk_tools import ToolContext
 from .tools import ToolRegistry, build_builtin_tools
 from .ws_client import WebSocketClient
@@ -100,6 +108,12 @@ class Agent:
         for t in builtin_tools:
             self.tool_registry.register(t)
         log.info(f"工具系统就绪: {len(builtin_tools)} 个内置工具")
+
+        # 应用层只依赖 AgentRuntime；启动阶段可在 SDK/Legacy Adapter 间切换。
+        self.runtime: AgentRuntime = LegacyRuntimeAdapter(
+            self.llm,
+            tool_registry=self.tool_registry,
+        )
 
         # MCP 外部工具桥接（读取 .mcp.json，连接外部 Server）
         self.mcp_bridge = MCPClientBridge(
@@ -191,6 +205,10 @@ class Agent:
                 await self.sdk_llm.start(
                     tool_funcs=sdk_tool_funcs,
                     mcp_json_path=mcp_json_path,
+                )
+                self.runtime = ClaudeSDKRuntimeAdapter(
+                    self.sdk_llm,
+                    tool_registry=self.tool_registry,
                 )
                 log.info("       ✅ SDK LLM 就绪 (持久连接)")
             except Exception as e:
@@ -540,18 +558,44 @@ class Agent:
         """
         await self.typing_indicator(post["channel_id"])
         context = self._build_context(post, mention=False)
-        llm_backend = self.sdk_llm if config.use_sdk_llm else self.llm
         try:
-            response = await llm_backend.agent_loop(
-                messages=context["messages"],
-                system=context["system"],
-                tools=self.tool_registry.get_schema_list(),
-                max_rounds=config.max_tool_rounds,
+            result = await self.runtime.run(
+                self._build_run_request(
+                    post,
+                    context,
+                    capabilities=(),
+                    max_rounds=config.max_tool_rounds,
+                )
             )
-            return response or ""
-        except Exception as e:
+            return result.text or ""
+        except AgentRuntimeError as e:
             log.error("       ❌ LLM 决策异常: %s", e)
             return "<SILENT>"
+
+    def _build_run_request(
+        self,
+        post: dict,
+        prompt_context: dict,
+        *,
+        capabilities: tuple[dict, ...],
+        max_rounds: int,
+    ) -> RunRequest:
+        """Translate Mattermost context into the provider-neutral Runtime input."""
+        channel_id = post["channel_id"]
+        channel = self.mm.get_channel(channel_id)
+        team_id = channel.get("team_id") or "-"
+        return RunRequest(
+            context=RunContext(
+                trace_id=trace.current,
+                actor_id=post.get("user_id", ""),
+                conversation_id=channel_id,
+                scope=f"mattermost:{team_id}/{channel_id}",
+            ),
+            messages=tuple(prompt_context["messages"]),
+            system_prompt=prompt_context["system"],
+            capabilities=capabilities,
+            max_rounds=max_rounds,
+        )
 
     def _is_silent(self, text: str) -> bool:
         """解析 LLM 输出: 第一行是 <SILENT> 标记则视为沉默"""
@@ -584,49 +628,20 @@ class Agent:
             tag,
             len(context["messages"]),
         )
-        # 选择 LLM 后端: SDK adapter 或 legacy LLM
-        llm_backend = self.sdk_llm if config.use_sdk_llm else self.llm
-        llm_error_type = SDKLLMError if config.use_sdk_llm else LLMError
-
         try:
-            response = await llm_backend.agent_loop(
-                messages=context["messages"],
-                system=context["system"],
-                tools=self.tool_registry.get_schema_list(),
-                tool_registry=self.tool_registry,
-                max_rounds=rounds,
+            runtime_result = await self.runtime.run(
+                self._build_run_request(
+                    post,
+                    context,
+                    capabilities=tuple(self.tool_registry.get_schema_list()),
+                    max_rounds=rounds,
+                )
             )
-        except llm_error_type as e:
+            response = runtime_result.text
+        except AgentRuntimeError as e:
             # LLM 调用失败 (网络/SDK异常) — 给用户友好提示 + log 留底
             log.error("%s [%s] LLM 调用失败: %s", trace.prefix(), tag, e, exc_info=True)
             response = "⚠️ LLM 服务暂时不可用，请稍后再试。"
-
-        # ---- 方案 D 兜底: agent_loop 触发了内部兜底 ("⚠️ 处理超时...") 时,
-        # 拿原始 context 重试一次无 tools 的 chat()。step-3.7-flash 在
-        # tools=[] 模式比 tools=[...] 模式出 text 概率高很多 (实测 0/5 空 vs 100% 空),
-        # 给用户最后一次拿到有意义回复的机会。
-        # 重试也失败就保留兜底文本 (不再返回 "(模型返回为空)" 等内部哨兵)。
-        if response.startswith("⚠️ 处理超时"):
-            log.warning(
-                "%s [%s] agent_loop 触发了内部兜底, 尝试 chat() 重试一次...",
-                trace.prefix(),
-                tag,
-            )
-            try:
-                retry_resp = await llm_backend.chat(
-                    messages=context["messages"],
-                    system=context["system"],
-                )
-                if retry_resp and not retry_resp.startswith("(模型返回为空)"):
-                    log.info(
-                        "%s [%s] chat() 重试成功, 拿到 %d 字符",
-                        trace.prefix(),
-                        tag,
-                        len(retry_resp),
-                    )
-                    response = retry_resp
-            except (LLMError, SDKLLMError) as e:
-                log.warning("%s [%s] chat() 重试也失败: %s", trace.prefix(), tag, e)
 
         elapsed = time.monotonic() - t0
         log.info(
