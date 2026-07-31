@@ -6,6 +6,9 @@ prompts.yml 是 LLM 提示词和 Bot 行为配置的单一入口:
   - 其他结构节点: Bot 行为配置,PromptManager.get_section() 读取
 """
 
+import os
+from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
 
 import yaml
@@ -14,20 +17,34 @@ from .logger import get_logger
 
 log = get_logger(__name__)
 
+_REPOSITORY_PROMPTS = Path(__file__).resolve().parents[2] / "prompts.yml"
+
+
+def _default_prompt_path() -> Path | Traversable:
+    """Resolve an explicit override, installed package resource, or source file."""
+    override = os.getenv("PROMPTS_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+
+    packaged = resources.files("mmag").joinpath("prompts.yml")
+    if packaged.is_file():
+        return packaged
+    return _REPOSITORY_PROMPTS
+
 
 class PromptManager:
     """从 prompts.yml 加载和渲染配置"""
 
-    def __init__(self, path: Path | None = None):
-        self.path = path or (Path(__file__).resolve().parents[2] / "prompts.yml")
+    def __init__(self, path: Path | Traversable | None = None):
+        self.path = path or _default_prompt_path()
         self._raw: dict = {}
         self._load()
 
     def _load(self):
-        if not self.path.exists():
+        if not self.path.is_file():
             log.warning("提示词文件不存在: %s，使用内置默认值", self.path)
             return
-        with open(self.path, encoding="utf-8") as f:
+        with self.path.open(encoding="utf-8") as f:
             self._raw = yaml.safe_load(f) or {}
         log.info("已加载 %d 个 prompts.yml 节点", len(self._raw))
 

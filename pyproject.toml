@@ -29,6 +29,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/mmag"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"prompts.yml" = "mmag/prompts.yml"
+
 # ---- uv 依赖分组 ----
 
 [dependency-groups]
