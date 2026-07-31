@@ -13,12 +13,12 @@ from mmag.runtimes import (
     LegacyRuntimeAdapter,
     RunContext,
     RunRequest,
-    RuntimeInternal,
-    RuntimeRateLimited,
-    RuntimeRejected,
+    RuntimeInternalError,
+    RuntimeRateLimitError,
+    RuntimeRejectedError,
     RuntimeStatus,
-    RuntimeTimeout,
-    RuntimeUnavailable,
+    RuntimeTimeoutError,
+    RuntimeUnavailableError,
     TokenUsage,
     translate_runtime_error,
 )
@@ -74,11 +74,11 @@ def test_agent_result_has_structured_defaults():
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
-        (TimeoutError("deadline"), RuntimeTimeout),
-        (RuntimeError("rate limit exceeded"), RuntimeRateLimited),
-        (RuntimeError("content policy rejected"), RuntimeRejected),
-        (ConnectionError("connection lost"), RuntimeUnavailable),
-        (RuntimeError("unexpected"), RuntimeInternal),
+        (TimeoutError("deadline"), RuntimeTimeoutError),
+        (RuntimeError("rate limit exceeded"), RuntimeRateLimitError),
+        (RuntimeError("content policy rejected"), RuntimeRejectedError),
+        (ConnectionError("connection lost"), RuntimeUnavailableError),
+        (RuntimeError("unexpected"), RuntimeInternalError),
     ],
 )
 def test_runtime_errors_are_classified(error, expected):
@@ -137,7 +137,7 @@ async def test_adapters_translate_backend_errors(adapter_type, backend_error):
     error.__cause__ = TimeoutError("deadline exceeded")
     backend.agent_loop.side_effect = error
 
-    with pytest.raises(RuntimeTimeout) as raised:
+    with pytest.raises(RuntimeTimeoutError) as raised:
         await adapter.run(_request())
 
     assert raised.value.runtime in {"langgraph", "claude-sdk"}
@@ -156,7 +156,7 @@ async def test_expired_deadline_fails_before_calling_backend():
         deadline=datetime.now(UTC) - timedelta(seconds=1),
     )
 
-    with pytest.raises(RuntimeTimeout):
+    with pytest.raises(RuntimeTimeoutError):
         await adapter.run(_request(context=expired))
 
     backend.agent_loop.assert_not_awaited()
