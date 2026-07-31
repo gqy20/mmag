@@ -32,6 +32,7 @@
 - Claude SDK 持久 MCP transport 通过查询串行化桥接请求上下文，避免并发请求的文件意图、频道和线程串线
 - 外部 MCP discovery 统一转换为 `CapabilitySpec`，SDK/Legacy 共享 schema、来源、授权和错误结果
 - SDK 权限白名单由实际绑定能力动态生成，删除硬编码 `sdk_crawl_tools.py` 及 `crawl-mcp` 重依赖
+- 八个内置能力改由单一有序 Catalog 生成，SDK/Legacy 不再分别维护装配清单，`send_file` 两端可见
 
 ## 0.1.0 (2026-06-11) — 初始发布
 

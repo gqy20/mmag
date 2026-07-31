@@ -28,7 +28,7 @@
 - [x] 将默认 Prompt 打入 wheel，并在隔离目录验证包、CLI 模块和 Prompt 加载；
 - [x] 重复 posted 事件在 Runtime 前按持久化 post ID 去重；
 - [x] Mattermost 回复使用 `pending_post_id` 对网络错误、超时、429/5xx 做有界幂等重试；
-- [x] 默认离线测试基线达到 `242 passed, 2 deselected`，实际分支覆盖率 `55.18%`；
+- [x] 默认离线测试基线达到 `243 passed, 2 deselected`，实际分支覆盖率 `55.45%`；
 - [x] 建立不可变 Runtime 输入/输出、统一错误模型和 SDK/Legacy Adapter；
 - [x] `Agent` 与 `MemoryCompactor` 已只依赖 `AgentRuntime` Port；
 - [x] 建立 Capability 核心契约，八个内置能力均已迁移到单一 Spec；
@@ -151,7 +151,7 @@ Managed Agent 与 Router
 
 不先设计覆盖所有未来 Agent 的万能抽象。首个切片只需要证明“一份 schema + 一份 handler + 多 Runtime binding”成立，再根据第二、第三个能力暴露出的差异扩展协议。
 
-当前八个内置能力都由单一 Spec 驱动 JSON Schema、SDK 类型映射和 handler。统一执行器负责参数校验、deadline、来源和稳定错误码；`CapabilityAuthorizer` 已能在副作用前返回允许、拒绝或待审批。默认策略只拒绝未声明权限的写能力，按用户/作用域授权仍需在企业 Context 阶段接入。
+当前八个内置能力由同一个有序 Catalog 创建，再派生 SDK/Legacy binding；每项能力只有一个 Spec、JSON Schema 和 handler。统一执行器负责参数校验、deadline、来源和稳定错误码；`CapabilityAuthorizer` 已能在副作用前返回允许、拒绝或待审批。默认策略只拒绝未声明权限的写能力，按用户/作用域授权仍需在企业 Context 阶段接入。
 
 `send_file` 也已成为声明 `mattermost:file:write` 的 Capability。普通异步链路用 `ContextVar` 绑定不可变 `CapabilityContext`；Claude SDK 的持久 MCP reader 无法继承后续 task context，因此 SDK 查询通过实例级锁串行执行，并在查询生命周期内桥接、清理同一份上下文。该设计消除了跨频道覆盖 `current_post` 的竞态，但不等于 Step 4 的跨会话并行调度已经完成。
 

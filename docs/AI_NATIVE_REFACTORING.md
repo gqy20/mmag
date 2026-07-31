@@ -19,7 +19,7 @@
 - 已建立版本化 SQLite migration，覆盖新库初始化、旧字段补齐、旧消息/FTS 迁移、幂等、失败回滚和未来版本拒绝；
 - `Memory` 不再负责建表和历史 schema 升级；业务消息与 FTS 写入也具备失败回滚；
 - Secret 日志、文件路径和 MCP 工具已经改为显式安全边界；
-- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `242 passed, 2 deselected`、55.18% 分支覆盖率、37 个源码文件 mypy 零错误；
+- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `243 passed, 2 deselected`、55.45% 分支覆盖率、38 个源码文件 mypy 零错误；
 - `uv.lock` 已提交，默认 Prompt 已作为 wheel 资源发布并通过隔离 smoke test。
 - 重复 posted 事件已在执行前去重，Mattermost 回复已具备带 `pending_post_id` 的安全有界重试。
 
@@ -629,6 +629,7 @@ infrastructure/adapters → application → domain
 - [x] MemoryCompactor 通过 Runtime Port 调用模型；
 - [x] 选定默认 Runtime，另一套仅作为启动回退；
 - [x] 删除共享内置工具的重复实现。
+- [x] 八个内置能力由同一有序 Catalog 生成，两个 Runtime 可见性一致。
 - [x] 将 `send_file` 纳入写能力策略，并消除全局当前消息槽。
 - [x] 删除 SDK crawl 旁路，外部 MCP 在两个 Runtime 中共享白名单和授权结果。
 
@@ -839,6 +840,7 @@ infrastructure/adapters → application → domain
 - [x] 从同一 Capability 生成 ToolRegistry/SDK binding，并将 MCP discovery 纳入同一 Catalog/Policy；
 - [x] 统一共享内置能力的来源信息、超时和错误字段；
 - [x] 逐个迁移共享内置工具，删除重复实现。
+- [x] 建立单一有序内置 Catalog，SDK/Legacy 不再维护各自的装配清单；
 - [x] 将文件发送迁移为受授权的写 Capability，并建立请求上下文隔离；
 - [x] 删除 SDK crawl 重复工厂和 formatter，权限回调只放行实际可见能力；
 
