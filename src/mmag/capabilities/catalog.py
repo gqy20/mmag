@@ -297,6 +297,46 @@ def create_search_messages_capability(memory) -> CapabilitySpec:
     )
 
 
+def create_save_knowledge_capability(memory) -> CapabilitySpec:
+    """Create the canonical governed knowledge-write capability."""
+
+    async def save_knowledge(channel_id: str, key: str, value: str) -> dict:
+        await asyncio.to_thread(memory.add_knowledge, channel_id, key, value)
+        return {"status": "ok", "key": key, "message": f"已记住: {key}"}
+
+    return CapabilitySpec(
+        name="save_knowledge",
+        description=(
+            "向团队知识库中存储一条知识。"
+            "用于记住从对话中学到的重要事实、决策或结论。"
+            "不要存储琐碎信息，只存有长期价值的内容。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "channel_id": {
+                    "type": "string",
+                    "description": "频道 ID（知识关联到哪个频道）",
+                },
+                "key": {
+                    "type": "string",
+                    "description": "知识的关键词/标题（如 '部署流程'）",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "知识的详细内容",
+                },
+            },
+            "required": ["channel_id", "key", "value"],
+        },
+        handler=save_knowledge,
+        effect=CapabilityEffect.WRITE,
+        permission="memory:knowledge:write",
+        timeout_seconds=10,
+        source_policy=SourcePolicy.NONE,
+    )
+
+
 def _get_posts_cached(mm_client, memory, channel_id: str, limit: int) -> list[dict]:
     """Read local messages first, falling back to Mattermost when sparse."""
     cached = memory.get_recent_messages(channel_id, limit=limit)

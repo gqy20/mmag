@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -33,8 +33,18 @@ class CapabilityStatus(StrEnum):
 
     SUCCESS = "success"
     INVALID_INPUT = "invalid_input"
+    FORBIDDEN = "forbidden"
+    APPROVAL_REQUIRED = "approval_required"
     TIMEOUT = "timeout"
     ERROR = "error"
+
+
+class AuthorizationDecision(StrEnum):
+    """Deterministic authorization outcomes before side effects begin."""
+
+    ALLOW = "allow"
+    DENY = "deny"
+    REQUIRE_APPROVAL = "require_approval"
 
 
 def _freeze(value: Any) -> Any:
@@ -84,8 +94,57 @@ class CapabilityResult:
         }
 
 
+@dataclass(frozen=True)
+class CapabilityAuthorization:
+    """Policy decision returned before a capability handler runs."""
+
+    decision: AuthorizationDecision
+    reason: str = ""
+
+    @classmethod
+    def allow(cls) -> CapabilityAuthorization:
+        return cls(AuthorizationDecision.ALLOW)
+
+    @classmethod
+    def deny(cls, reason: str) -> CapabilityAuthorization:
+        return cls(AuthorizationDecision.DENY, reason)
+
+    @classmethod
+    def require_approval(cls, reason: str) -> CapabilityAuthorization:
+        return cls(AuthorizationDecision.REQUIRE_APPROVAL, reason)
+
+
+class CapabilityAuthorizer(Protocol):
+    """Policy port evaluated before any capability side effect."""
+
+    def authorize(
+        self,
+        spec: CapabilitySpec,
+        arguments: Mapping[str, Any],
+    ) -> CapabilityAuthorization: ...
+
+
+class DeclaredPermissionAuthorizer:
+    """Compatibility policy: write capabilities must declare a permission."""
+
+    def authorize(
+        self,
+        spec: CapabilitySpec,
+        arguments: Mapping[str, Any],
+    ) -> CapabilityAuthorization:
+        del arguments
+        if spec.effect is CapabilityEffect.WRITE and not spec.permission:
+            return CapabilityAuthorization.deny(
+                f"Write capability '{spec.name}' has no declared permission"
+            )
+        return CapabilityAuthorization.allow()
+
+
 class CapabilityExecutor:
     """Validate and execute a capability with one timeout/error policy."""
+
+    def __init__(self, authorizer: CapabilityAuthorizer | None = None) -> None:
+        self.authorizer = authorizer or DeclaredPermissionAuthorizer()
 
     async def execute(self, spec: CapabilitySpec, arguments: Mapping[str, Any]) -> CapabilityResult:
         started_at = time.monotonic()
@@ -98,6 +157,21 @@ class CapabilityExecutor:
             )
 
         try:
+            authorization = self.authorizer.authorize(spec, arguments)
+            if authorization.decision is AuthorizationDecision.DENY:
+                return self._result(
+                    started_at,
+                    CapabilityStatus.FORBIDDEN,
+                    message=authorization.reason or f"Capability '{spec.name}' is forbidden",
+                )
+            if authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL:
+                return self._result(
+                    started_at,
+                    CapabilityStatus.APPROVAL_REQUIRED,
+                    message=(
+                        authorization.reason or f"Capability '{spec.name}' requires approval"
+                    ),
+                )
             async with asyncio.timeout(spec.timeout_seconds):
                 value = spec.handler(**dict(arguments))
                 if inspect.isawaitable(value):

@@ -19,6 +19,7 @@ from .capabilities.catalog import (
     create_get_channel_info_capability,
     create_get_posts_capability,
     create_get_user_profile_capability,
+    create_save_knowledge_capability,
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
@@ -103,22 +104,7 @@ def _make_sdk_get_channel_info(mm_client):
 
 
 def _make_sdk_save_knowledge(memory):
-    @tool(
-        "save_knowledge",
-        (
-            "向团队知识库中存储一条知识。"
-            "用于记住从对话中学到的重要事实、决策或结论。"
-            "不要存储琐碎信息，只存有长期价值的内容。"
-        ),
-        {"channel_id": str, "key": str, "value": str},
-    )
-    async def sdk_save_knowledge(args):
-        result = await asyncio.to_thread(
-            _save_knowledge, memory, args["channel_id"], args["key"], args["value"]
-        )
-        return _sdk_tool_return(result)
-
-    return sdk_save_knowledge
+    return bind_sdk_capability(create_save_knowledge_capability(memory))
 
 
 def _make_sdk_get_user_profile(mm_client, memory):
@@ -218,9 +204,3 @@ def _sdk_tool_return(result_data: Any) -> dict:
             }
         ]
     }
-
-
-def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:
-    """保存知识并返回确认"""
-    memory.add_knowledge(channel_id, key, value)
-    return {"status": "ok", "key": key, "message": f"已记住: {key}"}

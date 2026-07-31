@@ -1,11 +1,15 @@
 """Canonical capability contracts, catalog, and runtime bindings."""
 
 from .base import (
+    AuthorizationDecision,
+    CapabilityAuthorization,
+    CapabilityAuthorizer,
     CapabilityEffect,
     CapabilityExecutor,
     CapabilityResult,
     CapabilitySpec,
     CapabilityStatus,
+    DeclaredPermissionAuthorizer,
     SourcePolicy,
 )
 from .bindings import bind_legacy_capability, bind_sdk_capability
@@ -13,17 +17,22 @@ from .catalog import (
     create_get_channel_info_capability,
     create_get_posts_capability,
     create_get_user_profile_capability,
+    create_save_knowledge_capability,
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
 from .link import create_analyze_link_capability
 
 __all__ = [
+    "AuthorizationDecision",
+    "CapabilityAuthorization",
+    "CapabilityAuthorizer",
     "CapabilityEffect",
     "CapabilityExecutor",
     "CapabilityResult",
     "CapabilitySpec",
     "CapabilityStatus",
+    "DeclaredPermissionAuthorizer",
     "SourcePolicy",
     "bind_legacy_capability",
     "bind_sdk_capability",
@@ -33,4 +42,5 @@ __all__ = [
     "create_get_user_profile_capability",
     "create_search_knowledge_capability",
     "create_search_messages_capability",
+    "create_save_knowledge_capability",
 ]

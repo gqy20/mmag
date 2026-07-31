@@ -16,9 +16,9 @@ from mmag.capabilities import (
     create_get_channel_info_capability,
     create_get_posts_capability,
     create_get_user_profile_capability,
+    create_save_knowledge_capability,
     create_search_knowledge_capability,
     create_search_messages_capability,
-    create_save_knowledge_capability,
 )
 
 
