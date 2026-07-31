@@ -18,6 +18,7 @@ from .capabilities.bindings import bind_sdk_capability
 from .capabilities.catalog import (
     create_get_channel_info_capability,
     create_get_posts_capability,
+    create_get_user_profile_capability,
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
@@ -120,18 +121,7 @@ def _make_sdk_save_knowledge(memory):
 
 
 def _make_sdk_get_user_profile(mm_client, memory):
-    @tool(
-        "get_user_profile",
-        "查看用户的画像信息，包括活跃度、专业领域、偏好等。用于了解团队成员的背景和特点。",
-        {"user_id": str},
-    )
-    async def sdk_get_user_profile(args):
-        profile = await asyncio.to_thread(memory.get_user_profile_decoded, args["user_id"])
-        username = await asyncio.to_thread(mm_client.get_username, args["user_id"])
-        formatted = await asyncio.to_thread(_format_profile, profile, username)
-        return _sdk_tool_return(formatted)
-
-    return sdk_get_user_profile
+    return bind_sdk_capability(create_get_user_profile_capability(mm_client, memory))
 
 
 def _make_sdk_analyze_link(memory):
@@ -299,28 +289,6 @@ def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:
     """保存知识并返回确认"""
     memory.add_knowledge(channel_id, key, value)
     return {"status": "ok", "key": key, "message": f"已记住: {key}"}
-
-
-def _format_profile(profile: dict, username: str) -> dict:
-    """格式化用户画像"""
-    if not profile:
-        return {"username": username, "note": "暂无画像信息，该用户尚未发言或画像未建立"}
-
-    active_hours_raw = profile.get("active_hours") or {}
-    top_hours = sorted(active_hours_raw.items(), key=lambda x: x[1], reverse=True)[:3]
-    peak_hours = [f"{h}({c}次)" for h, c in top_hours] if top_hours else []
-
-    topics = profile.get("topics") or []
-
-    return {
-        "username": username,
-        "message_count": profile.get("message_count", 0),
-        "topics": topics[-10:] if topics else [],
-        "active_hours": peak_hours,
-        "style": profile.get("style", "未知"),
-        "first_seen": profile.get("first_seen", ""),
-        "last_interaction": profile.get("last_interaction", ""),
-    }
 
 
 def _format_link_info(info: dict) -> dict:

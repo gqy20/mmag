@@ -16,6 +16,7 @@ from ..capabilities.bindings import bind_legacy_capability
 from ..capabilities.catalog import (
     create_get_channel_info_capability,
     create_get_posts_capability,
+    create_get_user_profile_capability,
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
@@ -100,26 +101,7 @@ def _make_save_knowledge_tool(memory) -> Tool:
 
 
 def _make_get_user_profile_tool(mm_client, memory) -> Tool:
-    return Tool(
-        name="get_user_profile",
-        description=(
-            "查看用户的画像信息，包括活跃度、专业领域、偏好等。用于了解团队成员的背景和特点。"
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "user_id": {
-                    "type": "string",
-                    "description": "用户 ID",
-                },
-            },
-            "required": ["user_id"],
-        },
-        handler=lambda user_id: _format_profile(
-            memory.get_user_profile_decoded(user_id),
-            mm_client.get_username(user_id),
-        ),
-    )
+    return bind_legacy_capability(create_get_user_profile_capability(mm_client, memory))
 
 
 def _make_analyze_link_tool(memory) -> Tool:
@@ -173,33 +155,6 @@ def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:
     """保存知识并返回确认"""
     memory.add_knowledge(channel_id, key, value)
     return {"status": "ok", "key": key, "message": f"已记住: {key}"}
-
-
-def _format_profile(profile: dict, username: str) -> dict:
-    """格式化用户画像（含自动推断的话题/时段/风格）
-
-    依赖调用方传入已解析的 profile（topics=list, active_hours=dict），
-    通常来自 Memory.get_user_profile_decoded()。
-    """
-    if not profile:
-        return {"username": username, "note": "暂无画像信息，该用户尚未发言或画像未建立"}
-
-    # 取最活跃的 Top 3 时段
-    active_hours_raw = profile.get("active_hours") or {}
-    top_hours = sorted(active_hours_raw.items(), key=lambda x: x[1], reverse=True)[:3]
-    peak_hours = [f"{h}({c}次)" for h, c in top_hours] if top_hours else []
-
-    topics = profile.get("topics") or []
-
-    return {
-        "username": username,
-        "message_count": profile.get("message_count", 0),
-        "topics": topics[-10:] if topics else [],  # 最近话题
-        "active_hours": peak_hours,
-        "style": profile.get("style", "未知"),
-        "first_seen": profile.get("first_seen", ""),
-        "last_interaction": profile.get("last_interaction", ""),
-    }
 
 
 def _format_link_info(info: dict) -> dict:

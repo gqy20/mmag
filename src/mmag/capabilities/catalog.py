@@ -103,6 +103,53 @@ def create_get_posts_capability(mm_client, memory) -> CapabilitySpec:
     )
 
 
+def create_get_user_profile_capability(mm_client, memory) -> CapabilitySpec:
+    """Create the canonical combined user-profile capability."""
+
+    async def get_user_profile(user_id: str) -> dict:
+        profile, username = await asyncio.gather(
+            asyncio.to_thread(memory.get_user_profile_decoded, user_id),
+            asyncio.to_thread(mm_client.get_username, user_id),
+        )
+        if not profile:
+            return {"username": username, "note": "暂无画像信息，该用户尚未发言或画像未建立"}
+
+        active_hours = profile.get("active_hours") or {}
+        top_hours = sorted(active_hours.items(), key=lambda item: item[1], reverse=True)[:3]
+        topics = profile.get("topics") or []
+        return {
+            "username": username,
+            "message_count": profile.get("message_count", 0),
+            "topics": topics[-10:] if topics else [],
+            "active_hours": [f"{hour}({count}次)" for hour, count in top_hours],
+            "style": profile.get("style", "未知"),
+            "first_seen": profile.get("first_seen", ""),
+            "last_interaction": profile.get("last_interaction", ""),
+        }
+
+    return CapabilitySpec(
+        name="get_user_profile",
+        description=(
+            "查看用户的画像信息，包括活跃度、专业领域、偏好等。用于了解团队成员的背景和特点。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "用户 ID",
+                },
+            },
+            "required": ["user_id"],
+        },
+        handler=get_user_profile,
+        effect=CapabilityEffect.READ,
+        permission="memory:user_profile:read",
+        timeout_seconds=10,
+        source_policy=SourcePolicy.NONE,
+    )
+
+
 def create_search_knowledge_capability(memory) -> CapabilitySpec:
     """Create the canonical team-knowledge search capability."""
 
