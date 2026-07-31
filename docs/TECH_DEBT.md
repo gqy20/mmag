@@ -9,9 +9,8 @@
 > 触发条件: 网络抖动 / Token 过期 / LLM 限流时可能导致消息丢失、Agent 失能、用户体验下降
 
 ### 1. MMClient 读取与文件调用仍无统一重试
-- 已完成：`send_post` 使用 Mattermost `pending_post_id`，对连接错误、超时、429/5xx 做最多 3 次指数退避，避免重试产生重复回复
-- 剩余：`_get` / `get_posts_page` / 文件上传下载仍没有统一 timeout/retry policy；读取失败可能造成消息或附件缺失
-- 方案参考: 在异步 Client 迁移时按读写语义建立统一 retry policy，写请求必须先具备幂等键
+- 已完成：消息投递和附件下载进入共享 httpx 异步连接池，统一 timeout、429/5xx 与传输错误重试；创建消息继续使用稳定 `pending_post_id`
+- 剩余：启动 backfill 和部分兼容 Capability 仍通过同步 Client 在线程池执行，后续可在不影响主事件循环的前提下逐步删除兼容接口
 
 ### 2. WebSocket 重连无次数上限,401 无告警
 - 位置: `src/mmag/ws_client.py:43-48, 90-111`
@@ -70,7 +69,7 @@
   3. 用户画像 (`update_profile_from_message` / `_extract_topic_keywords` / `_infer_style` / `_initial_style`)
   4. 团队知识 (`add_knowledge` / `get_relevant_knowledge`)
   5. 摘要 (`save_conversation_segment` / `get_recent_summary`)
-- 方案参考: 拆为 `repositories/message_log.py` / `url_cache.py` / `user_profile.py` / `team_knowledge.py` / `summary.py`
+- 已完成：建立 Message/Profile/Knowledge/Summary/URL Cache Repository，`Memory` 保留旧调用方兼容 Facade；后续新增查询不得继续进入 `Memory`
 
 ### 8. url_analyzer.py — 混合 transport / business / cache
 - 位置: `src/mmag/url_analyzer.py` (725 行)
@@ -184,9 +183,8 @@
 - `memory.py:488, 559-560, 595, 677, 1000` 多处函数内 import
 
 ### 22. SQLite 并发与事务保护
-- `src/mmag/infrastructure/sqlite/database.py` 仍使用 `check_same_thread=False` 的共享连接，尚无请求级锁/单写者策略
-- 跨线程并发可能 corrupt (虽然 Agent 当前是单线程,加并发 worker 后会触发)
-- Schema migration 和 `log_message` 已具备原子事务和失败回滚；其他业务写入仍有多步事务不完整问题（如 `add_knowledge` 主表/FTS 一致性）
+- 已完成：控制面使用单写锁、`BEGIN IMMEDIATE`、WAL、busy timeout 和原子 Inbox→Outbox 事务
+- 剩余：旧 `Memory` 兼容写接口仍共享一个 connection；新增并发写必须进入 Control Plane/Repository，不再扩展该连接
 
 ### 23. 摘要计数不清零 / 无重试退避
 - `src/mmag/memory_compactor.py:71-81` `maybe_compact` 用 `_msg_counter` 字典,失败时不清零,LLM 限流时可能连续触发

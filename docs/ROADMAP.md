@@ -4,7 +4,7 @@
 >
 > 更新时间：2026-07-31
 >
-> 当前阶段：Step 4 入口、执行与投递解耦
+> 当前阶段：Step 4–7 平台控制面基线完成，进入生产验证与增量演进
 >
 > 架构依据：[`AI_NATIVE_REFACTORING.md`](./AI_NATIVE_REFACTORING.md)
 
@@ -28,7 +28,7 @@
 - [x] 将默认 Prompt 打入 wheel，并在隔离目录验证包、CLI 模块和 Prompt 加载；
 - [x] 重复 posted 事件在 Runtime 前按持久化 post ID 去重；
 - [x] Mattermost 回复使用 `pending_post_id` 对网络错误、超时、429/5xx 做有界幂等重试；
-- [x] 默认离线测试基线达到 `243 passed, 2 deselected`，实际分支覆盖率 `55.45%`；
+- [x] 默认离线测试基线达到 `255 passed, 2 deselected`，实际分支覆盖率 `59.15%`；
 - [x] 建立不可变 Runtime 输入/输出、统一错误模型和 SDK/Legacy Adapter；
 - [x] `Agent` 与 `MemoryCompactor` 已只依赖 `AgentRuntime` Port；
 - [x] 建立 Capability 核心契约，八个内置能力均已迁移到单一 Spec；
@@ -37,7 +37,8 @@
 
 下一阶段尚未完成：
 
-- [ ] WebSocket 入口与长任务执行解耦。
+- [x] WebSocket 入口、长任务执行和结果投递已解耦；
+- [x] 企业 Context、持久生命周期、Managed Agent 和治理基线已建立。
 
 ## 2. 实施原则
 
@@ -183,44 +184,70 @@ Managed Agent 与 Router
 
 ### 工作项
 
-- [ ] 定义平台无关的 `InboundEvent`；
-- [ ] 建立 Inbox 幂等记录；
-- [ ] 按 `conversation_id` 分区调度：同会话串行、跨会话并发；
-- [ ] 将附件处理、摘要和长任务移出 WebSocket 读取循环；
-- [ ] 建立 Outbox 与独立 Delivery；
-- [ ] 增加背压、取消、deadline 和优雅关闭；
+- [x] 定义平台无关的 `InboundEvent`；
+- [x] 建立 Inbox 幂等记录；
+- [x] 按 `conversation_id` 分区调度：同会话串行、跨会话并发；
+- [x] 将附件处理、摘要和长任务移出 WebSocket 读取循环；
+- [x] 建立 Outbox 与独立 Delivery；
+- [x] 增加背压、取消、deadline 和优雅关闭；
 - [x] 删除全局 `current_post`，先用不可变 `CapabilityContext` 贯穿能力调用；
-- [ ] Mattermost REST 迁移到带 timeout/retry 的异步 Client。
+- [x] Mattermost 事件路径迁移到带 timeout/retry 和连接池的异步 Client。
 
 ### 退出标准
 
-- [ ] 慢 LLM 不阻塞其他频道；
-- [ ] 同一会话顺序稳定，重复事件不重复回复；
-- [ ] 投递失败只重试 Delivery，不重复执行 Agent；
-- [ ] 并发测试不存在上下文、附件和 trace 串线；
-- [ ] 关闭进程时不丢失已接受但尚未投递的任务。
+- [x] 慢 LLM 不阻塞其他频道；
+- [x] 同一会话顺序稳定，重复事件不重复回复；
+- [x] 投递失败只重试 Delivery，不重复执行 Agent；
+- [x] 并发测试不存在上下文、附件和 trace 串线；
+- [x] 关闭进程时不丢失已接受但尚未投递的任务。
 
 ## 8. Step 5：企业 Context 与持久任务状态
 
 ### 目标
 
-将“频道消息记忆”升级为有作用域、有来源、可追踪的企业上下文。
+将“频道消息记忆”升级为有作用域、有来源、可追踪的企业上下文，并建立一套两个 Runtime 共用的持久生命周期。
 
-### 工作项
+### Step 5.1：统一生命周期与状态机
 
-- [ ] 拆分 Message、Profile、Knowledge、Summary 和 URL Cache Repository；
-- [ ] 建立最小 `Scope`、`Task`、`TaskStep`、`AgentRun`、`Artifact` 和 `Delivery` 模型；
-- [ ] 增加 Organization、Project、Customer、Document 和 Decision 的最小映射；
-- [ ] 实现 Scope Resolver 与 Context Assembler；
-- [ ] 明确 SQLite 单写者/连接池、事务和备份策略；
-- [ ] 所有数据模型变化继续通过版本化 migration 发布。
+统一的是状态转换协议、持久化、幂等和审计规则，不是把所有对象塞进一个巨型状态机。`Task/AgentRun`、`CapabilityCall`、`ApprovalRequest` 和 `Delivery` 各自拥有状态集和转换矩阵，但只能通过同一 `LifecycleService` 发生转换。
 
-### 退出标准
+工作项：
 
-- [ ] 上下文可按组织、项目、会话安全检索；
-- [ ] 每次 Run、Capability Call、Artifact 和 Delivery 可以关联追踪；
-- [ ] Context Assembler 不依赖 Mattermost 原始事件结构；
-- [ ] `Memory` 不再聚合全部 Repository 职责。
+- [x] 定义五类实体状态、初始态、终态和合法转换；
+- [x] 定义通用 `StateTransition`；
+- [x] 建立 `LifecycleService`，集中处理转换守卫、幂等、乐观版本和终态保护；
+- [x] 通过 migration 持久化当前状态、版本和 append-only 转换历史；
+- [x] 定义 Runtime 结果到 `AgentRunState` 的统一映射；
+- [x] 为 `WAITING_APPROVAL` 保存 Capability 参数快照和恢复令牌；
+- [x] 建立重启恢复与 reconciliation；
+- [x] 增加状态转换、并发竞争、重复事件、非法转换和重启恢复契约测试。
+
+退出标准：
+
+- [x] 生命周期状态通过 `LifecycleService` 改变；
+- [x] 非法转换被确定性拒绝，重复命令不会重复执行副作用；
+- [x] 进程重启后可识别并恢复未完成运行、待审批请求和待投递结果；
+- [x] SDK 与 LangGraph 对外呈现相同的任务生命周期；
+- [x] Agent 执行状态与 Delivery 状态彼此独立。
+
+### Step 5.2：企业 Context 与持久模型
+
+#### 工作项
+
+- [x] 拆分 Message、Profile、Knowledge、Summary 和 URL Cache Repository；
+- [x] 建立最小持久任务、审批、产物、投递和审计模型；
+- [x] 增加 Organization、Project、Customer、Document 和 Decision 的通用映射；
+- [x] 实现 Scope Resolver 与 Context Assembler；
+- [x] 明确 SQLite 单写者、WAL、事务和备份策略；
+- [x] 所有数据模型变化通过 v004 migration 发布。
+
+#### 退出标准
+
+- [x] 上下文可按组织、项目、会话安全检索；
+- [x] Run、Capability Call、Artifact 和 Delivery 可以关联追踪；
+- [x] 任务和运行状态可持久恢复，转换有版本和审计记录；
+- [x] Context Assembler 不依赖 Mattermost 原始事件结构；
+- [x] `Memory` 已成为兼容 Facade，读取职责由专用 Repository 承担。
 
 ## 9. Step 6：Managed Agent 与 Router
 
@@ -230,22 +257,22 @@ Managed Agent 与 Router
 
 ### 工作项
 
-- [ ] 定义 `AgentSpec`、`ManagedAgent` 和 `AgentRegistry`；
-- [ ] 建立基于意图、权限、作用域、成本和健康度的 Router；
-- [ ] 将链接分析升级为第一个 Link Agent；
-- [ ] 支持结构化 Artifact 和 Agent handoff；
-- [ ] 验证稳定后再加入 Research Agent、Project Assistant 和 Presentation Agent。
+- [x] 定义 `AgentSpec`、`ManagedAgent` 和 `AgentRegistry`；
+- [x] 建立基于意图、权限、作用域、成本和健康度的 Router；
+- [x] 将链接分析升级为第一个 Link Agent；
+- [x] 支持结构化 Artifact 和 Agent handoff；
+- [x] 注册 Research Agent、Project Assistant 和 Presentation Agent。
 
 ### 退出标准
 
-- [ ] 新 Agent 可通过注册接入，无需修改协同中枢；
-- [ ] Agent 的能力、权限、预算和输出均可检查；
-- [ ] 多 Agent 任务有明确步骤和状态；
-- [ ] 单个 Agent 失败不会破坏整个会话处理。
+- [x] 新 Agent 可通过注册接入，无需修改协同中枢；
+- [x] Agent 的能力、权限、预算和输出均可检查；
+- [x] 多 Agent 任务有明确步骤和状态；
+- [x] 单个 Agent 失败不会破坏整个会话处理。
 
 ## 10. Step 7：治理与私有化生产能力
 
-在上述控制面稳定后，再推进 Policy Engine、审批、脱敏、Secret Provider、Model Gateway、成本配额、审计、metrics/tracing、数据保留、备份恢复、压测和私有化部署拓扑。
+已建立 Policy Engine、持久审批、脱敏、Secret Provider、Model Gateway、成本配额、审计、metrics、任务级 tracing、数据清理、SQLite 在线备份和私有化部署基线。目标环境的告警后端、容量数值和灾备演练仍属于部署验收，见 [`OPERATIONS.md`](./OPERATIONS.md)。
 
 这一阶段的完成标准不是“功能齐全”，而是权限可解释、运行可追踪、数据可治理、故障可恢复。
 

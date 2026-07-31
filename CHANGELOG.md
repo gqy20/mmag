@@ -4,6 +4,13 @@
 
 **工程能力**
 
+- 引入持久 Inbox/Outbox、按会话分区的并发调度和独立 Delivery worker；慢任务不再阻塞 WebSocket，投递重试不重跑 Agent
+- 新增统一 LifecycleService、五类状态机、乐观版本、命令幂等、append-only 转换历史和重启 reconciliation
+- 新增企业 Scope/Context、审批快照与恢复令牌、Artifact/Audit 模型，以及 Message/Profile/Knowledge/Summary/URL Repository 边界
+- 新增 Managed Agent Registry/Router、Link Agent、Research/Project/Presentation Agent 和容错 handoff
+- 新增 Policy Engine、Secret Provider、敏感数据脱敏、Model Gateway、actor 成本配额、metrics 和 SQLite 在线备份工具
+- Mattermost 出站与附件进入带 timeout/retry 的共享异步连接池；trace context 改为任务级 ContextVar
+
 - 默认测试集合隔离 PoC 与真实外部服务测试，新增离线消息主链契约
 - 新增版本化 SQLite migration，支持旧库升级、失败回滚、历史校验和未来版本拒绝
 - 将 schema 初始化、旧 `message_cache` 迁移与 CJK FTS 预处理从 `Memory` 下沉到 SQLite infrastructure
@@ -11,7 +18,7 @@
 - 重整 AI Native 路线图，明确工程门禁、Runtime、Capability、执行解耦和企业 Context 的实施顺序与验收标准
 - 收紧安全边界：Secret 日志仅报告是否配置、文件路径使用真实目录边界、未知 SDK/外部 MCP 工具默认拒绝
 - `Memory.log_message` 的主表与 FTS 写入失败时完整回滚，避免后续提交半成品事务
-- 新增统一 `make verify` 门禁：Ruff、234 个默认离线测试、分支覆盖率、mypy 与 wheel smoke
+- 新增统一 `make verify` 门禁：Ruff、255 个默认离线测试、分支覆盖率、mypy 与 wheel smoke
 - 提交 `uv.lock` 并新增 GitHub Actions，CI 使用锁定依赖且不注入外部服务密钥
 - `prompts.yml` 作为 wheel 包资源发布，同时支持 `PROMPTS_PATH` 显式覆盖
 - 修复异步生成器工具被错误 `await`、二进制 WebSocket 消息和附件取消异常等类型检查发现的边界问题

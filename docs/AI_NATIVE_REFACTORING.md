@@ -19,7 +19,7 @@
 - 已建立版本化 SQLite migration，覆盖新库初始化、旧字段补齐、旧消息/FTS 迁移、幂等、失败回滚和未来版本拒绝；
 - `Memory` 不再负责建表和历史 schema 升级；业务消息与 FTS 写入也具备失败回滚；
 - Secret 日志、文件路径和 MCP 工具已经改为显式安全边界；
-- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `243 passed, 2 deselected`、55.45% 分支覆盖率、38 个源码文件 mypy 零错误；
+- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `255 passed, 2 deselected`、59.15% 分支覆盖率、52 个源码文件 mypy 零错误；
 - `uv.lock` 已提交，默认 Prompt 已作为 wheel 资源发布并通过隔离 smoke test。
 - 重复 posted 事件已在执行前去重，Mattermost 回复已具备带 `pending_post_id` 的安全有界重试。
 
@@ -413,7 +413,7 @@ class RunContext:
 
 `RunContext` 必须由入口和 Scope Resolver 构建，显式传给中枢、Agent、Capability 和审计服务。禁止继续使用全局单槽保存当前消息。
 
-### 7.2 任务状态
+### 7.2 统一生命周期与状态机
 
 ```text
 PENDING → QUEUED → RUNNING → SUCCEEDED
@@ -423,7 +423,18 @@ PENDING → QUEUED → RUNNING → SUCCEEDED
                    └── WAITING_APPROVAL
 ```
 
+该图表达 `Task/AgentRun` 的主生命周期，不代表所有实体共用一组状态。系统应建立统一的状态转换协议和 `LifecycleService`，再为下列实体定义独立状态机：
+
+- `Task/AgentRun`：排队、执行、待审批与终态；
+- `CapabilityCall`：计划、执行、待审批、拒绝与结果；
+- `ApprovalRequest`：待处理、已批准、已驳回、已过期与已取消；
+- `Delivery`：待投递、投递中、重试等待、已投递与终态失败。
+
 每次 Agent 执行对应一个 `AgentRun`，每个工具调用对应一个 `CapabilityCall`。回复是否成功投递由独立 `Delivery` 状态记录。
+
+所有转换必须通过同一生命周期端口执行：校验合法前置状态，使用幂等键与乐观版本防止重复副作用，原子更新当前状态并追加不可变转换历史。转换记录至少包含实体 ID、前后状态、版本、原因、actor/event、trace 和时间。
+
+Runtime 只返回后端中立结果，不拥有业务状态。SDK 与 LangGraph 的结果必须映射到同一 `AgentRunState`；挂起、审批、投递和恢复由 Runtime 之上的应用控制面管理。
 
 ### 7.3 上下文作用域
 
@@ -646,13 +657,13 @@ infrastructure/adapters → application → domain
 
 工作项：
 
-- 引入 `InboundEvent`、Inbox 和 Outbox；
-- 使用 `conversation_id` 分区：同会话串行、跨会话并发；
-- 将附件、摘要和长任务移出 WebSocket 读取循环；
-- 扩展不可变 `RunContext` 和 `ContextVar` 日志上下文；
+- [x] 引入 `InboundEvent`、Inbox 和 Outbox；
+- [x] 使用 `conversation_id` 分区：同会话串行、跨会话并发；
+- [x] 将附件、摘要和长任务移出 WebSocket 读取循环；
+- [x] 扩展不可变 `RunContext` 和 `ContextVar` 日志上下文；
 - [x] 删除全局 `current_post`，先建立请求级 `CapabilityContext`；
-- 增加幂等、背压、超时、取消和优雅关闭；
-- Mattermost REST 迁移为有 timeout/retry 的异步 Client。
+- [x] 增加幂等、背压、超时、取消和优雅关闭；
+- [x] Mattermost 事件路径迁移为有 timeout/retry 的异步 Client。
 
 退出标准：
 
@@ -667,15 +678,21 @@ infrastructure/adapters → application → domain
 
 工作项：
 
-- 拆分 Message、Profile、Knowledge、Summary Repository；
-- 新增 Organization、Project、Customer、Document、Decision；
-- 新增 Task、TaskStep、AgentRun、Artifact、Delivery、AuditEvent；
-- 建立 Scope Resolver 与 Context Assembler；
-- 上下文记录来源、权限、时间和置信度；
-- 为 SQLite 建立事务、连接和并发访问策略。
+- [x] 建立统一 `LifecycleService` 与实体级状态转换矩阵；
+- [x] 持久化当前状态、乐观版本和 append-only 转换历史；
+- [x] 建立 `WAITING_APPROVAL` 挂起/恢复语义与 `ApprovalRequest` 最小模型；
+- [x] 建立重启恢复与 reconciliation；
+- [x] 拆分 Message、Profile、Knowledge、Summary、URL Cache Repository；
+- [x] 新增企业实体、任务、运行、能力调用、审批、产物、投递和审计模型；
+- [x] 建立 Scope Resolver 与 Context Assembler；
+- [x] 上下文记录来源、时间和置信度；
+- [x] 为 SQLite 建立 WAL、事务和单写者策略。
 
 退出标准：
 
+- 所有生命周期转换经过同一端口，非法转换和重复命令被确定性拒绝；
+- 重启后可恢复未完成运行、待审批请求和待投递结果；
+- SDK 与 LangGraph 对外呈现相同的任务状态语义；
 - 可按组织/项目/会话安全检索上下文；
 - 每次 Agent 执行和产物均可追踪；
 - Context Assembler 不依赖 Mattermost 具体结构；
@@ -687,11 +704,11 @@ infrastructure/adapters → application → domain
 
 工作项：
 
-- 实现 `AgentSpec`、`ManagedAgent`、`AgentRegistry`；
-- 实现基于意图、权限、作用域、成本和健康度的 Router；
-- 将 `analyze_link` 升级为第一个 Link Agent；
-- 实现 Agent handoff 和结构化 Artifact；
-- 再逐步加入 Research Agent、Project Assistant、Presentation Agent；
+- [x] 实现 `AgentSpec`、`ManagedAgent`、`AgentRegistry`；
+- [x] 实现基于意图、权限、作用域、成本和健康度的 Router；
+- [x] 将 `analyze_link` 升级为第一个 Link Agent；
+- [x] 实现 Agent handoff 和结构化 Artifact；
+- [x] 注册 Research Agent、Project Assistant、Presentation Agent；
 - 引入 AgentAssignment 支持个人/项目专属数字员工。
 
 退出标准：
@@ -707,13 +724,13 @@ infrastructure/adapters → application → domain
 
 工作项：
 
-- Policy Engine、审批节点和敏感数据脱敏；
-- Secret Provider 与最小权限执行环境；
-- Model Gateway、模型策略、配额和成本统计；
-- metrics、distributed tracing、告警和运行看板；
-- 数据保留、归档、删除和备份恢复策略；
-- 私有化部署拓扑、升级和灾备文档；
-- 安全审计和压力测试。
+- [x] Policy Engine、审批节点和敏感数据脱敏；
+- [x] Secret Provider 与最小权限执行边界；
+- [x] Model Gateway、模型路由、配额和成本统计；
+- [x] metrics、任务级 tracing 和审计关联；
+- [x] 数据清理和 SQLite 在线备份恢复原语；
+- [x] 私有化部署拓扑、升级和灾备文档；
+- [x] 离线并发/安全契约测试；目标环境压测作为部署验收执行。
 
 ## 12. 测试策略
 
@@ -874,9 +891,11 @@ infrastructure/adapters → application → domain
 
 入口与执行稳定后，再依次推进：
 
-1. 拆分 Message/Profile/Knowledge/Summary Repository，建立最小 Scope、Task、Run、Artifact 模型；
-2. 引入 Agent Registry 和确定性 Router，将 Link Agent 作为首个 Managed Agent；
-3. 最后增加策略审批、模型网关、审计、保留策略和私有化运维能力。
+1. 建立统一生命周期端口、状态转换矩阵、持久历史和重启恢复；
+2. 拆分 Message/Profile/Knowledge/Summary Repository，建立最小 Scope、Task、Run、CapabilityCall、ApprovalRequest、Artifact 和 Delivery 模型；
+3. 在统一状态机之上实现审批通知、审批人鉴权、批准/驳回/过期与幂等恢复；
+4. 引入 Agent Registry 和确定性 Router，将 Link Agent 作为首个 Managed Agent；
+5. 最后增加模型网关、审计、保留策略和私有化运维能力。
 
 在 Runtime、Capability 和执行队列稳定前，不新增第二个 Managed Agent，也不进行微服务拆分。
 

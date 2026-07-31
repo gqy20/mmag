@@ -4,40 +4,24 @@
 
 ## 架构
 
-核心数据流（Agentic Tool Use 循环,LLM 可多轮自主调用工具）:
+核心数据流：
 
-```
-                    ┌──────────────────────────────────────────────┐
-                    │              Mattermost Server                │
-                    └──────▲──────────────────┬────────────────────┘
-                           │ WebSocket         │ REST API
-                           │ (收消息)          │ (发消息/拉历史)
-                           │                   │
-┌─────────────┐    ┌───────┴───────┐    ┌───────▼────────┐    ┌────────────┐
-│ ws_client.py│───▶│  触发引擎      │───▶│   LLM 推理     │───▶│  client.py │
-│ (协议/重连) │    │  (3 种触发)    │    │ (Anthropic)    │    │  (REST)    │
-└─────────────┘    │  @提及 / DM    │    │  ┌─ 多轮循环 ─┐│    └────────────┘
-                   │  智能旁听      │    │  │ 工具调用   ││
-                   └───────┬───────┘    │  │ 内置/MCP  ││
-                           │            │  └───────────┘│
-                           │            └──────┬────────┘
-                           │                   │
-                           │            ┌──────▼────────┐
-                           │            │ 工具系统      │
-                           │            │ ┌────────────┐ │
-                           │            │ │ builtin.py │ │ ◀── 内置 7 工具
-                           │            │ │ mcp_bridge │ │ ◀── 外部 MCP Server
-                           │            │ └────────────┘ │
-                           │            └──────┬────────┘
-                           │                   │
-                           │            ┌──────▼────────┐
-                           └───────────▶│  memory.py    │ ◀── SQLite + FTS5
-                                        │ (永久存储)    │     + 摘要压缩
-                                        └───────────────┘
+```text
+Mattermost WebSocket → InboundEvent → Inbox → conversation scheduler
+                                              ↓
+                                      Managed Agent / Runtime
+                                              ↓
+                              Capability + Policy + Lifecycle
+                                              ↓
+                                           Outbox
+                                              ↓
+                                Delivery → Mattermost REST
 ```
 
 关键点:
-- 触发引擎在 `agent.py:_on_posted`,三种触发独立判定
+- WebSocket 回调只负责持久接收；同会话串行、跨会话并发
+- Agent 执行与 Delivery 状态独立，失败投递不会重复调用模型
+- Lifecycle、审批、审计、配额和企业 Context 共用 SQLite 控制面
 - LLM 循环在 `llm.py:agent_loop`,最多 `MAX_TOOL_ROUNDS` 轮,达到上限返回 "处理超时"
 - 工具系统统一在 `ToolRegistry`,内置工具 + MCP 注入工具走同一调度
 - 记忆读写双向:消息实时写入 + 启动 backfill 补全,LLM 检索走 FTS5 BM25
@@ -73,6 +57,10 @@ MAX_CONTEXT_MESSAGES=100       # 上下文窗口消息数 (传给 LLM 的最近 
 MAX_CONTEXT_CHARS=10000        # 上下文窗口总字符上限 (按 token 粗估)
 MEMORY_SUMMARY_INTERVAL=100    # 每 N 条消息触发一次定期摘要
 MEMORY_CONTEXT_WINDOW=100      # 摘要时注入的前序上下文消息数
+PIPELINE_MAX_CONCURRENCY=8     # 跨会话并发
+PIPELINE_MAX_PENDING=256       # 入口背压上限
+RUNTIME_DEADLINE_SECONDS=120   # 单次 Agent Run deadline
+MODEL_BUDGET_USD=100           # 每 actor 的进程内成本上限
 ```
 
 > **不知道 Team/Channel ID？** 先运行 `make discover` 自动探测。
@@ -160,6 +148,10 @@ Bot 支持三种触发方式：
 │   │   └── sqlite/             # SQLite 连接、版本化迁移与 FTS 预处理
 │   ├── runtimes/               # Provider-neutral Runtime 契约与 SDK/Legacy Adapter
 │   ├── capabilities/           # 单一能力规格、统一执行器与 Runtime bindings
+│   ├── control_plane/          # Inbox/Outbox、Lifecycle、Context、Approval
+│   ├── governance/             # Policy、Secret、Model Gateway、Quota、运维原语
+│   ├── managed_agents.py       # Agent Registry、Router、handoff 与 Link Agent
+│   ├── repositories.py         # 专用 Memory Repository 边界
 │   ├── llm.py                  # LLM 适配器 (AsyncAnthropic + Agentic Tool Use)
 │   ├── client.py               # Mattermost REST API 客户端 (元数据缓存)
 │   ├── url_analyzer.py         # 链接分析 (GitHub / Trafilatura / SSRF 防护)
@@ -175,6 +167,7 @@ Bot 支持三种触发方式：
     ├── AI_NATIVE_REFACTORING.md # AI Native 目标架构与设计理由
     ├── ROADMAP.md               # 当前状态、后续步骤与验收标准
     ├── TECH_DEBT.md             # 已知技术债清单
+    ├── OPERATIONS.md            # 私有化部署、备份恢复与告警基线
     └── MATTERMOST_ID_GUIDE.md   # Mattermost ID 层级参考
 ```
 
