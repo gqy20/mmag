@@ -12,6 +12,7 @@ from mmag.capabilities import (
     bind_sdk_capability,
     create_get_channel_info_capability,
     create_get_posts_capability,
+    create_get_user_profile_capability,
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
@@ -201,3 +202,41 @@ async def test_search_messages_bindings_share_filters_time_units_and_limit():
             limit=50,
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_user_profile_bindings_share_combined_result_and_ranking():
+    memory, client = MagicMock(), MagicMock()
+    memory.get_user_profile_decoded.return_value = {
+        "message_count": 12,
+        "topics": [f"topic-{index}" for index in range(12)],
+        "active_hours": {"09": 2, "14": 5, "20": 3, "08": 1},
+        "style": "简洁",
+        "first_seen": "2026-01-01",
+        "last_interaction": "2026-07-31",
+    }
+    client.get_username.return_value = "alice"
+    spec = create_get_user_profile_capability(client, memory)
+
+    legacy_result = await bind_legacy_capability(spec).handler(user_id="user-1")
+    sdk_result = json.loads(
+        (await bind_sdk_capability(spec).handler({"user_id": "user-1"}))["content"][0]["text"]
+    )
+
+    assert spec.permission == "memory:user_profile:read"
+    assert legacy_result == sdk_result
+    assert legacy_result["topics"] == [f"topic-{index}" for index in range(2, 12)]
+    assert legacy_result["active_hours"] == ["14(5次)", "20(3次)", "09(2次)"]
+
+
+@pytest.mark.asyncio
+async def test_user_profile_preserves_empty_profile_message():
+    memory, client = MagicMock(), MagicMock()
+    memory.get_user_profile_decoded.return_value = {}
+    client.get_username.return_value = "alice"
+
+    result = await bind_legacy_capability(
+        create_get_user_profile_capability(client, memory)
+    ).handler(user_id="user-1")
+
+    assert result == {"username": "alice", "note": "暂无画像信息，该用户尚未发言或画像未建立"}
