@@ -239,3 +239,23 @@ class TestPermissionPolicy:
         )
 
         assert isinstance(decision, PermissionResultDeny)
+
+    @pytest.mark.asyncio
+    async def test_permission_callback_uses_runtime_visible_capability_names(self):
+        visible = frozenset({"mcp__mmag__mcp_docs_search"})
+
+        allowed = await sdk_llm._tool_permission_callback(
+            "mcp__mmag__mcp_docs_search",
+            {},
+            None,
+            allowed_mcp_tools=visible,
+        )
+        hidden = await sdk_llm._tool_permission_callback(
+            "mcp__mmag__mcp_docs_delete",
+            {},
+            None,
+            allowed_mcp_tools=visible,
+        )
+
+        assert isinstance(allowed, PermissionResultAllow)
+        assert isinstance(hidden, PermissionResultDeny)

@@ -60,7 +60,7 @@ async def test_legacy_and_sdk_bindings_share_schema_handler_and_result():
     assert legacy.name == sdk.name == spec.name
     assert legacy.description == sdk.description == spec.description
     assert legacy.input_schema == spec.input_schema
-    assert sdk.input_schema == {"channel_id": str}
+    assert sdk.input_schema == dict(spec.input_schema)
     assert legacy_result == sdk_result
     assert legacy_result["display_name"] == "General"
     assert legacy_result["type_label"] == "公开"
@@ -101,7 +101,7 @@ async def test_search_knowledge_uses_one_default_and_limit_policy_for_both_bindi
     assert spec.input_schema["properties"]["limit"]["default"] == 5
     assert spec.input_schema["required"] == ("channel_id", "query")
     assert legacy.input_schema == spec.input_schema
-    assert sdk.input_schema == {"channel_id": str, "query": str, "limit": int}
+    assert sdk.input_schema == dict(spec.input_schema)
     assert legacy_result == sdk_result == {
         "count": 1,
         "items": [
