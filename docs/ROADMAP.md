@@ -28,7 +28,7 @@
 - [x] 将默认 Prompt 打入 wheel，并在隔离目录验证包、CLI 模块和 Prompt 加载；
 - [x] 重复 posted 事件在 Runtime 前按持久化 post ID 去重；
 - [x] Mattermost 回复使用 `pending_post_id` 对网络错误、超时、429/5xx 做有界幂等重试；
-- [x] 默认离线测试基线达到 `231 passed, 2 deselected`，实际分支覆盖率 `50.04%`；
+- [x] 默认离线测试基线达到 `234 passed, 2 deselected`，实际分支覆盖率 `50.53%`；
 - [x] 建立不可变 Runtime 输入/输出、统一错误模型和 SDK/Legacy Adapter；
 - [x] `Agent` 与 `MemoryCompactor` 已只依赖 `AgentRuntime` Port；
 - [x] 建立 Capability 核心契约，并完成 `get_channel_info` 双 Runtime 垂直切片。
@@ -141,15 +141,15 @@ Managed Agent 与 Router
 - [x] 在 Spec 中声明输入 schema、只读/写入属性、权限、超时和来源策略；
 - [x] 以 `get_channel_info` 完成第一个只读垂直切片；
 - [x] 从同一 Spec 生成 ToolRegistry 与 SDK binding；
-- [ ] 统一两条 Runtime 的返回结构、错误和来源信息；
-- [ ] 逐个迁移其他内置工具，最后删除重复 handler/formatter；
+- [x] 统一两条 Runtime 的返回结构、错误和来源信息；
+- [x] 逐个迁移共享内置工具，删除重复 handler/formatter；
 - [x] 收紧 MCP 默认权限和文件路径判断。
 
 ### 实施思路
 
 不先设计覆盖所有未来 Agent 的万能抽象。首个切片只需要证明“一份 schema + 一份 handler + 多 Runtime binding”成立，再根据第二、第三个能力暴露出的差异扩展协议。
 
-当前首个切片已经证明：不可变 Spec 可以同时驱动 JSON Schema 与 SDK 类型映射，统一执行器可以在绑定之前处理参数校验、deadline 和稳定错误码。权限与来源目前是声明式元数据；在所有内置能力迁移完成前，不把它们误写成“已经强制执行”。
+当前七个共享内置能力都由单一 Spec 驱动 JSON Schema、SDK 类型映射和 handler。统一执行器负责参数校验、deadline、来源和稳定错误码；`CapabilityAuthorizer` 已能在副作用前返回允许、拒绝或待审批。默认策略只拒绝未声明权限的写能力，按用户/作用域授权仍需在企业 Context 阶段接入。
 
 ### 下一步顺序
 
@@ -158,15 +158,15 @@ Managed Agent 与 Router
 3. [x] 迁移 `search_messages`，统一多条件过滤、时间单位、参数上限与结果格式；
 4. [x] 迁移 `get_user_profile`，收口 Memory 与 Mattermost 的组合读取；
 5. [x] 迁移 `analyze_link`，让 `SourcePolicy.AUTO` 真正驱动来源注入；
-6. [ ] 迁移 `save_knowledge`，为 `WRITE` 能力接入确定性的权限检查和未来审批钩子；
+6. [x] 迁移 `save_knowledge`，为 `WRITE` 能力接入确定性的权限检查和未来审批钩子；
 7. [ ] 单独处理 `send_file`：它依赖当前消息意图和文件边界，应与 Step 4 的不可变 `RunContext` 一起消除全局 `ToolContext.current_post`；
 8. [ ] 最后让外部 MCP 进入同一 Catalog/Policy 可见性链路，并删除两套重复工厂与 formatter。
 
 ### 退出标准
 
-- [ ] 同一能力只有一份 schema、handler 和策略；
-- [ ] SDK/LangGraph 对同一能力的成功和失败结果等价；
-- [ ] 写能力能被确定性识别，后续可挂接审批；
+- [x] 共享内置能力只有一份 schema、handler 和策略；
+- [x] SDK/LangGraph 对共享内置能力的成功和失败结果等价；
+- [x] 写能力能被确定性识别，后续可挂接审批；
 - [ ] MCP 能力可见性不能绕过 Capability Policy。
 
 ## 7. Step 4：解耦入口、执行和投递

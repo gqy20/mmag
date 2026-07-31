@@ -11,7 +11,7 @@
 - 重整 AI Native 路线图，明确工程门禁、Runtime、Capability、执行解耦和企业 Context 的实施顺序与验收标准
 - 收紧安全边界：Secret 日志仅报告是否配置、文件路径使用真实目录边界、未知 SDK/外部 MCP 工具默认拒绝
 - `Memory.log_message` 的主表与 FTS 写入失败时完整回滚，避免后续提交半成品事务
-- 新增统一 `make verify` 门禁：Ruff、231 个默认离线测试、分支覆盖率、mypy 与 wheel smoke
+- 新增统一 `make verify` 门禁：Ruff、234 个默认离线测试、分支覆盖率、mypy 与 wheel smoke
 - 提交 `uv.lock` 并新增 GitHub Actions，CI 使用锁定依赖且不注入外部服务密钥
 - `prompts.yml` 作为 wheel 包资源发布，同时支持 `PROMPTS_PATH` 显式覆盖
 - 修复异步生成器工具被错误 `await`、二进制 WebSocket 消息和附件取消异常等类型检查发现的边界问题
@@ -27,6 +27,7 @@
 - `search_messages` 已迁移到 Capability Catalog，统一过滤条件、毫秒转换和结果格式，并修复 SDK 忽略零时间戳的行为漂移
 - `get_user_profile` 已迁移到 Capability Catalog，画像与用户名组合读取并发执行且两端共享排序和空结果语义
 - `analyze_link` 已迁移到独立 Capability 模块，`SourcePolicy.AUTO` 由统一执行器注入可审计来源，删除 SDK 私有来源实现
+- `save_knowledge` 已迁移为 `WRITE` Capability；统一 Authorizer 支持允许、拒绝和待审批，并在副作用前完成裁决
 
 ## 0.1.0 (2026-06-11) — 初始发布
 

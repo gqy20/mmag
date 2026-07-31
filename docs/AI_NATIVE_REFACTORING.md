@@ -19,11 +19,11 @@
 - 已建立版本化 SQLite migration，覆盖新库初始化、旧字段补齐、旧消息/FTS 迁移、幂等、失败回滚和未来版本拒绝；
 - `Memory` 不再负责建表和历史 schema 升级；业务消息与 FTS 写入也具备失败回滚；
 - Secret 日志、文件路径和 MCP 工具已经改为显式安全边界；
-- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `231 passed, 2 deselected`、50.04% 分支覆盖率、34 个源码文件 mypy 零错误；
+- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `234 passed, 2 deselected`、50.53% 分支覆盖率、34 个源码文件 mypy 零错误；
 - `uv.lock` 已提交，默认 Prompt 已作为 wheel 资源发布并通过隔离 smoke test。
 - 重复 posted 事件已在执行前去重，Mattermost 回复已具备带 `pending_post_id` 的安全有界重试。
 
-Phase 0 与 Runtime 契约已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port，SDK/Legacy 通过相同契约测试。Capability 单一来源已完成六个读取切片，`SourcePolicy.AUTO` 已进入执行链；当前进入 `save_knowledge` 写入策略与权限边界。
+Phase 0 与 Runtime 契约已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port，SDK/Legacy 通过相同契约测试。七个共享内置 Capability 已完成单一来源迁移，来源与写入三态策略进入执行链；当前剩余 `send_file` 上下文迁移和 MCP Policy 可见性统一。
 
 下一步不直接拆分 `Agent` 或引入多 Agent，而是按以下依赖顺序推进：
 
@@ -628,11 +628,11 @@ infrastructure/adapters → application → domain
 - [x] Runtime 统一错误、deadline 和 fallback 语义；
 - [x] MemoryCompactor 通过 Runtime Port 调用模型；
 - [x] 选定默认 Runtime，另一套仅作为启动回退；
-- [ ] 删除重复工具实现。
+- [x] 删除共享内置工具的重复实现。
 
 退出标准：
 
-- [ ] 同一能力只存在一份 schema、handler 和策略；
+- [x] 共享内置能力只存在一份 schema、handler 和策略；
 - [x] 两个 Runtime 通过同一组契约测试；
 - [x] 上层不再判断 SDK/Legacy 特有异常；
 - [ ] MCP 能力对不同 Runtime 的可见性一致。
@@ -835,14 +835,14 @@ infrastructure/adapters → application → domain
 - [x] 定义 `CapabilitySpec`、`CapabilityResult`、权限/副作用元数据和执行器；
 - [x] 选择 `get_channel_info` 完成首个只读切片；
 - [ ] 从同一 Capability 生成 ToolRegistry、SDK 和后续 MCP binding（ToolRegistry/SDK 已验证）；
-- [ ] 统一来源信息、超时、错误和审计字段；
-- [ ] 验证后再逐个迁移其余内置工具，最后删除重复实现。
+- [x] 统一共享内置能力的来源信息、超时和错误字段；
+- [x] 逐个迁移共享内置工具，删除重复实现。
 
 验收标准：
 
 - [x] 首个切片只有一份输入 schema 和 handler；
 - [x] SDK/LangGraph 对首个切片的相同输入产生等价结果；
-- [ ] 写能力能被明确标记，并为后续审批策略保留边界。
+- [x] 写能力能被明确标记，并为后续审批策略保留边界。
 
 ### 15.5 实施包 D：入口与执行解耦
 
