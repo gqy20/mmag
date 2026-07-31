@@ -159,6 +159,7 @@ Bot 支持三种触发方式：
 │   ├── infrastructure/
 │   │   └── sqlite/             # SQLite 连接、版本化迁移与 FTS 预处理
 │   ├── runtimes/               # Provider-neutral Runtime 契约与 SDK/Legacy Adapter
+│   ├── capabilities/           # 单一能力规格、统一执行器与 Runtime bindings
 │   ├── llm.py                  # LLM 适配器 (AsyncAnthropic + Agentic Tool Use)
 │   ├── client.py               # Mattermost REST API 客户端 (元数据缓存)
 │   ├── url_analyzer.py         # 链接分析 (GitHub / Trafilatura / SSRF 防护)

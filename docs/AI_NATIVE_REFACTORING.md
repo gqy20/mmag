@@ -19,11 +19,11 @@
 - 已建立版本化 SQLite migration，覆盖新库初始化、旧字段补齐、旧消息/FTS 迁移、幂等、失败回滚和未来版本拒绝；
 - `Memory` 不再负责建表和历史 schema 升级；业务消息与 FTS 写入也具备失败回滚；
 - Secret 日志、文件路径和 MCP 工具已经改为显式安全边界；
-- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `221 passed, 2 deselected`、46.24% 分支覆盖率、29 个源码文件 mypy 零错误；
+- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `224 passed, 2 deselected`、47.73% 分支覆盖率、33 个源码文件 mypy 零错误；
 - `uv.lock` 已提交，默认 Prompt 已作为 wheel 资源发布并通过隔离 smoke test。
 - 重复 posted 事件已在执行前去重，Mattermost 回复已具备带 `pending_post_id` 的安全有界重试。
 
-Phase 0 与 Runtime 契约已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port，SDK/Legacy 通过相同契约测试。当前进入 Capability 单一来源。
+Phase 0 与 Runtime 契约已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port，SDK/Legacy 通过相同契约测试。Capability 单一来源已完成 `get_channel_info` 首个纵向切片，当前继续迁移其余能力与策略执行链。
 
 下一步不直接拆分 `Agent` 或引入多 Agent，而是按以下依赖顺序推进：
 
@@ -622,8 +622,8 @@ infrastructure/adapters → application → domain
 工作项：
 
 - [x] 定义 `AgentRuntime`、`RunRequest`、`AgentResult`；
-- [ ] 定义单一 `CapabilitySpec` 和 `CapabilityExecutor`；
-- [ ] 从同一 Capability 生成 SDK、Anthropic 和 MCP binding；
+- [x] 定义单一 `CapabilitySpec` 和 `CapabilityExecutor`；
+- [ ] 从同一 Capability 生成 SDK、Anthropic 和 MCP binding（首个 Legacy/SDK 切片已完成）；
 - [ ] 统一能力来源和审计结构；
 - [x] Runtime 统一错误、deadline 和 fallback 语义；
 - [x] MemoryCompactor 通过 Runtime Port 调用模型；
@@ -832,17 +832,17 @@ infrastructure/adapters → application → domain
 
 实施内容：
 
-- 定义 `CapabilitySpec`、`CapabilityResult`、权限/副作用元数据和执行器；
-- 选择 `get_channel_info` 作为首个只读切片；
-- 从同一 Capability 生成 ToolRegistry、SDK 和后续 MCP binding；
-- 统一来源信息、超时、错误和审计字段；
-- 验证后再逐个迁移其余内置工具，最后删除重复实现。
+- [x] 定义 `CapabilitySpec`、`CapabilityResult`、权限/副作用元数据和执行器；
+- [x] 选择 `get_channel_info` 完成首个只读切片；
+- [ ] 从同一 Capability 生成 ToolRegistry、SDK 和后续 MCP binding（ToolRegistry/SDK 已验证）；
+- [ ] 统一来源信息、超时、错误和审计字段；
+- [ ] 验证后再逐个迁移其余内置工具，最后删除重复实现。
 
 验收标准：
 
-- 同一能力只有一份输入 schema 和 handler；
-- SDK/LangGraph 对相同输入产生等价结果；
-- 写能力能被明确标记，并为后续审批策略保留边界。
+- [x] 首个切片只有一份输入 schema 和 handler；
+- [x] SDK/LangGraph 对首个切片的相同输入产生等价结果；
+- [ ] 写能力能被明确标记，并为后续审批策略保留边界。
 
 ### 15.5 实施包 D：入口与执行解耦
 

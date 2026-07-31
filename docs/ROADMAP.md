@@ -28,9 +28,10 @@
 - [x] 将默认 Prompt 打入 wheel，并在隔离目录验证包、CLI 模块和 Prompt 加载；
 - [x] 重复 posted 事件在 Runtime 前按持久化 post ID 去重；
 - [x] Mattermost 回复使用 `pending_post_id` 对网络错误、超时、429/5xx 做有界幂等重试；
-- [x] 默认离线测试基线达到 `221 passed, 2 deselected`，实际分支覆盖率 `46.24%`；
+- [x] 默认离线测试基线达到 `224 passed, 2 deselected`，实际分支覆盖率 `47.73%`；
 - [x] 建立不可变 Runtime 输入/输出、统一错误模型和 SDK/Legacy Adapter；
-- [x] `Agent` 与 `MemoryCompactor` 已只依赖 `AgentRuntime` Port。
+- [x] `Agent` 与 `MemoryCompactor` 已只依赖 `AgentRuntime` Port；
+- [x] 建立 Capability 核心契约，并完成 `get_channel_info` 双 Runtime 垂直切片。
 
 下一阶段尚未完成：
 
@@ -74,8 +75,8 @@ Managed Agent 与 Router
 
 ### 工作项
 
-- [x] 引入 `pytest-cov`，当前分支覆盖率 `46.24%`，初始阈值 40%；
-- [x] 引入宽松模式 `mypy`，检查 `src/mmag`，当前 29 个源码文件零错误；
+- [x] 引入 `pytest-cov`，当前分支覆盖率 `47.73%`，初始阈值 40%；
+- [x] 引入宽松模式 `mypy`，检查 `src/mmag`，当前 33 个源码文件零错误；
 - [x] 建立 `.github/workflows/ci.yml`，使用锁定依赖执行统一门禁；
 - [x] 增加 wheel smoke test：隔离解包后验证 `import mmag`、CLI 模块和 Prompt 加载；
 - [x] 将 `prompts.yml` 打为包资源，并支持 `PROMPTS_PATH` 显式覆盖；
@@ -136,17 +137,28 @@ Managed Agent 与 Router
 
 ### 工作项
 
-- [ ] 定义 `CapabilitySpec`、`CapabilityResult` 和 `CapabilityExecutor`；
-- [ ] 在 Spec 中声明输入 schema、只读/写入属性、权限、超时和来源策略；
-- [ ] 以 `get_channel_info` 作为第一个只读垂直切片；
-- [ ] 从同一 Spec 生成 ToolRegistry 与 SDK binding；
+- [x] 定义 `CapabilitySpec`、`CapabilityResult` 和 `CapabilityExecutor`；
+- [x] 在 Spec 中声明输入 schema、只读/写入属性、权限、超时和来源策略；
+- [x] 以 `get_channel_info` 完成第一个只读垂直切片；
+- [x] 从同一 Spec 生成 ToolRegistry 与 SDK binding；
 - [ ] 统一两条 Runtime 的返回结构、错误和来源信息；
 - [ ] 逐个迁移其他内置工具，最后删除重复 handler/formatter；
-- [ ] 收紧 MCP 默认权限和文件路径判断。
+- [x] 收紧 MCP 默认权限和文件路径判断。
 
 ### 实施思路
 
 不先设计覆盖所有未来 Agent 的万能抽象。首个切片只需要证明“一份 schema + 一份 handler + 多 Runtime binding”成立，再根据第二、第三个能力暴露出的差异扩展协议。
+
+当前首个切片已经证明：不可变 Spec 可以同时驱动 JSON Schema 与 SDK 类型映射，统一执行器可以在绑定之前处理参数校验、deadline 和稳定错误码。权限与来源目前是声明式元数据；在所有内置能力迁移完成前，不把它们误写成“已经强制执行”。
+
+### 下一步顺序
+
+1. 迁移 `search_knowledge`，验证带可选参数、默认值的本地读取能力；
+2. 迁移 `get_posts`、`search_messages` 和 `get_user_profile`，收口缓存/组合读取与结果格式；
+3. 迁移 `analyze_link`，让 `SourcePolicy.AUTO` 真正驱动来源注入；
+4. 迁移 `save_knowledge`，为 `WRITE` 能力接入确定性的权限检查和未来审批钩子；
+5. 单独处理 `send_file`：它依赖当前消息意图和文件边界，应与 Step 4 的不可变 `RunContext` 一起消除全局 `ToolContext.current_post`；
+6. 最后让外部 MCP 进入同一 Catalog/Policy 可见性链路，并删除两套重复工厂与 formatter。
 
 ### 退出标准
 

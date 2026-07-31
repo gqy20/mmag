@@ -11,7 +11,7 @@
 - 重整 AI Native 路线图，明确工程门禁、Runtime、Capability、执行解耦和企业 Context 的实施顺序与验收标准
 - 收紧安全边界：Secret 日志仅报告是否配置、文件路径使用真实目录边界、未知 SDK/外部 MCP 工具默认拒绝
 - `Memory.log_message` 的主表与 FTS 写入失败时完整回滚，避免后续提交半成品事务
-- 新增统一 `make verify` 门禁：Ruff、221 个默认离线测试、分支覆盖率、mypy 与 wheel smoke
+- 新增统一 `make verify` 门禁：Ruff、224 个默认离线测试、分支覆盖率、mypy 与 wheel smoke
 - 提交 `uv.lock` 并新增 GitHub Actions，CI 使用锁定依赖且不注入外部服务密钥
 - `prompts.yml` 作为 wheel 包资源发布，同时支持 `PROMPTS_PATH` 显式覆盖
 - 修复异步生成器工具被错误 `await`、二进制 WebSocket 消息和附件取消异常等类型检查发现的边界问题
@@ -20,6 +20,8 @@
 - 新增不可变 `RunContext` / `RunRequest` / `AgentResult`、`AgentRuntime` Protocol 和统一 Runtime 错误模型
 - Claude SDK 与 LangGraph Legacy 通过 Adapter 实现同一契约，统一 deadline、fallback 和错误翻译
 - `Agent` 与 `MemoryCompactor` 已迁移到 Runtime Port，不再依赖后端私有异常和返回结构
+- 新增不可变 `CapabilitySpec`、统一 `CapabilityExecutor`、策略元数据与稳定错误结果
+- `get_channel_info` 已成为首个 Capability 垂直切片，由同一规格生成 Legacy ToolRegistry 与 Claude SDK binding
 
 ## 0.1.0 (2026-06-11) — 初始发布
 
