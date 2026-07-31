@@ -14,9 +14,11 @@ import sys
 from pathlib import Path
 
 import pytest
+from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from mmag import sdk_llm  # noqa: E402
 from mmag.sdk_llm import SDKLLM  # noqa: E402
 
 
@@ -209,3 +211,31 @@ class TestMessageStream:
             assert "image" in s
             assert "iVBORw0KGgo=" in s
             break
+
+
+class TestPermissionPolicy:
+    def test_path_with_shared_prefix_is_outside_project(self, tmp_path, monkeypatch):
+        project = tmp_path / "project"
+        sibling = tmp_path / "project-private"
+        project.mkdir()
+        sibling.mkdir()
+        monkeypatch.setattr(sdk_llm, "_PROJECT_ROOT", str(project.resolve()))
+
+        assert sdk_llm._is_path_allowed(str(project / "README.md")) is True
+        assert sdk_llm._is_path_allowed(str(sibling / "secret.txt")) is False
+
+    @pytest.mark.asyncio
+    async def test_known_mmag_mcp_tool_is_allowed(self):
+        decision = await sdk_llm._tool_permission_callback(
+            "mcp__mmag__get_posts", {}, None
+        )
+
+        assert isinstance(decision, PermissionResultAllow)
+
+    @pytest.mark.asyncio
+    async def test_unknown_mcp_tool_is_denied(self):
+        decision = await sdk_llm._tool_permission_callback(
+            "mcp__untrusted__delete_all", {}, None
+        )
+
+        assert isinstance(decision, PermissionResultDeny)
