@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .agent_packages import AgentPackageRegistry, ContractManagedAgent
 from .capabilities import (
     CapabilityContext,
     CapabilityExecutor,
@@ -35,7 +36,9 @@ from .governance import (
     GovernanceContext,
     ModelGateway,
     PolicyCapabilityAuthorizer,
+    PolicyEffect,
     PolicyEngine,
+    PolicyRegistry,
     QuotaLedger,
     bind_governance_context,
 )
@@ -186,7 +189,9 @@ class Agent:
         self.control_store = SQLiteControlPlane(config.memory_db_path)
         lifecycle = LifecycleService(self.control_store)
         approvals = ApprovalService(self.control_store, lifecycle)
-        self.policy_engine = PolicyEngine()
+        # Transitional compatibility for the global Bot. Agent Packages are
+        # fail-closed and must carry an explicit policy before execution.
+        self.policy_engine = PolicyEngine(default_effect=PolicyEffect.ALLOW)
         self.capability_executor = CapabilityExecutor(
             PolicyCapabilityAuthorizer(self.policy_engine)
         )
@@ -199,8 +204,18 @@ class Agent:
         log.info(f"工具系统就绪: {len(builtin_tools)} 个内置工具")
 
         self.agent_registry = AgentRegistry()
+        self.agent_package_registry = AgentPackageRegistry()
+        self.agent_package_registry.load_directory(Path(config.agent_packages_path))
+        self.policy_registry = PolicyRegistry()
+        self.policy_registry.load_directory(Path(config.policies_path))
+        link_package = self.agent_package_registry.get("link")
+        link_policy = self.policy_registry.get(link_package.manifest.policy_ref)
+        link_executor = CapabilityExecutor(PolicyCapabilityAuthorizer(link_policy))
         self.agent_registry.register(
-            LinkAgent(create_analyze_link_capability(self.memory), self.capability_executor)
+            ContractManagedAgent(
+                link_package,
+                LinkAgent(create_analyze_link_capability(self.memory), link_executor),
+            )
         )
         self.agent_router = AgentRouter(self.agent_registry)
 

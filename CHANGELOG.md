@@ -4,6 +4,10 @@
 
 **工程能力**
 
+- 新增 Agent Package v1：严格 Manifest JSON Schema、Prompt/Schema Registry、不可变版本发布与 Package/Prompt Hash
+- 新增统一 Agent 输入/输出 Envelope 强制、Artifact Schema 校验和一次模型输出修复；二次失败返回稳定 `INVALID_OUTPUT`
+- Policy Engine 改为默认拒绝，新增版本化 Policy Registry；Link Agent 接入独立 Package 与只读执行策略
+- Agent、Policy、Model Policy 资源进入 wheel，成功结果携带完整版本 provenance
 - LangGraph 成为默认 Agent Runtime，接入官方 SQLite checkpointer、稳定 thread id 和原生 interrupt/resume
 - 人工审批在 Capability 副作用前暂停，支持 approve/edit/reject、Mattermost 批准/拒绝命令及进程重启后恢复
 - 移除无 checkpoint 的旧 LangGraph 循环与 `LegacyRuntimeAdapter`，Claude Agent SDK 改为显式 opt-in

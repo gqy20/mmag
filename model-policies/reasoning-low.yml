@@ -1,0 +1,6 @@
+id: reasoning-low
+version: 1.0.0
+route: default
+model_class: low-reasoning
+max_output_tokens: 4096
+temperature: 0

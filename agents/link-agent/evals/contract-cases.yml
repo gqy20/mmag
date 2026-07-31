@@ -1,0 +1,10 @@
+version: 1
+cases:
+  - id: accepts-http-url
+    intent: link
+    goal: Analyze https://example.com
+    expect: succeeded
+  - id: rejects-missing-url
+    intent: link
+    goal: Analyze this
+    expect_error: LinkAgent requires an http(s) URL

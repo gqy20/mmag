@@ -7,7 +7,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +31,12 @@ class AgentRouteRequest:
     required_capabilities: frozenset[str] = frozenset()
     budget_usd: float = 1.0
     artifacts: tuple[dict, ...] = ()
+    actor_id: str = "managed-agent"
+    task_id: str = ""
+    run_id: str = ""
+    parameters: dict[str, Any] = field(default_factory=dict)
+    context_refs: tuple[str, ...] = ()
+    artifact_refs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +44,8 @@ class ManagedAgentResult:
     text: str
     agent_name: str
     artifacts: tuple[dict, ...] = ()
+    structured_result: dict[str, Any] | None = None
+    envelope: dict[str, Any] | None = None
 
 
 class ManagedAgent(Protocol):
@@ -131,6 +139,12 @@ class HandoffOrchestrator:
                         request.required_capabilities,
                         request.budget_usd,
                         tuple(artifacts),
+                        request.actor_id,
+                        request.task_id,
+                        request.run_id,
+                        request.parameters,
+                        request.context_refs,
+                        request.artifact_refs,
                     )
                 )
                 last_text = result.text
@@ -190,7 +204,9 @@ class LinkAgent:
         max_cost_usd=0.1,
     )
 
-    def __init__(self, capability_spec, executor):
+    def __init__(self, capability_spec, executor, *, spec: AgentSpec | None = None):
+        if spec is not None:
+            self.spec = spec
         self._capability_spec = capability_spec
         self._executor = executor
 
@@ -210,4 +226,5 @@ class LinkAgent:
             json.dumps(payload, ensure_ascii=False, default=str),
             self.spec.name,
             (artifact,),
+            payload,
         )

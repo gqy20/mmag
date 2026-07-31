@@ -11,6 +11,7 @@ from .policy import (
     PolicyRule,
     bind_governance_context,
 )
+from .policy_registry import PolicyDocumentError, PolicyRegistry
 from .secrets import EnvironmentSecretProvider, SecretValue, redact_sensitive
 
 __all__ = [
@@ -23,6 +24,8 @@ __all__ = [
     "PolicyDecision",
     "PolicyEffect",
     "PolicyEngine",
+    "PolicyDocumentError",
+    "PolicyRegistry",
     "PolicyRule",
     "QuotaLedger",
     "SecretValue",

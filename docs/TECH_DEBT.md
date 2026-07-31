@@ -213,9 +213,15 @@
 - 应改为持有 `MMClient` 实例,用公开 API
 
 ### 29. prompts.py 当前足够,但未来扩展点
-- `src/mmag/prompts.py:_format_dict` 是新加的递归模板替换,**单元测试缺失**
+- 全局 Bot 继续使用宽松 `PromptManager`；新 Managed Agent 已使用严格、版本化 Prompt Registry
+- 剩余：全局 Bot 尚未迁移为 Agent Package，仍保留缺变量不失败的兼容行为
 
-### 30. `time.time()` 与 `time.monotonic()` 混用
+### 30. Agent Package 生产发布链尚未闭环
+- 已完成：Manifest/Prompt/Schema/Package Registry、版本 Hash、默认拒绝 Policy、Link Agent 纵向切片
+- 剩余：provenance 尚未持久化到 AgentRun/Audit，Model Policy 尚未驱动 ModelGateway，eval gate/发布人/原子回滚尚未实现
+- 兼容风险：全局 Bot 在装配处显式使用 ALLOW Policy；删除条件是内置 Capability 全部绑定请求级 Package Policy
+
+### 31. `time.time()` 与 `time.monotonic()` 混用
 - 测耗时用 `monotonic` (好),取时间戳用 `time.time()` (好);但部分 magic conversion (ms ↔ s) 散落多处,容易算错
 - `agent.py:236 latest_ms = int(latest_sec * 1000)`
 - `agent.py:606 create_at = int(time.time() * 1000)`

@@ -1,0 +1,12 @@
+id: link-readonly
+version: 1.0.0
+default_effect: deny
+
+rules:
+  - id: analyze-public-link
+    effect: allow
+    actions: [analyze_link]
+    permissions: [web:read]
+    actors: ["*"]
+    scopes: ["*"]
+    reason: Link Agent may only execute its read-only link analysis capability.

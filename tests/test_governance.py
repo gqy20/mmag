@@ -8,6 +8,7 @@ from mmag.governance import (
     ModelGateway,
     PolicyEffect,
     PolicyEngine,
+    PolicyRegistry,
     PolicyRule,
     QuotaLedger,
     redact_sensitive,
@@ -40,6 +41,32 @@ def test_policy_is_deterministic_and_explainable():
     assert decision.effect is PolicyEffect.REQUIRE_APPROVAL
     assert decision.rule_id == "approve-writes"
     assert decision.reason
+
+
+def test_policy_is_fail_closed_when_no_rule_matches():
+    decision = PolicyEngine().evaluate(_write_spec(), {}, GovernanceContext("u1", "project:p1"))
+    assert decision.effect is PolicyEffect.DENY
+
+
+def test_versioned_policy_registry_allows_only_the_declared_action():
+    from pathlib import Path
+
+    registry = PolicyRegistry()
+    registry.load_directory(Path(__file__).resolve().parents[1] / "policies")
+    engine = registry.get("link-readonly@1.0.0")
+    link = CapabilitySpec(
+        "analyze_link",
+        "analyze",
+        {"type": "object"},
+        lambda: None,
+        permission="web:read",
+    )
+
+    allowed = engine.evaluate(link, {}, GovernanceContext("u1", "project:p1"))
+    denied = engine.evaluate(_write_spec(), {}, GovernanceContext("u1", "project:p1"))
+
+    assert allowed.effect is PolicyEffect.ALLOW
+    assert denied.effect is PolicyEffect.DENY
 
 
 def test_redaction_and_secret_provider_do_not_expose_secret(monkeypatch):

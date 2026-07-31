@@ -39,6 +39,7 @@ class PolicyRule:
     scopes: tuple[str, ...] = ("*",)
     permissions: tuple[str, ...] = ()
     roles: tuple[str, ...] = ()
+    actions: tuple[str, ...] = ("*",)
     reason: str = ""
 
 
@@ -54,7 +55,7 @@ class PolicyEngine:
         self,
         rules: tuple[PolicyRule, ...] = (),
         *,
-        default_effect: PolicyEffect = PolicyEffect.ALLOW,
+        default_effect: PolicyEffect = PolicyEffect.DENY,
     ):
         self.rules = rules
         self.default_effect = default_effect
@@ -75,7 +76,8 @@ class PolicyEngine:
     @staticmethod
     def _matches(rule: PolicyRule, spec: CapabilitySpec, context: GovernanceContext) -> bool:
         return (
-            any(fnmatch(context.actor_id, pattern) for pattern in rule.actors)
+            any(fnmatch(spec.name, pattern) for pattern in rule.actions)
+            and any(fnmatch(context.actor_id, pattern) for pattern in rule.actors)
             and any(fnmatch(context.scope, pattern) for pattern in rule.scopes)
             and (not rule.permissions or spec.permission in rule.permissions)
             and (not rule.roles or bool(context.roles.intersection(rule.roles)))

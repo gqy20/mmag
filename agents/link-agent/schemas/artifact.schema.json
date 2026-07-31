@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/agents/link/artifact/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "source", "content"],
+  "properties": {
+    "kind": {"const": "link_analysis"},
+    "source": {"type": "string", "format": "uri"},
+    "content": {"type": "object"}
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/agents/link/output/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "agent", "result", "artifacts", "sources", "warnings", "usage", "provenance"],
+  "properties": {
+    "status": {"const": "succeeded"},
+    "agent": {"const": "link"},
+    "result": {"type": "object"},
+    "artifacts": {"type": "array", "items": {"type": "object"}},
+    "sources": {"type": "array"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_calls", "tool_calls", "cost_usd"],
+      "properties": {
+        "model_calls": {"type": "integer", "minimum": 0},
+        "tool_calls": {"type": "integer", "minimum": 0},
+        "cost_usd": {"type": "number", "minimum": 0}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "required": [
+        "agent_name", "agent_spec_version", "package_hash", "prompt_id", "prompt_version",
+        "prompt_hash", "input_schema_version", "output_schema_version", "policy_version",
+        "model_policy_version"
+      ]
+    }
+  }
+}

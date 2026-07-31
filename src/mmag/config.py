@@ -13,6 +13,14 @@ from .logger import get_logger
 log = get_logger(__name__)
 
 _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+_SOURCE_AGENT_PACKAGES = Path(__file__).resolve().parents[2] / "agents"
+_INSTALLED_AGENT_PACKAGES = Path(__file__).resolve().parent / "agents"
+_DEFAULT_AGENT_PACKAGES = (
+    _SOURCE_AGENT_PACKAGES if _SOURCE_AGENT_PACKAGES.is_dir() else _INSTALLED_AGENT_PACKAGES
+)
+_SOURCE_POLICIES = Path(__file__).resolve().parents[2] / "policies"
+_INSTALLED_POLICIES = Path(__file__).resolve().parent / "policies"
+_DEFAULT_POLICIES = _SOURCE_POLICIES if _SOURCE_POLICIES.is_dir() else _INSTALLED_POLICIES
 if _ENV_PATH.exists():
     load_dotenv(_ENV_PATH, override=True)
 else:
@@ -49,6 +57,8 @@ _FIELD_TO_ENV: dict[str, str] = {
     "pipeline_max_pending": "PIPELINE_MAX_PENDING",
     "runtime_deadline_seconds": "RUNTIME_DEADLINE_SECONDS",
     "model_budget_usd": "MODEL_BUDGET_USD",
+    "agent_packages_path": "AGENT_PACKAGES_PATH",
+    "policies_path": "POLICIES_PATH",
 }
 # 敏感字段（日志只记录是否配置，不输出任何值片段）
 _SECRET_FIELD_NAMES: frozenset[str] = frozenset({"mm_token", "anthropic_api_key"})
@@ -136,6 +146,8 @@ class Config:
     pipeline_max_pending: int = int(os.getenv("PIPELINE_MAX_PENDING", "256"))
     runtime_deadline_seconds: float = float(os.getenv("RUNTIME_DEADLINE_SECONDS", "120"))
     model_budget_usd: float = float(os.getenv("MODEL_BUDGET_USD", "100"))
+    agent_packages_path: str = os.getenv("AGENT_PACKAGES_PATH", str(_DEFAULT_AGENT_PACKAGES))
+    policies_path: str = os.getenv("POLICIES_PATH", str(_DEFAULT_POLICIES))
 
     @property
     def ws_url(self) -> str:

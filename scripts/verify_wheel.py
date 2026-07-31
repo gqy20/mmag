@@ -1,4 +1,4 @@
-"""Verify that a built wheel imports and loads its packaged prompt resource."""
+"""Verify imports and all packaged configuration resources from a built wheel."""
 
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ def verify_wheel(wheel: Path) -> None:
         environment = os.environ.copy()
         environment["PYTHONPATH"] = str(extracted)
         environment.pop("PROMPTS_PATH", None)
+        environment.pop("AGENT_PACKAGES_PATH", None)
+        environment.pop("POLICIES_PATH", None)
         subprocess.run(
             [
                 sys.executable,
@@ -33,10 +35,20 @@ def verify_wheel(wheel: Path) -> None:
                 (
                     "from mmag import __version__; "
                     "from mmag.cli import main; "
+                    "from pathlib import Path; "
+                    "from mmag.agent_packages import AgentPackageRegistry; "
+                    "from mmag.config import config; "
+                    "from mmag.governance import PolicyRegistry; "
                     "from mmag.prompts import PromptManager; "
                     "prompt = PromptManager().get('system_prompt'); "
-                    "assert __version__ and main and prompt; "
-                    "print('wheel import and prompt load: ok')"
+                    "agents = AgentPackageRegistry(); "
+                    "agents.load_directory(Path(config.agent_packages_path)); "
+                    "policies = PolicyRegistry(); "
+                    "policies.load_directory(Path(config.policies_path)); "
+                    "package = agents.get('link'); "
+                    "policies.get(package.manifest.policy_ref); "
+                    "assert __version__ and main and prompt and package.snapshot.package_hash; "
+                    "print('wheel import and package resource load: ok')"
                 ),
             ],
             cwd=extracted,

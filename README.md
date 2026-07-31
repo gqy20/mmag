@@ -25,6 +25,8 @@ Mattermost WebSocket → InboundEvent → Inbox → conversation scheduler
 - LangGraph 是默认 Agent Runtime，使用 SQLite checkpoint、稳定 `thread_id` 和原生 interrupt/resume
 - 待审工具在副作用前暂停；Mattermost 支持 `批准/拒绝 <approval_id>` 恢复原 Run
 - 工具系统统一在 `ToolRegistry`,内置工具 + MCP 注入工具走同一调度
+- Managed Agent 使用版本化 Agent Package；Manifest、Prompt、Schema、Policy 与运行时强制分层治理
+- Link Agent 已启用严格输入/输出/Artifact Schema、版本 provenance 与默认拒绝的专属 Policy
 - 记忆读写双向:消息实时写入 + 启动 backfill 补全,LLM 检索走 FTS5 BM25
 
 ## 快速开始
@@ -63,7 +65,11 @@ PIPELINE_MAX_PENDING=256       # 入口背压上限
 RUNTIME_DEADLINE_SECONDS=120   # 单次 Agent Run deadline
 MODEL_BUDGET_USD=100           # 每 actor 的进程内成本上限
 USE_SDK_LLM=false              # 默认 LangGraph；仅显式需要时启用 Claude Agent SDK
+AGENT_PACKAGES_PATH=./agents   # Agent Package 根目录
+POLICIES_PATH=./policies       # 版本化 Policy-as-Code 根目录
 ```
+
+Agent Package 的目录、Manifest 和发布约束见 [`docs/AGENT_PACKAGES.md`](docs/AGENT_PACKAGES.md)。
 
 > **不知道 Team/Channel ID？** 先运行 `make discover` 自动探测。
 

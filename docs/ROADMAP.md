@@ -2,9 +2,9 @@
 
 > 状态：Active
 >
-> 更新时间：2026-07-31
+> 更新时间：2026-08-01
 >
-> 当前阶段：Step 4–7 平台控制面基线完成，LangGraph 原生 HITL 已接通，进入生产验证
+> 当前阶段：Agent Package v1 基线与 Link Agent 纵向切片完成，进入持久审计与多 Agent handoff
 >
 > 架构依据：[`AI_NATIVE_REFACTORING.md`](./AI_NATIVE_REFACTORING.md)
 
@@ -264,13 +264,20 @@ Managed Agent 与 Router
 - [x] 将链接分析升级为第一个 Link Agent；
 - [x] 支持结构化 Artifact 和 Agent handoff；
 - [x] 注册 Research Agent、Project Assistant 和 Presentation Agent。
+- [x] 定义 Agent Package v1 Manifest JSON Schema 与严格 Loader；
+- [x] 建立版本化 Prompt/Schema/Package Registry 和运行时输入输出强制；
+- [x] Link Agent 接入 Package、Artifact Schema、版本 provenance 与专属只读 Policy；
+- [ ] 将 Research/Presentation 从 Python `AgentSpec` 迁移为 Package；
+- [ ] 用 `research-report` 完成 Research → Presentation 结构化 handoff。
 
 ### 退出标准
 
 - [x] 新 Agent 可通过注册接入，无需修改协同中枢；
-- [x] Agent 的能力、权限、预算和输出均可检查；
+- [x] Link Agent 的能力、权限、预算和输出均可检查；
 - [x] 多 Agent 任务有明确步骤和状态；
 - [x] 单个 Agent 失败不会破坏整个会话处理。
+
+详细规格、已完成项和后续顺序见 [`AGENT_PACKAGES.md`](./AGENT_PACKAGES.md) 与 [`specs/001-agent-packages`](../specs/001-agent-packages/spec.md)。
 
 ## 10. Step 7：治理与私有化生产能力
 
