@@ -15,8 +15,6 @@ url_analyzer 单元测试
 
 from __future__ import annotations
 
-import os
-import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -41,18 +39,11 @@ from mmag.url_analyzer import (
 
 
 @pytest.fixture
-def temp_db():
-    """临时 SQLite 数据库"""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    yield path
-    if os.path.exists(path):
-        os.unlink(path)
-
-
-@pytest.fixture
-def memory(temp_db):
-    return Memory(temp_db)
+def memory():
+    """使用内存数据库，确保默认测试不依赖临时文件系统。"""
+    store = Memory(":memory:")
+    yield store
+    store.close()
 
 
 @pytest.fixture

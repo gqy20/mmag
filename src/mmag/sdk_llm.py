@@ -14,13 +14,12 @@ SDK LLM Adapter — 封装 Claude Agent SDK 持久客户端，提供与 LLM 类�
 
 from __future__ import annotations
 
-import json
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator
+from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -31,7 +30,10 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import ClaudeAgentOptions, TextBlock, ToolUseBlock
 
 from .config import config
-from .logger import get_logger, trace
+from .logger import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 log = get_logger(__name__)
 
@@ -152,10 +154,9 @@ def _extract_paths_from_input(tool_name: str, input_data: dict[str, Any]) -> lis
 
     # pattern 参数 (Grep/Glob 可能是路径模式)
     pattern = input_data.get("pattern")
-    if pattern and isinstance(pattern, str):
-        # 如果 pattern 看起来像路径（含 / 或 . 或 ~），也检查
-        if any(c in pattern for c in ("/", ".", "~")):
-            paths.append(pattern)
+    # 如果 pattern 看起来像路径（含 / 或 . 或 ~），也检查
+    if isinstance(pattern, str) and pattern and any(c in pattern for c in ("/", ".", "~")):
+        paths.append(pattern)
 
     # include/exclude 文件列表
     for key in ("include", "exclude", "files"):
@@ -300,10 +301,8 @@ class SDKLLM:
     async def reconnect(self):
         """断线后重建连接。用保存的 tool_funcs / mcp_json_path 完整重建。"""
         log.warning("SDK Client 尝试重连...")
-        try:
+        with suppress(Exception):
             await self.stop()
-        except Exception:
-            pass
         if self._saved_tool_funcs is not None:
             await self.start(
                 tool_funcs=self._saved_tool_funcs,

@@ -10,7 +10,8 @@
   - 从 MM 真实频道拉最近 1 条带图片附件的消息作为样本
   - 构造 post 字典, 走 Agent 的图像处理流程
 
-运行:  uv run pytest tests/test_multimodal_e2e.py -v -s
+运行离线测试:  uv run pytest tests/test_multimodal_e2e.py -v -s
+运行真实服务测试: uv run pytest tests/test_multimodal_e2e.py -m external -v -s
 或:    uv run python tests/test_multimodal_e2e.py
 """
 from __future__ import annotations
@@ -65,6 +66,7 @@ def fetch_real_sample() -> dict | None:
 # ============================================================
 # 测试 1: _build_attachment_blocks 流程 (单测, 不调 LLM)
 # ============================================================
+@pytest.mark.external
 def test_image_blocks_construction(tmp_path):
     """验证 _build_attachment_blocks 能从 post["metadata"]["files"] 下载图并构造 image blocks"""
     from mmag.client import MMClient
@@ -74,7 +76,7 @@ def test_image_blocks_construction(tmp_path):
         pytest.skip("服务器没有可用的图片样本, 跳过")
 
     mm = MMClient()
-    memory = Memory(str(tmp_path / "test.db"))
+    memory = Memory(":memory:")
     from mmag.agent import Agent
 
     # 实例化 Agent 但跳过 start() (避免起 WS/MCP)
@@ -112,7 +114,7 @@ def test_context_includes_image_blocks(tmp_path):
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(str(tmp_path / "test.db"))
+    memory = Memory(":memory:")
 
     # Mock MMClient 的方法(避免真连 MM)
     mm.get_channel = lambda cid: {"id": cid, "display_name": "test-ch", "name": "test-ch"}
@@ -162,7 +164,7 @@ def test_context_fallback_to_text_when_no_images(tmp_path):
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(str(tmp_path / "test.db"))
+    memory = Memory(":memory:")
     mm.get_channel = lambda cid: {"id": cid, "display_name": "test-ch", "name": "test-ch"}
 
     agent = Agent.__new__(Agent)
@@ -189,6 +191,7 @@ def test_context_fallback_to_text_when_no_images(tmp_path):
 # ============================================================
 # 测试 3: 端到端 — 真实 LLM 看图
 # ============================================================
+@pytest.mark.external
 @pytest.mark.slow
 def test_llm_actually_sees_image(tmp_path):
     """端到端: 构造多模态 messages → 调真实 LLM → 验证模型看到图"""
@@ -201,7 +204,7 @@ def test_llm_actually_sees_image(tmp_path):
 
     async def _run_e2e() -> str:
         mm = MMClient()
-        memory = Memory(str(tmp_path / "test.db"))
+        memory = Memory(":memory:")
         llm = LLM()
 
         agent = Agent.__new__(Agent)
@@ -303,12 +306,13 @@ def test_text_only_path_still_works():
 # ============================================================
 def test_text_attachment_downloaded_as_text_block(tmp_path):
     """验证 _build_attachment_blocks 下载 text/* 附件并放入 text content block"""
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock
+
     from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(str(tmp_path / "test.db"))
+    memory = Memory(":memory:")
 
     agent = Agent.__new__(Agent)
     agent.mm = mm
@@ -317,7 +321,7 @@ def test_text_attachment_downloaded_as_text_block(tmp_path):
     agent.bot_username = "test_bot"
 
     # mock get_file_bytes_async: 返回 markdown 内容
-    md_content = "# 会议纪要\n\n## 议题\n1. 项目进度\n2. 预算审批\n\n结论: 通过".encode("utf-8")
+    md_content = "# 会议纪要\n\n## 议题\n1. 项目进度\n2. 预算审批\n\n结论: 通过".encode()
     agent.mm.get_file_bytes_async = AsyncMock(return_value=(md_content, "text/markdown"))
 
     file_metas = [
@@ -350,11 +354,12 @@ def test_text_attachment_downloaded_as_text_block(tmp_path):
 def test_json_attachment_downloaded_as_text_block(tmp_path):
     """验证 application/json 附件也被下载为 text block"""
     from unittest.mock import AsyncMock
+
     from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(str(tmp_path / "test.db"))
+    memory = Memory(":memory:")
 
     agent = Agent.__new__(Agent)
     agent.mm = mm
@@ -386,17 +391,18 @@ def test_json_attachment_downloaded_as_text_block(tmp_path):
     combined = " ".join(b["text"] for b in text_blocks)
     assert "config.json" in combined
     assert '"key"' in combined or 'key' in combined
-    print(f"  ✓ json 附件 → text block")
+    print("  ✓ json 附件 → text block")
 
 
 def test_text_attachment_truncation(tmp_path):
     """验证超大文本附件被截断"""
     from unittest.mock import AsyncMock
+
     from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(str(tmp_path / "test.db"))
+    memory = Memory(":memory:")
 
     agent = Agent.__new__(Agent)
     agent.mm = mm
@@ -435,11 +441,12 @@ def test_text_attachment_truncation(tmp_path):
 def test_unsupported_mime_stays_as_placeholder(tmp_path):
     """验证不支持的 MIME (如 PDF) 仍为占位文本, 不尝试下载"""
     from unittest.mock import AsyncMock
+
     from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(str(tmp_path / "test.db"))
+    memory = Memory(":memory:")
 
     agent = Agent.__new__(Agent)
     agent.mm = mm
@@ -474,11 +481,12 @@ def test_unsupported_mime_stays_as_placeholder(tmp_path):
 def test_yaml_attachment_downloaded_as_text_block(tmp_path):
     """验证 application/yaml MIME 的附件被识别为文本文档并下载"""
     from unittest.mock import AsyncMock
+
     from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(str(tmp_path / "test.db"))
+    memory = Memory(":memory:")
 
     agent = Agent.__new__(Agent)
     agent.mm = mm
@@ -486,7 +494,7 @@ def test_yaml_attachment_downloaded_as_text_block(tmp_path):
     agent.bot_user_id = ""
     agent.bot_username = "test_bot"
 
-    yaml_content = "tiers:\n  - name: S\n    cost: 100\n  - name: A\n    cost: 80".encode("utf-8")
+    yaml_content = b"tiers:\n  - name: S\n    cost: 100\n  - name: A\n    cost: 80"
     agent.mm.get_file_bytes_async = AsyncMock(return_value=(yaml_content, "application/yaml"))
 
     file_metas = [
@@ -515,9 +523,7 @@ def test_yaml_attachment_downloaded_as_text_block(tmp_path):
 
 def test_octet_stream_text_fallback_by_extension(tmp_path):
     """验证 application/octet-stream + .md 扩展名也能被识别为文本"""
-    from unittest.mock import AsyncMock
-    from mmag.agent import Agent, _is_text_attachment
-    from mmag.client import MMClient
+    from mmag.agent import _is_text_attachment
 
     # 直接测 _is_text_attachment
     assert _is_text_attachment("application/octet-stream", "notes.md")
@@ -531,11 +537,12 @@ def test_octet_stream_text_fallback_by_extension(tmp_path):
 def test_mixed_image_and_text_attachments(tmp_path):
     """验证图片 + 文本文档混合附件都正确处理"""
     from unittest.mock import AsyncMock
+
     from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(str(tmp_path / "test.db"))
+    memory = Memory(":memory:")
 
     agent = Agent.__new__(Agent)
     agent.mm = mm
@@ -545,7 +552,7 @@ def test_mixed_image_and_text_attachments(tmp_path):
 
     # mock: 第一次调用返回图片, 第二次返回文本
     png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-    md_data = "# Title\n\nSome markdown content".encode("utf-8")
+    md_data = b"# Title\n\nSome markdown content"
     agent.mm.get_file_bytes_async = AsyncMock(
         side_effect=[
             (png_data, "image/png"),

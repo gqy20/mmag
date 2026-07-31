@@ -344,27 +344,26 @@ def _enrich_with_sources(result: Any, tool_name: str, input_data: dict) -> Any:
     """
     sources: list[dict[str, Any]] = []
 
-    if isinstance(result, dict):
-        if result.get("url") and result.get("title"):
-            src: dict[str, Any] = {
-                "url": result["url"],
-                "title": result["title"],
-                "tool": tool_name,
-            }
-            kind = result.get("kind", "")
-            if kind:
-                src["kind"] = kind
-            for meta_key in ("repo_info", "issue_info"):
-                meta = result.get(meta_key)
-                if isinstance(meta, dict):
-                    if meta.get("created_at"):
-                        src["date"] = meta["created_at"]
-                    if meta.get("full_name"):
-                        src["repo"] = meta["full_name"]
-                    if meta.get("user"):
-                        src["author"] = meta["user"]
-                    break
-            sources.append(src)
+    if isinstance(result, dict) and result.get("url") and result.get("title"):
+        src: dict[str, Any] = {
+            "url": result["url"],
+            "title": result["title"],
+            "tool": tool_name,
+        }
+        kind = result.get("kind", "")
+        if kind:
+            src["kind"] = kind
+        for meta_key in ("repo_info", "issue_info"):
+            meta = result.get(meta_key)
+            if isinstance(meta, dict):
+                if meta.get("created_at"):
+                    src["date"] = meta["created_at"]
+                if meta.get("full_name"):
+                    src["repo"] = meta["full_name"]
+                if meta.get("user"):
+                    src["author"] = meta["user"]
+                break
+        sources.append(src)
 
     if sources and isinstance(result, dict):
         result["_sources"] = sources

@@ -67,8 +67,9 @@ indent-style = "space"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-# markers:
-#   slow: 调真实 LLM 的端到端测试,日常开发跳过 (-m "not slow")
+norecursedirs = ["poc"]
+addopts = ["--strict-markers", "-m", "not external"]
 markers = [
     "slow: 调真实 LLM, 跑一次要 30-60s, 日常开发可跳过",
+    "external: 访问真实 Mattermost、LLM 或公网, 默认测试集合排除",
 ]

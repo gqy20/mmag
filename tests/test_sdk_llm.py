@@ -177,7 +177,6 @@ class TestMessageStream:
     @pytest.mark.asyncio
     async def test_yields_single_message(self, sdk):
         """_message_stream 产出一条 stream-json 格式的 dict"""
-        import asyncio
 
         blocks = [{"type": "text", "text": "hello"}]
         stream = sdk._message_stream(blocks)
@@ -193,7 +192,6 @@ class TestMessageStream:
     @pytest.mark.asyncio
     async def test_content_can_be_json_serialized(self, sdk):
         """产出的消息可以被 json.dumps 序列化 (SDK 的 query 会这样做)"""
-        import asyncio
         import json
 
         img = {

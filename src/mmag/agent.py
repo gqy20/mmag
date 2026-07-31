@@ -16,12 +16,12 @@ from .client import PROP_FROM_BOT, PROP_TRUE, MMClient
 from .config import _log_config_loading, config
 from .llm import LLM, LLMError
 from .logger import get_logger, trace
-from .sdk_llm import SDKLLM, SDKLLMError
-from .sdk_tools import ToolContext
 from .mcp_bridge import MCPClientBridge
 from .memory import Memory
 from .memory_compactor import MemoryCompactor
 from .prompts import prompts
+from .sdk_llm import SDKLLM, SDKLLMError
+from .sdk_tools import ToolContext
 from .tools import ToolRegistry, build_builtin_tools
 from .ws_client import WebSocketClient
 
@@ -136,7 +136,7 @@ class Agent:
         _log_config_loading()
 
         log.info("=" * 50)
-        log.info(f"  🤖 Agent 启动中...")
+        log.info("  🤖 Agent 启动中...")
         log.info("=" * 50)
 
         # 阶段 1: 获取 Bot 身份（基于 MM_TOKEN 调 /users.me,user_id 与 username 一起返回）
@@ -263,7 +263,7 @@ class Agent:
 
         # 阶段 5 收尾：提示就绪
         log.info("🎯 进入事件监听循环...")
-        log.info(f"       触发策略: @/DM/thread 走硬规则，其他 LLM 自主决策")
+        log.info("       触发策略: @/DM/thread 走硬规则，其他 LLM 自主决策")
         log.info(f"       上下文窗口: {config.max_context_messages} 条")
         log.info("       纯自然语言驱动，无命令")
         log.info("")
@@ -522,10 +522,7 @@ class Agent:
 
         # thread 回复我的消息
         root_id = post.get("root_id", "")
-        if root_id and self.memory.get_post_user(root_id) == self.bot_user_id:
-            return True
-
-        return False
+        return bool(root_id and self.memory.get_post_user(root_id) == self.bot_user_id)
 
     async def _llm_decide_and_respond(self, post: dict) -> str:
         """让 LLM 自主决定是否回应: 一次 LLM 调用,LLM 输出 <SILENT> 或回复文本
@@ -1128,9 +1125,6 @@ class Agent:
         """发送消息到频道 (主聊天流，非线程)，返回 post_id 或 None"""
         if not message:
             log.warning("       reply(): 消息为空，跳过发送")
-            return None
-        if message.startswith("⚠️"):
-            log.warning(f"       reply(): LLM 错误响应，不发送: {message[:80]}")
             return None
 
         # 不传 root_id → 消息直接出现在主聊天流，而不是线程(Threads)
