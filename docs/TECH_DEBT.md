@@ -62,16 +62,15 @@
 - 特别严重: `_on_posted` 单函数 125 行,5 个提前 return
 - 方案参考: 拆 `MessageRouter` / `ContextBuilder` / `TriggerJudge` / `ResponseSender`
 
-### 7. memory.py — 多 Repository 强耦合 (7 个职责)
-- 位置: `src/mmag/memory.py` (1012 行)
-- 职责:
-  1. Schema 迁移 (`_init_db` / `_migrate_message_cache_to_log`)
-  2. 消息日志 (`log_message` / `get_recent_messages` / `search_messages` / FTS5)
-  3. URL 缓存 (`cache_url` / `get_cached_url`)
-  4. 用户画像 (`update_profile_from_message` / `_extract_topic_keywords` / `_infer_style` / `_initial_style`)
-  5. 团队知识 (`add_knowledge` / `get_relevant_knowledge`)
-  6. 摘要 (`save_conversation_segment` / `get_recent_summary`)
-  7. CJK 预分词 (`_cjk_tokenize_for_fts`)
+### 7. memory.py — 多 Repository 强耦合 (5 个职责)
+- 位置: `src/mmag/memory.py`
+- 已完成: Schema migration 与 CJK FTS 预处理已移至 `src/mmag/infrastructure/sqlite/`
+- 剩余职责:
+  1. 消息日志 (`log_message` / `get_recent_messages` / `search_messages` / FTS5)
+  2. URL 缓存 (`cache_url` / `get_cached_url`)
+  3. 用户画像 (`update_profile_from_message` / `_extract_topic_keywords` / `_infer_style` / `_initial_style`)
+  4. 团队知识 (`add_knowledge` / `get_relevant_knowledge`)
+  5. 摘要 (`save_conversation_segment` / `get_recent_summary`)
 - 方案参考: 拆为 `repositories/message_log.py` / `url_cache.py` / `user_profile.py` / `team_knowledge.py` / `summary.py`
 
 ### 8. url_analyzer.py — 混合 transport / business / cache
@@ -186,9 +185,9 @@
 - `memory.py:488, 559-560, 595, 677, 1000` 多处函数内 import
 
 ### 22. SQLite 并发与事务保护
-- `src/mmag/memory.py:23` `check_same_thread=False` + **全代码无锁**
+- `src/mmag/infrastructure/sqlite/database.py` 仍使用 `check_same_thread=False` 的共享连接，尚无请求级锁/单写者策略
 - 跨线程并发可能 corrupt (虽然 Agent 当前是单线程,加并发 worker 后会触发)
-- 多步操作无 try/except 包裹事务回滚 (P0 已修 `log_message` 部分,但 `add_knowledge` 仍有主表/FTS 不一致风险)
+- Schema migration 已具备逐版本原子事务和失败回滚；业务写入仍有多步事务不完整问题（如 `add_knowledge` 主表/FTS 一致性）
 
 ### 23. 摘要计数不清零 / 无重试退避
 - `src/mmag/memory_compactor.py:71-81` `maybe_compact` 用 `_msg_counter` 字典,失败时不清零,LLM 限流时可能连续触发
@@ -241,3 +240,5 @@
 | 2026-06-11 | P3-19 触发词提到 `prompts.yml/triggers` 节点 + `PromptManager.get_section` |
 | 2026-06-11 | P3-20 `from_bot` / `summary` / `true` props 业务常量提到 `client.py` |
 | 2026-06-11 | P3-21 CHANGELOG + README 架构图更新 |
+| 2026-07-31 | Phase 0 默认测试隔离、离线消息主链契约、Ruff 基线通过 |
+| 2026-07-31 | SQLite 版本化 migration：旧库升级、FTS 重建、幂等、回滚和未来版本拒绝 |

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+**工程能力**
+
+- 默认测试集合隔离 PoC 与真实外部服务测试，新增离线消息主链契约
+- 新增版本化 SQLite migration，支持旧库升级、失败回滚、历史校验和未来版本拒绝
+- 将 schema 初始化、旧 `message_cache` 迁移与 CJK FTS 预处理从 `Memory` 下沉到 SQLite infrastructure
+- Runtime 失败提示现在会投递给用户，不再被发送层静默丢弃
+
 ## 0.1.0 (2026-06-11) — 初始发布
 
 **核心能力**

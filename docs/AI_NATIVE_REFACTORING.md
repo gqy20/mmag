@@ -15,9 +15,11 @@
 - 真实 Mattermost、LLM 和公网测试统一标记为 `external`，默认不执行；
 - 新增离线消息主链契约测试，覆盖消息持久化、显式路由、Runtime 和回复投递；
 - 修复 Runtime 失败提示被发送层吞掉的问题；
-- 测试数据库改用内存 SQLite，默认离线基线为 `179 passed, 2 deselected`。
+- 测试数据库改用内存 SQLite；
+- 已建立版本化 SQLite migration，覆盖新库初始化、旧字段补齐、旧消息/FTS 迁移、幂等、失败回滚和未来版本拒绝；
+- `Memory` 不再负责建表和历史 schema 升级，默认离线基线为 `186 passed, 2 deselected`。
 
-尚未完成：数据库 schema migration、CI、coverage、类型检查、wheel 资源打包和 Runtime/Capability 统一。
+尚未完成：CI、coverage、类型检查、wheel 资源打包和 Runtime/Capability 统一。
 
 ## 1. 文档目的
 
@@ -177,7 +179,7 @@ flowchart LR
 
 #### E. Memory 还不是企业上下文平台
 
-[`memory.py`](../src/mmag/memory.py) 同时包含 schema、migration、消息、FTS、URL 缓存、画像、知识和摘要。当前主要作用域是 `channel_id`，缺少：
+[`memory.py`](../src/mmag/memory.py) 的 schema、migration 与 CJK FTS 预处理已经下沉到 [`infrastructure/sqlite`](../src/mmag/infrastructure/sqlite)，但它仍同时承担消息、URL 缓存、画像、知识和摘要等 Repository 职责。当前主要作用域仍是 `channel_id`，缺少：
 
 - organization / tenant；
 - team / department；
@@ -586,7 +588,7 @@ infrastructure/adapters → application → domain
 - 建立隔离的 test suite，PoC 和真实服务测试不进入默认集合；
 - 增加 `WS → Route → Runtime → Capability → Reply` 契约测试；
 - 覆盖显式召唤、沉默、附件、工具、多轮、失败和重试；
-- 引入数据库 schema version 和正式 migration；
+- [x] 引入数据库 schema version 和正式 migration；
 - 建立 CI：ruff、pytest、coverage、类型检查；
 - 修复 wheel 未包含运行资源的问题；
 - 校正文档与当前代码的版本漂移。
