@@ -19,14 +19,12 @@ from .capabilities.catalog import (
     create_get_channel_info_capability,
     create_get_posts_capability,
     create_search_knowledge_capability,
+    create_search_messages_capability,
 )
 
 # ============================================================
 # 工具参数上限（与 builtin.py 保持同一份数字）
 # ============================================================
-
-SEARCH_MESSAGES_DEFAULT_LIMIT = 20
-SEARCH_MESSAGES_MAX_LIMIT = 50
 
 # send_file 文件大小上限 (10MB, Mattermost 单文件限制通常 50-100MB,这里保守)
 SEND_FILE_MAX_BYTES = 10 * 1024 * 1024
@@ -91,37 +89,7 @@ def _make_sdk_get_posts(mm_client, memory):
 
 
 def _make_sdk_search_messages(memory):
-    @tool(
-        "search_messages",
-        (
-            "按关键词/时间/用户/频道检索历史消息。"
-            "用于查找'上周 X 说 Y'、'X 之前提过的方案'等回看类问题。"
-            "支持中英文全文搜索 (BM25 排序),时间戳是毫秒 (Mattermost 原生格式)。"
-            "channel_id 留空 = 搜全 team。query 留空 = 纯时间/用户过滤。"
-        ),
-        {
-            "query": str,
-            "channel_id": str,
-            "user_id": str,
-            "before_ts": float,
-            "after_ts": float,
-            "limit": int,
-        },
-    )
-    async def sdk_search_messages(args):
-        result = await asyncio.to_thread(
-            memory.search_messages,
-            query=args.get("query"),
-            channel_id=args.get("channel_id"),
-            user_id=args.get("user_id"),
-            before_ts=(args["before_ts"] / 1000.0) if args.get("before_ts") else None,
-            after_ts=(args["after_ts"] / 1000.0) if args.get("after_ts") else None,
-            limit=min(args.get("limit", SEARCH_MESSAGES_DEFAULT_LIMIT), SEARCH_MESSAGES_MAX_LIMIT),
-        )
-        formatted = await asyncio.to_thread(_format_search_results, result)
-        return _sdk_tool_return(formatted)
-
-    return sdk_search_messages
+    return bind_sdk_capability(create_search_messages_capability(memory))
 
 
 def _make_sdk_search_knowledge(memory):
@@ -325,24 +293,6 @@ def _enrich_with_sources(result: Any, tool_name: str, input_data: dict) -> Any:
 # ============================================================
 # 工具结果格式化辅助函数（从 builtin.py 原样搬运）
 # ============================================================
-
-
-def _format_search_results(results: list[dict]) -> dict:
-    """格式化 search_messages 检索结果"""
-    if not results:
-        return {"count": 0, "messages": [], "note": "未找到匹配消息"}
-
-    messages = [
-        {
-            "channel_id": r.get("channel_id", ""),
-            "user": r.get("username", "?"),
-            "message": (p.get("message") or "")[:500] if (p := r) else "",
-            "time_ms": int((r.get("create_at") or 0) * 1000),
-            "relevance_score": r.get("_score"),
-        }
-        for r in results
-    ]
-    return {"count": len(messages), "messages": messages}
 
 
 def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:

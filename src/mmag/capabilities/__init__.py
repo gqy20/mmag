@@ -13,6 +13,7 @@ from .catalog import (
     create_get_channel_info_capability,
     create_get_posts_capability,
     create_search_knowledge_capability,
+    create_search_messages_capability,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "create_get_channel_info_capability",
     "create_get_posts_capability",
     "create_search_knowledge_capability",
+    "create_search_messages_capability",
 ]

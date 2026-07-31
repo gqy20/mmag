@@ -12,6 +12,8 @@ log = get_logger(__name__)
 
 GET_POSTS_DEFAULT_LIMIT = 30
 GET_POSTS_MAX_LIMIT = 100
+SEARCH_MESSAGES_DEFAULT_LIMIT = 20
+SEARCH_MESSAGES_MAX_LIMIT = 50
 SEARCH_KNOWLEDGE_DEFAULT_LIMIT = 5
 SEARCH_KNOWLEDGE_MAX_LIMIT = 10
 
@@ -158,6 +160,91 @@ def create_search_knowledge_capability(memory) -> CapabilitySpec:
         handler=search_knowledge,
         effect=CapabilityEffect.READ,
         permission="memory:knowledge:read",
+        timeout_seconds=10,
+        source_policy=SourcePolicy.NONE,
+    )
+
+
+def create_search_messages_capability(memory) -> CapabilitySpec:
+    """Create the canonical historical-message search capability."""
+
+    async def search_messages(
+        query: str | None = None,
+        channel_id: str | None = None,
+        user_id: str | None = None,
+        before_ts: float | None = None,
+        after_ts: float | None = None,
+        limit: int = SEARCH_MESSAGES_DEFAULT_LIMIT,
+    ) -> dict:
+        results = await asyncio.to_thread(
+            memory.search_messages,
+            query=query,
+            channel_id=channel_id,
+            user_id=user_id,
+            before_ts=(before_ts / 1000.0) if before_ts is not None else None,
+            after_ts=(after_ts / 1000.0) if after_ts is not None else None,
+            limit=min(limit, SEARCH_MESSAGES_MAX_LIMIT),
+        )
+        if not results:
+            return {"count": 0, "messages": [], "note": "未找到匹配消息"}
+        messages = [
+            {
+                "channel_id": result.get("channel_id", ""),
+                "user": result.get("username", "?"),
+                "message": (result.get("message") or "")[:500],
+                "time_ms": int((result.get("create_at") or 0) * 1000),
+                "relevance_score": result.get("_score"),
+            }
+            for result in results
+        ]
+        return {"count": len(messages), "messages": messages}
+
+    return CapabilitySpec(
+        name="search_messages",
+        description=(
+            "按关键词/时间/用户/频道检索历史消息。"
+            "用于查找'上周 X 说 Y'、'X 之前提过的方案'等回看类问题。"
+            "支持中英文全文搜索 (BM25 排序),时间戳是毫秒 (Mattermost 原生格式)。"
+            "channel_id 留空 = 搜全 team。query 留空 = 纯时间/用户过滤。"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词 (支持中英文,留空=不过关键词)",
+                },
+                "channel_id": {
+                    "type": "string",
+                    "description": "频道 ID (留空=搜全 team)",
+                },
+                "user_id": {
+                    "type": "string",
+                    "description": "按用户 ID 过滤 (可选)",
+                },
+                "before_ts": {
+                    "type": "number",
+                    "description": "只看此时间戳(毫秒)之前的消息 (可选)",
+                },
+                "after_ts": {
+                    "type": "number",
+                    "description": "只看此时间戳(毫秒)之后的消息 (可选)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "返回数量 "
+                        f"(默认 {SEARCH_MESSAGES_DEFAULT_LIMIT}, 最大 {SEARCH_MESSAGES_MAX_LIMIT})"
+                    ),
+                    "default": SEARCH_MESSAGES_DEFAULT_LIMIT,
+                    "maximum": SEARCH_MESSAGES_MAX_LIMIT,
+                },
+            },
+            "required": [],
+        },
+        handler=search_messages,
+        effect=CapabilityEffect.READ,
+        permission="memory:messages:read",
         timeout_seconds=10,
         source_policy=SourcePolicy.NONE,
     )

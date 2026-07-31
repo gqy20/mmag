@@ -12,8 +12,8 @@ from mmag.capabilities import (
     bind_sdk_capability,
     create_get_channel_info_capability,
     create_get_posts_capability,
-    create_search_messages_capability,
     create_search_knowledge_capability,
+    create_search_messages_capability,
 )
 
 

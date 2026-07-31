@@ -17,6 +17,7 @@ from ..capabilities.catalog import (
     create_get_channel_info_capability,
     create_get_posts_capability,
     create_search_knowledge_capability,
+    create_search_messages_capability,
 )
 from .registry import Tool
 
@@ -24,10 +25,6 @@ from .registry import Tool
 # 工具参数上限（schema description / handler / 格式化 共享同一份数字）
 # 改这里,所有相关地方同步更新
 # ============================================================
-
-SEARCH_MESSAGES_DEFAULT_LIMIT = 20 # 不传 limit 时的默认消息数
-SEARCH_MESSAGES_MAX_LIMIT = 50     # 一次最多返回多少条
-
 
 # ============================================================
 # 公共入口
@@ -63,58 +60,7 @@ def _make_search_knowledge_tool(memory) -> Tool:
 
 
 def _make_search_messages_tool(memory) -> Tool:
-    return Tool(
-        name="search_messages",
-        description=(
-            "按关键词/时间/用户/频道检索历史消息。"
-            "用于查找'上周 X 说 Y'、'X 之前提过的方案'等回看类问题。"
-            "支持中英文全文搜索 (BM25 排序),时间戳是毫秒 (Mattermost 原生格式)。"
-            "channel_id 留空 = 搜全 team。query 留空 = 纯时间/用户过滤。"
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "搜索关键词 (支持中英文,留空=不过关键词)",
-                },
-                "channel_id": {
-                    "type": "string",
-                    "description": "频道 ID (留空=搜全 team)",
-                },
-                "user_id": {
-                    "type": "string",
-                    "description": "按用户 ID 过滤 (可选)",
-                },
-                "before_ts": {
-                    "type": "number",
-                    "description": "只看此时间戳(毫秒)之前的消息 (可选)",
-                },
-                "after_ts": {
-                    "type": "number",
-                    "description": "只看此时间戳(毫秒)之后的消息 (可选)",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": f"返回数量 (默认 {SEARCH_MESSAGES_DEFAULT_LIMIT}, 最大 {SEARCH_MESSAGES_MAX_LIMIT})",
-                    "default": SEARCH_MESSAGES_DEFAULT_LIMIT,
-                },
-            },
-            "required": [],
-        },
-        handler=lambda query=None, channel_id=None, user_id=None,
-                   before_ts=None, after_ts=None, limit=SEARCH_MESSAGES_DEFAULT_LIMIT:
-            _format_search_results(
-                memory.search_messages(
-                    query=query,
-                    channel_id=channel_id,
-                    user_id=user_id,
-                    before_ts=(before_ts / 1000.0) if before_ts is not None else None,
-                    after_ts=(after_ts / 1000.0) if after_ts is not None else None,
-                    limit=min(limit, SEARCH_MESSAGES_MAX_LIMIT),
-                )
-            ),
-    )
+    return bind_legacy_capability(create_search_messages_capability(memory))
 
 
 def _make_get_channel_info_tool(mm_client) -> Tool:
@@ -221,24 +167,6 @@ async def _analyze_link_handler(memory, url: str) -> dict:
 # ============================================================
 # 工具结果格式化辅助函数
 # ============================================================
-
-
-def _format_search_results(results: list[dict]) -> dict:
-    """格式化 search_messages 检索结果 — 时间戳转毫秒给 LLM (符合 Mattermost 原生格式)"""
-    if not results:
-        return {"count": 0, "messages": [], "note": "未找到匹配消息"}
-
-    messages = [
-        {
-            "channel_id": r.get("channel_id", ""),
-            "user": r.get("username", "?"),
-            "message": (r.get("message") or "")[:500],
-            "time_ms": int((r.get("create_at") or 0) * 1000),
-            "relevance_score": r.get("_score"),  # FTS5 BM25,无 query 时无此字段
-        }
-        for r in results
-    ]
-    return {"count": len(messages), "messages": messages}
 
 
 def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:
