@@ -17,18 +17,14 @@ from claude_agent_sdk import tool
 from .capabilities.bindings import bind_sdk_capability
 from .capabilities.catalog import (
     create_get_channel_info_capability,
+    create_get_posts_capability,
     create_search_knowledge_capability,
 )
-from .logger import get_logger
-
-log = get_logger(__name__)
 
 # ============================================================
 # 工具参数上限（与 builtin.py 保持同一份数字）
 # ============================================================
 
-GET_POSTS_DEFAULT_LIMIT = 30
-GET_POSTS_MAX_LIMIT = 100
 SEARCH_MESSAGES_DEFAULT_LIMIT = 20
 SEARCH_MESSAGES_MAX_LIMIT = 50
 
@@ -91,29 +87,7 @@ def create_sdk_tools(mm_client, memory, tool_context: ToolContext | None = None)
 
 
 def _make_sdk_get_posts(mm_client, memory):
-    @tool(
-        "get_posts",
-        (
-            "获取频道最近的消息历史。用于回顾讨论内容、总结对话、查找特定信息。"
-            "优先从本地缓存读取（实时性好），缓存不足时自动从服务器拉取。"
-            "返回的消息中可能含 URL — 如需 URL 对应页面的真实内容，请用 analyze_link 抓取。"
-        ),
-        {"channel_id": str, "limit": int},
-    )
-    async def sdk_get_posts(args):
-        channel_id = args["channel_id"]
-        limit = args.get("limit", GET_POSTS_DEFAULT_LIMIT)
-        result = await asyncio.to_thread(
-            _get_posts_cached,
-            mm_client,
-            memory,
-            channel_id,
-            min(limit, GET_POSTS_MAX_LIMIT),
-        )
-        formatted = await asyncio.to_thread(_format_posts, result)
-        return _sdk_tool_return(formatted)
-
-    return sdk_get_posts
+    return bind_sdk_capability(create_get_posts_capability(mm_client, memory))
 
 
 def _make_sdk_search_messages(memory):
@@ -348,27 +322,9 @@ def _enrich_with_sources(result: Any, tool_name: str, input_data: dict) -> Any:
 
     return result
 
-
 # ============================================================
 # 工具结果格式化辅助函数（从 builtin.py 原样搬运）
 # ============================================================
-
-
-def _format_posts(posts: list[dict]) -> dict:
-    """格式化消息列表为结构化输出"""
-    if not posts:
-        return {"count": 0, "messages": []}
-
-    messages = [
-        {
-            "user": p.get("username", "?"),
-            "message": (p.get("message") or "")[:500],
-            "time": p.get("create_at", ""),
-        }
-        for p in posts
-    ]
-
-    return {"count": len(messages), "messages": messages}
 
 
 def _format_search_results(results: list[dict]) -> dict:
@@ -484,39 +440,3 @@ def _format_link_info(info: dict) -> dict:
         result["error"] = info.get("error") or "未知错误"
 
     return result
-
-
-# ============================================================
-# 缓存优先的消息获取（从 builtin.py 原样搬运）
-# ============================================================
-
-
-def _get_posts_cached(mm_client, memory, channel_id: str, limit: int) -> list[dict]:
-    """获取频道消息：本地 message_log 优先，不足时 fallback 到 REST API"""
-    cached = memory.get_recent_messages(channel_id, limit=limit)
-    cache_threshold = max(int(limit * 0.6), 3)
-
-    if len(cached) >= cache_threshold:
-        log.info(
-            "get_posts: 命中本地缓存 (需要 %d 条, 缓存 %d 条)",
-            limit,
-            len(cached),
-        )
-        return cached
-
-    log.info(
-        "get_posts: 缓存不足 (需 %d 条, 缓存 %d 条), 回退 REST API",
-        limit,
-        len(cached),
-    )
-    rest_posts = mm_client.get_posts(channel_id, limit=limit)
-
-    if rest_posts:
-        for p in rest_posts:
-            p["channel_id"] = channel_id
-            p["username"] = mm_client.get_username(p.get("user_id", ""))
-            if not memory.log_message(p):
-                log.warning("get_posts 回填 message_log 失败 (id=%s)", p.get("id", "")[:12])
-        log.debug("get_posts: 已回填 %d 条消息到本地缓存", len(rest_posts))
-
-    return rest_posts if rest_posts else cached

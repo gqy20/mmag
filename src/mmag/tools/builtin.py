@@ -15,21 +15,16 @@ from __future__ import annotations
 from ..capabilities.bindings import bind_legacy_capability
 from ..capabilities.catalog import (
     create_get_channel_info_capability,
+    create_get_posts_capability,
     create_search_knowledge_capability,
 )
-from ..logger import get_logger
 from .registry import Tool
-
-log = get_logger(__name__)
-
 
 # ============================================================
 # 工具参数上限（schema description / handler / 格式化 共享同一份数字）
 # 改这里,所有相关地方同步更新
 # ============================================================
 
-GET_POSTS_DEFAULT_LIMIT = 30       # 不传 limit 时的默认消息数
-GET_POSTS_MAX_LIMIT = 100          # 一次最多拉多少条
 SEARCH_MESSAGES_DEFAULT_LIMIT = 20 # 不传 limit 时的默认消息数
 SEARCH_MESSAGES_MAX_LIMIT = 50     # 一次最多返回多少条
 
@@ -60,32 +55,7 @@ def build_builtin_tools(mm_client, memory) -> list[Tool]:
 
 
 def _make_get_posts_tool(mm_client, memory) -> Tool:
-    return Tool(
-        name="get_posts",
-        description=(
-            "获取频道最近的消息历史。用于回顾讨论内容、总结对话、查找特定信息。"
-            "优先从本地缓存读取（实时性好），缓存不足时自动从服务器拉取。"
-            "返回的消息中可能含 URL — 如需 URL 对应页面的真实内容，请用 analyze_link 抓取。"
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "channel_id": {
-                    "type": "string",
-                    "description": "频道 ID（不是 name）；当前频道 ID 会在 user 消息中以 📍 前缀告知",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": f"获取消息数量 (默认 {GET_POSTS_DEFAULT_LIMIT}, 最大 {GET_POSTS_MAX_LIMIT})",
-                    "default": GET_POSTS_DEFAULT_LIMIT,
-                },
-            },
-            "required": ["channel_id"],
-        },
-        handler=lambda channel_id, limit=GET_POSTS_DEFAULT_LIMIT: _format_posts(
-            _get_posts_cached(mm_client, memory, channel_id, min(limit, GET_POSTS_MAX_LIMIT))
-        ),
-    )
+    return bind_legacy_capability(create_get_posts_capability(mm_client, memory))
 
 
 def _make_search_knowledge_tool(memory) -> Tool:
@@ -253,26 +223,6 @@ async def _analyze_link_handler(memory, url: str) -> dict:
 # ============================================================
 
 
-def _format_posts(posts: list[dict]) -> dict:
-    """格式化消息列表为结构化输出
-
-    输入数量已由 handler 的 `min(limit, GET_POSTS_MAX_LIMIT)` 卡死,这里不再截断。
-    """
-    if not posts:
-        return {"count": 0, "messages": []}
-
-    messages = [
-        {
-            "user": p.get("username", "?"),
-            "message": (p.get("message") or "")[:500],
-            "time": p.get("create_at", ""),
-        }
-        for p in posts
-    ]
-
-    return {"count": len(messages), "messages": messages}
-
-
 def _format_search_results(results: list[dict]) -> dict:
     """格式化 search_messages 检索结果 — 时间戳转毫秒给 LLM (符合 Mattermost 原生格式)"""
     if not results:
@@ -401,50 +351,3 @@ def _format_link_info(info: dict) -> dict:
         result["error"] = info.get("error") or "未知错误"
 
     return result
-
-
-# ============================================================
-# 缓存优先的消息获取
-# ============================================================
-
-
-def _get_posts_cached(mm_client, memory, channel_id: str, limit: int) -> list[dict]:
-    """获取频道消息：本地 message_log 优先，不足时 fallback 到 REST API
-
-    策略:
-      1. 先查 SQLite message_log（_on_posted 实时写入的,启动时 backfill 补全）
-      2. 本地数量 >= 需求的 60% → 直接返回（避免每次都打 API）
-      3. 本地不足 → 从 REST API 拉取，并回填到 message_log
-      4. 本地为空 → 直接走 REST API
-    """
-    # 尝试从本地缓存读取
-    cached = memory.get_recent_messages(channel_id, limit=limit)
-    cache_threshold = max(int(limit * 0.6), 3)  # 至少 3 条或需求的 60%
-
-    if len(cached) >= cache_threshold:
-        log.info(
-            "get_posts: 命中本地缓存 (需要 %d 条, 缓存 %d 条)",
-            limit,
-            len(cached),
-        )
-        return cached
-
-    # 缓存不足，走 REST API
-    log.info(
-        "get_posts: 缓存不足 (需 %d 条, 缓存 %d 条), 回退 REST API",
-        limit,
-        len(cached),
-    )
-    rest_posts = mm_client.get_posts(channel_id, limit=limit)
-
-    # 将 REST 结果回填到本地缓存（加速下次查询）
-    if rest_posts:
-        for p in rest_posts:
-            p["channel_id"] = channel_id  # 确保有 channel_id
-            p["username"] = mm_client.get_username(p.get("user_id", ""))
-            if not memory.log_message(p):
-                # 回填失败不致命,但要让运维可见
-                log.warning("get_posts 回填 message_log 失败 (id=%s)", p.get("id", "")[:12])
-        log.debug("get_posts: 已回填 %d 条消息到本地缓存", len(rest_posts))
-
-    return rest_posts if rest_posts else cached
