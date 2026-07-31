@@ -49,6 +49,15 @@ def tmp_prompts(tmp_path):
 
 
 class TestPromptManagerGet:
+    def test_default_path_can_be_overridden_by_environment(self, tmp_path, monkeypatch):
+        custom = tmp_path / "custom-prompts.yml"
+        custom.write_text("system_prompt: custom runtime prompt\n", encoding="utf-8")
+        monkeypatch.setenv("PROMPTS_PATH", str(custom))
+
+        manager = PromptManager()
+
+        assert manager.get("system_prompt") == "custom runtime prompt"
+
     def test_renders_all_identity_placeholders(self, tmp_prompts):
         out = tmp_prompts.get(
             "system_prompt",
