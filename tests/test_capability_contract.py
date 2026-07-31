@@ -12,6 +12,7 @@ from mmag.capabilities import (
     bind_sdk_capability,
     create_get_channel_info_capability,
     create_get_posts_capability,
+    create_search_messages_capability,
     create_search_knowledge_capability,
 )
 
@@ -148,3 +149,55 @@ async def test_get_posts_caps_rest_fallback_and_backfills_cache():
     client.get_posts.assert_called_once_with("channel-1", limit=100)
     memory.log_message.assert_called_once()
     assert result["messages"][0] == {"user": "alice", "message": "hello", "time": 1}
+
+
+@pytest.mark.asyncio
+async def test_search_messages_bindings_share_filters_time_units_and_limit():
+    memory = MagicMock()
+    memory.search_messages.return_value = [
+        {
+            "channel_id": "channel-1",
+            "username": "alice",
+            "message": "deployment",
+            "create_at": 1_700_000_001.5,
+            "_score": -0.8,
+        }
+    ]
+    spec = create_search_messages_capability(memory)
+    arguments = {
+        "query": "deploy",
+        "channel_id": "channel-1",
+        "user_id": "user-1",
+        "before_ts": 0,
+        "after_ts": 1_700_000_000_000,
+        "limit": 999,
+    }
+
+    legacy_result = await bind_legacy_capability(spec).handler(**arguments)
+    sdk_result = json.loads(
+        (await bind_sdk_capability(spec).handler(arguments))["content"][0]["text"]
+    )
+
+    assert spec.permission == "memory:messages:read"
+    assert spec.input_schema["required"] == ()
+    assert spec.input_schema["properties"]["limit"]["maximum"] == 50
+    assert legacy_result == sdk_result
+    assert legacy_result["messages"][0]["time_ms"] == 1_700_000_001_500
+    assert memory.search_messages.call_args_list == [
+        call(
+            query="deploy",
+            channel_id="channel-1",
+            user_id="user-1",
+            before_ts=0.0,
+            after_ts=1_700_000_000.0,
+            limit=50,
+        ),
+        call(
+            query="deploy",
+            channel_id="channel-1",
+            user_id="user-1",
+            before_ts=0.0,
+            after_ts=1_700_000_000.0,
+            limit=50,
+        ),
+    ]
