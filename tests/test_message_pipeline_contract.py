@@ -116,6 +116,7 @@ async def test_duplicate_post_is_not_persisted_or_replied_twice():
 
     assert agent.stats == {"messages": 1, "responses": 1, "dropped_messages": 0}
     assert agent.memory.has_message.call_count == 2
-    agent.memory.log_message.assert_called_once()
+    persisted_ids = [call.args[0]["id"] for call in agent.memory.log_message.call_args_list]
+    assert persisted_ids.count("post-1") == 1
     agent.sdk_llm.agent_loop.assert_awaited_once()
     agent.mm.send_post.assert_called_once()

@@ -425,6 +425,13 @@ class Agent:
         if not message and not file_metas:
             return
 
+        # Mattermost 在重连后可能重放 posted 事件。持久化记录是当前阶段的
+        # 幂等边界，避免重复下载附件、调用 Runtime 和发送回复。
+        post_id = post.get("id", "")
+        if post_id and self.memory.has_message(post_id):
+            log.info("       ⏭️ 跳过重复消息: %s", post_id[:12])
+            return
+
         self.stats["messages"] += 1
 
         # 补充 username

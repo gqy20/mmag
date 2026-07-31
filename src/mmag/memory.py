@@ -22,6 +22,16 @@ class Memory:
 
     # ---- 消息日志（永久存储,供检索/回顾）----
 
+    def has_message(self, post_id: str) -> bool:
+        """Return whether a Mattermost post has already been persisted."""
+        if not post_id:
+            return False
+        row = self._conn.execute(
+            "SELECT 1 FROM message_log WHERE id=?",
+            (post_id,),
+        ).fetchone()
+        return row is not None
+
     def log_message(self, post: dict) -> bool:
         """写入一条消息到 message_log,并同步 FTS5 索引。
 
