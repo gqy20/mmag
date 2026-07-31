@@ -158,6 +158,7 @@ Bot 支持三种触发方式：
 │   ├── memory_compactor.py     # 长期记忆压缩器
 │   ├── infrastructure/
 │   │   └── sqlite/             # SQLite 连接、版本化迁移与 FTS 预处理
+│   ├── runtimes/               # Provider-neutral Runtime 契约与 SDK/Legacy Adapter
 │   ├── llm.py                  # LLM 适配器 (AsyncAnthropic + Agentic Tool Use)
 │   ├── client.py               # Mattermost REST API 客户端 (元数据缓存)
 │   ├── url_analyzer.py         # 链接分析 (GitHub / Trafilatura / SSRF 防护)
@@ -169,6 +170,7 @@ Bot 支持三种触发方式：
 │       ├── registry.py
 │       └── builtin.py
 └── docs/
+    ├── adr/                     # 已接受的架构决策记录
     ├── AI_NATIVE_REFACTORING.md # AI Native 目标架构与设计理由
     ├── ROADMAP.md               # 当前状态、后续步骤与验收标准
     ├── TECH_DEBT.md             # 已知技术债清单
@@ -180,6 +182,7 @@ Bot 支持三种触发方式：
 - [AI Native 重构方案](docs/AI_NATIVE_REFACTORING.md)：目标架构、设计原则与阶段依赖；
 - [实施路线图](docs/ROADMAP.md)：当前完成情况、下一步任务和各阶段退出标准；
 - [技术债清单](docs/TECH_DEBT.md)：具体问题、风险和建议拆分方向；
+- [Runtime 选择 ADR](docs/adr/0001-runtime-selection.md)：默认 Runtime、失败边界和 Legacy 退出条件；
 - [Mattermost ID 指南](docs/MATTERMOST_ID_GUIDE.md)：Team、Channel 和 User ID 的获取与配置。
 
 ## 记忆系统
@@ -216,6 +219,7 @@ Bot 具备跨会话持久记忆：
 - **Schema 演进**：启动时按版本顺序执行原子 migration；支持旧库字段补齐、`message_cache` 数据/FTS 迁移、失败回滚及未来版本拒绝
 - **MCP 权限**：SDK 内置 MCP 仅允许已知 mmag 能力；外部 MCP 默认不连接，需通过 `MCP_ALLOWED_TOOLS` 精确授权 `mcp_<server>_<tool>`
 - **消息可靠性**：重复 `posted` 事件在 Runtime 调用前按持久化 post ID 去重；创建回复使用 `pending_post_id` 对瞬时故障做有界幂等重试
+- **Runtime 边界**：应用层统一使用不可变 `RunRequest` / `AgentResult` 和 `AgentRuntime`，SDK/Legacy 的异常与 fallback 由 Adapter 收口
 - **Prompt 资源**：默认使用 wheel 内置 `prompts.yml`；开发时可设置 `PROMPTS_PATH` 显式覆盖
 - **工程门禁**：`make verify` 是本地与 CI 的统一入口，依赖由提交到仓库的 `uv.lock` 固定
 - **长期运行注意**：message_log 持续累积，生产环境建议定期 `VACUUM INTO` 归档老消息（参考月度一次），避免 SQLite 库文件膨胀影响性能（数据保留周期按团队合规要求自行决定）

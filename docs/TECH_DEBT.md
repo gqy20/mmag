@@ -20,10 +20,9 @@
 - 方案参考: 加 401 专项告警 + 重连次数熔断 + Token 有效性探测
 
 ### 3. LLM 异常类型不细分
-- 位置: `src/mmag/llm.py:50-74, 88-153`
-- 问题: `APITimeoutError` / `RateLimitError` / `BadRequestError` / `PermissionDeniedError` / 内容审核拦截 — **全部**包装为 `LLMError`,调用方无法区分
-- 调用方 (`src/mmag/agent.py:471-474`) 一律返回 "LLM 暂时不可用",**对审核拦截给这个提示是误导**(再久也复现)
-- 方案参考: 拆 `LLMError` 为 `LLMTimeout` / `LLMRateLimit` / `LLMRejected` / `LLMUnavailable`,agent 层按类型做不同 fallback
+- 已完成：Runtime Adapter 将后端异常统一翻译为 timeout / rate-limit / rejected / unavailable / internal，应用层不再导入两套私有异常
+- 剩余：当前翻译仍部分依赖异常链与消息特征；需要在底层保留 Anthropic/SDK 的结构化 status、request ID 和 retry-after
+- 剩余：用户提示尚未按 rejected / rate-limit 等类别细分
 
 ### 4. LLM 失败无指标、无降级
 - 位置: `src/mmag/agent.py:471-474`
@@ -243,7 +242,8 @@
 | 2026-07-31 | SQLite 版本化 migration：旧库升级、FTS 重建、幂等、回滚和未来版本拒绝 |
 | 2026-07-31 | 安全边界收紧：Secret 零片段日志、真实路径边界、SDK/外部 MCP 显式白名单 |
 | 2026-07-31 | `Memory.log_message` 主表与 FTS 多步写入失败时完整回滚 |
-| 2026-07-31 | CI / `make verify` 工程门禁：Ruff、204 个离线测试、43.59% 分支覆盖率、mypy、wheel smoke |
+| 2026-07-31 | CI / `make verify` 工程门禁：Ruff、221 个离线测试、46.24% 分支覆盖率、mypy、wheel smoke |
 | 2026-07-31 | `prompts.yml` 打入 wheel，并支持 `PROMPTS_PATH` 覆盖；提交可复现 `uv.lock` |
 | 2026-07-31 | ToolRegistry 正确收集 async generator，并清零 26 个源码文件的 mypy 错误 |
 | 2026-07-31 | 重复 posted 事件持久化去重；Mattermost 回复以 `pending_post_id` 实现安全有界重试 |
+| 2026-07-31 | 统一 Runtime 契约与 SDK/Legacy Adapter；`Agent`、`MemoryCompactor` 迁移到 Runtime Port |

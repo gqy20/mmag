@@ -19,21 +19,20 @@
 - 已建立版本化 SQLite migration，覆盖新库初始化、旧字段补齐、旧消息/FTS 迁移、幂等、失败回滚和未来版本拒绝；
 - `Memory` 不再负责建表和历史 schema 升级；业务消息与 FTS 写入也具备失败回滚；
 - Secret 日志、文件路径和 MCP 工具已经改为显式安全边界；
-- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `204 passed, 2 deselected`、43.59% 分支覆盖率、26 个源码文件 mypy 零错误；
+- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `221 passed, 2 deselected`、46.24% 分支覆盖率、29 个源码文件 mypy 零错误；
 - `uv.lock` 已提交，默认 Prompt 已作为 wheel 资源发布并通过隔离 smoke test。
 - 重复 posted 事件已在执行前去重，Mattermost 回复已具备带 `pending_post_id` 的安全有界重试。
 
-Phase 0 已完成，当前进入 Runtime 契约；Capability 统一仍未开始。
+Phase 0 与 Runtime 契约已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port，SDK/Legacy 通过相同契约测试。当前进入 Capability 单一来源。
 
 下一步不直接拆分 `Agent` 或引入多 Agent，而是按以下依赖顺序推进：
 
 | 顺序 | 实施包 | 核心产出 | 为什么先做 |
 |---|---|---|---|
 | 1 | 收口 Phase 0 工程门禁（完成） | CI、coverage 基线、类型检查基线、wheel smoke test | 让后续每次重构都有自动回归门禁 |
-| 2 | Runtime 契约 | `RunRequest`、`AgentResult`、`AgentRuntime` 与统一错误模型 | 先稳定调用边界，再替换内部实现 |
+| 2 | Runtime 契约（完成） | `RunRequest`、`AgentResult`、`AgentRuntime` 与统一错误模型 | 先稳定调用边界，再替换内部实现 |
 | 3 | Capability 单一来源 | `CapabilitySpec`、执行器、一个只读能力的双 Runtime binding | 用垂直切片验证工具不再重复定义 |
-| 4 | Runtime 适配与切换 | SDK/LangGraph Adapter、默认路径和回退策略 | 消除上层对两套 Runtime 细节的判断 |
-| 5 | 入口与执行解耦 | `InboundEvent`、按会话分区的执行队列、Outbox | 在统一执行协议后再引入并发和恢复 |
+| 4 | 入口与执行解耦 | `InboundEvent`、按会话分区的执行队列、Outbox | 在统一执行协议后再引入并发和恢复 |
 
 可执行任务、边界和验收标准以 [`ROADMAP.md`](./ROADMAP.md) 为准；本文档保留目标架构和设计理由。
 
@@ -622,20 +621,21 @@ infrastructure/adapters → application → domain
 
 工作项：
 
-- 定义 `AgentRuntime`、`RunRequest`、`AgentResult`；
-- 定义单一 `CapabilitySpec` 和 `CapabilityExecutor`；
-- 从同一 Capability 生成 SDK、Anthropic 和 MCP binding；
-- 统一错误、超时、重试、来源和审计结构；
-- MemoryCompactor 通过 Runtime Port 调用模型；
-- 选定默认 Runtime，另一套仅作为 Adapter/回退；
-- 删除重复工具实现。
+- [x] 定义 `AgentRuntime`、`RunRequest`、`AgentResult`；
+- [ ] 定义单一 `CapabilitySpec` 和 `CapabilityExecutor`；
+- [ ] 从同一 Capability 生成 SDK、Anthropic 和 MCP binding；
+- [ ] 统一能力来源和审计结构；
+- [x] Runtime 统一错误、deadline 和 fallback 语义；
+- [x] MemoryCompactor 通过 Runtime Port 调用模型；
+- [x] 选定默认 Runtime，另一套仅作为启动回退；
+- [ ] 删除重复工具实现。
 
 退出标准：
 
-- 同一能力只存在一份 schema、handler 和策略；
-- 两个 Runtime 通过同一组契约测试；
-- 上层不再判断 SDK/Legacy 特有异常；
-- MCP 能力对不同 Runtime 的可见性一致。
+- [ ] 同一能力只存在一份 schema、handler 和策略；
+- [x] 两个 Runtime 通过同一组契约测试；
+- [x] 上层不再判断 SDK/Legacy 特有异常；
+- [ ] MCP 能力对不同 Runtime 的可见性一致。
 
 ### Phase 2：解耦入口和执行
 
@@ -808,23 +808,23 @@ infrastructure/adapters → application → domain
 - [x] 门禁失败能明确指出是代码质量、行为、类型还是打包问题；
 - [x] 失败重试和重复事件行为有稳定契约。
 
-### 15.3 实施包 B：建立 Runtime 契约
+### 15.3 实施包 B：建立 Runtime 契约（完成）
 
 目标：让应用层只依赖统一执行协议，不感知 Claude Agent SDK 或 LangGraph 细节。
 
 实施内容：
 
-- 定义不可变 `RunContext`、`RunRequest` 和结构化 `AgentResult`；
-- 定义 `AgentRuntime` Protocol，以及 timeout、rate-limit、rejected、unavailable 等统一错误；
-- 用现有实现包装 SDK/LangGraph Adapter，先保持行为不变；
-- 将 `MemoryCompactor` 等模型调用方改为依赖 Runtime Port；
-- 冻结两条现有路径的行为差异，形成默认 Runtime 和淘汰策略 ADR。
+- [x] 定义不可变 `RunContext`、`RunRequest` 和结构化 `AgentResult`；
+- [x] 定义 `AgentRuntime` Protocol，以及 timeout、rate-limit、rejected、unavailable 等统一错误；
+- [x] 用现有实现包装 SDK/LangGraph Adapter，保持外部行为不变；
+- [x] 将 `Agent`、`MemoryCompactor` 改为依赖 Runtime Port；
+- [x] 形成默认 Runtime 和 Legacy 淘汰策略 ADR。
 
 验收标准：
 
-- `Agent` 不再直接判断 Runtime 私有异常或返回结构；
-- 两个 Adapter 通过同一组 contract tests；
-- 切换 Runtime 不改变消息路由和回复投递接口。
+- [x] `Agent` 不再直接判断 Runtime 私有异常或返回结构；
+- [x] 两个 Adapter 通过同一组 contract tests；
+- [x] 切换 Runtime 不改变消息路由和回复投递接口。
 
 ### 15.4 实施包 C：Capability 单一来源
 
