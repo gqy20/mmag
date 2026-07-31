@@ -1,6 +1,6 @@
 import json
 from dataclasses import FrozenInstanceError
-from unittest.mock import MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -10,6 +10,7 @@ from mmag.capabilities import (
     SourcePolicy,
     bind_legacy_capability,
     bind_sdk_capability,
+    create_analyze_link_capability,
     create_get_channel_info_capability,
     create_get_posts_capability,
     create_get_user_profile_capability,
@@ -240,3 +241,37 @@ async def test_user_profile_preserves_empty_profile_message():
     ).handler(user_id="user-1")
 
     assert result == {"username": "alice", "note": "暂无画像信息，该用户尚未发言或画像未建立"}
+
+
+@pytest.mark.asyncio
+async def test_analyze_link_applies_source_policy_equally_to_both_bindings(monkeypatch):
+    analyze_url = AsyncMock(
+        return_value={
+            "url": "https://example.com/docs",
+            "kind": "webpage",
+            "status": "ok",
+            "title": "Example Docs",
+            "summary": "Useful content",
+            "metadata": {"og": {"site_name": "Example"}},
+        }
+    )
+    monkeypatch.setattr("mmag.url_analyzer.analyze_url", analyze_url)
+    spec = create_analyze_link_capability(MagicMock())
+
+    legacy_result = await bind_legacy_capability(spec).handler(url="https://example.com/docs")
+    sdk_result = json.loads(
+        (await bind_sdk_capability(spec).handler({"url": "https://example.com/docs"}))[
+            "content"
+        ][0]["text"]
+    )
+
+    assert spec.source_policy is SourcePolicy.AUTO
+    assert legacy_result == sdk_result
+    assert legacy_result["_sources"] == [
+        {
+            "url": "https://example.com/docs",
+            "title": "Example Docs",
+            "tool": "analyze_link",
+            "kind": "webpage",
+        }
+    ]
