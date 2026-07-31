@@ -185,6 +185,7 @@ Bot 支持三种触发方式：
 - [技术债清单](docs/TECH_DEBT.md)：具体问题、风险和建议拆分方向；
 - [Runtime 选择 ADR](docs/adr/0001-runtime-selection.md)：默认 Runtime、失败边界和 Legacy 退出条件；
 - [Capability 授权 ADR](docs/adr/0002-capability-authorization.md)：写能力三态裁决、默认策略和审批扩展边界；
+- [请求级 Capability Context ADR](docs/adr/0003-request-scoped-capability-context.md)：异步上下文隔离与持久 SDK 桥接策略；
 - [Mattermost ID 指南](docs/MATTERMOST_ID_GUIDE.md)：Team、Channel 和 User ID 的获取与配置。
 
 ## 记忆系统

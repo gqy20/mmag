@@ -28,6 +28,8 @@
 - `get_user_profile` 已迁移到 Capability Catalog，画像与用户名组合读取并发执行且两端共享排序和空结果语义
 - `analyze_link` 已迁移到独立 Capability 模块，`SourcePolicy.AUTO` 由统一执行器注入可审计来源，删除 SDK 私有来源实现
 - `save_knowledge` 已迁移为 `WRITE` Capability；统一 Authorizer 支持允许、拒绝和待审批，并在副作用前完成裁决
+- `send_file` 已迁移为声明 `mattermost:file:write` 的 Capability；请求级不可变上下文替代全局 `ToolContext.current_post`
+- Claude SDK 持久 MCP transport 通过查询串行化桥接请求上下文，避免并发请求的文件意图、频道和线程串线
 
 ## 0.1.0 (2026-06-11) — 初始发布
 

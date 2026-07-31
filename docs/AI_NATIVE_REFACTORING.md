@@ -19,11 +19,11 @@
 - 已建立版本化 SQLite migration，覆盖新库初始化、旧字段补齐、旧消息/FTS 迁移、幂等、失败回滚和未来版本拒绝；
 - `Memory` 不再负责建表和历史 schema 升级；业务消息与 FTS 写入也具备失败回滚；
 - Secret 日志、文件路径和 MCP 工具已经改为显式安全边界；
-- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `234 passed, 2 deselected`、50.53% 分支覆盖率、34 个源码文件 mypy 零错误；
+- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `236 passed, 2 deselected`、50.60% 分支覆盖率、36 个源码文件 mypy 零错误；
 - `uv.lock` 已提交，默认 Prompt 已作为 wheel 资源发布并通过隔离 smoke test。
 - 重复 posted 事件已在执行前去重，Mattermost 回复已具备带 `pending_post_id` 的安全有界重试。
 
-Phase 0 与 Runtime 契约已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port，SDK/Legacy 通过相同契约测试。七个共享内置 Capability 已完成单一来源迁移，来源与写入三态策略进入执行链；当前剩余 `send_file` 上下文迁移和 MCP Policy 可见性统一。
+Phase 0 与 Runtime 契约已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port，SDK/Legacy 通过相同契约测试。八个内置 Capability 已完成单一来源迁移，来源与写入三态策略进入执行链；全局 `ToolContext.current_post` 已由请求级不可变上下文替代，当前剩余 MCP Policy 可见性统一。
 
 下一步不直接拆分 `Agent` 或引入多 Agent，而是按以下依赖顺序推进：
 
@@ -183,14 +183,14 @@ flowchart LR
 - 缺少排队、背压、超时、取消和任务恢复；
 - 重启后无法判断任务是未开始、运行中、已完成还是已投递。
 
-#### D. 请求状态是全局可变状态
+#### D. 请求状态仍包含全局可变部分（部分解决）
 
-- `ToolContext.current_post` 是所有请求共享的单槽；
+- 已解决：`ToolContext.current_post` 已替换为请求级不可变 `CapabilityContext`；
 - `TraceContext` 使用全局可变字典；
 - `working_memory` 由 `Agent` 直接维护；
 - 全局 `config` 会在 SDK 初始化失败时被运行期修改。
 
-引入并发后可能出现工具读取了另一条消息的上下文、trace 串线、配置状态漂移等问题。
+文件能力的消息上下文已有并发隔离契约；全面引入并发后，仍可能出现 trace 串线、工作内存竞争和配置状态漂移等问题。
 
 #### E. Memory 还不是企业上下文平台
 
@@ -629,6 +629,7 @@ infrastructure/adapters → application → domain
 - [x] MemoryCompactor 通过 Runtime Port 调用模型；
 - [x] 选定默认 Runtime，另一套仅作为启动回退；
 - [x] 删除共享内置工具的重复实现。
+- [x] 将 `send_file` 纳入写能力策略，并消除全局当前消息槽。
 
 退出标准：
 
@@ -646,8 +647,8 @@ infrastructure/adapters → application → domain
 - 引入 `InboundEvent`、Inbox 和 Outbox；
 - 使用 `conversation_id` 分区：同会话串行、跨会话并发；
 - 将附件、摘要和长任务移出 WebSocket 读取循环；
-- 引入不可变 `RunContext` 和 `ContextVar` 日志上下文；
-- 删除全局 `current_post`；
+- 扩展不可变 `RunContext` 和 `ContextVar` 日志上下文；
+- [x] 删除全局 `current_post`，先建立请求级 `CapabilityContext`；
 - 增加幂等、背压、超时、取消和优雅关闭；
 - Mattermost REST 迁移为有 timeout/retry 的异步 Client。
 
@@ -837,6 +838,7 @@ infrastructure/adapters → application → domain
 - [ ] 从同一 Capability 生成 ToolRegistry、SDK 和后续 MCP binding（ToolRegistry/SDK 已验证）；
 - [x] 统一共享内置能力的来源信息、超时和错误字段；
 - [x] 逐个迁移共享内置工具，删除重复实现。
+- [x] 将文件发送迁移为受授权的写 Capability，并建立请求上下文隔离；
 
 验收标准：
 
@@ -854,7 +856,7 @@ infrastructure/adapters → application → domain
 - 以 `conversation_id` 分区，同会话串行、跨会话并发；
 - 将执行结果写入 Outbox，再由投递器发送；
 - 建立事件幂等、背压、取消、超时和优雅关闭语义；
-- 删除全局 `current_post`，使用不可变上下文贯穿日志和能力调用。
+- [x] 删除全局 `current_post`，使用不可变上下文贯穿当前能力调用；
 
 验收标准：
 

@@ -4,7 +4,7 @@
 >
 > 更新时间：2026-07-31
 >
-> 当前阶段：Step 3 Capability 单一来源
+> 当前阶段：Step 3 Capability / MCP Policy 收口
 >
 > 架构依据：[`AI_NATIVE_REFACTORING.md`](./AI_NATIVE_REFACTORING.md)
 
@@ -28,10 +28,11 @@
 - [x] 将默认 Prompt 打入 wheel，并在隔离目录验证包、CLI 模块和 Prompt 加载；
 - [x] 重复 posted 事件在 Runtime 前按持久化 post ID 去重；
 - [x] Mattermost 回复使用 `pending_post_id` 对网络错误、超时、429/5xx 做有界幂等重试；
-- [x] 默认离线测试基线达到 `234 passed, 2 deselected`，实际分支覆盖率 `50.53%`；
+- [x] 默认离线测试基线达到 `236 passed, 2 deselected`，实际分支覆盖率 `50.60%`；
 - [x] 建立不可变 Runtime 输入/输出、统一错误模型和 SDK/Legacy Adapter；
 - [x] `Agent` 与 `MemoryCompactor` 已只依赖 `AgentRuntime` Port；
-- [x] 建立 Capability 核心契约，并完成 `get_channel_info` 双 Runtime 垂直切片。
+- [x] 建立 Capability 核心契约，八个内置能力均已迁移到单一 Spec；
+- [x] 删除全局 `ToolContext.current_post`，文件能力改用请求级不可变上下文。
 
 下一阶段尚未完成：
 
@@ -149,7 +150,9 @@ Managed Agent 与 Router
 
 不先设计覆盖所有未来 Agent 的万能抽象。首个切片只需要证明“一份 schema + 一份 handler + 多 Runtime binding”成立，再根据第二、第三个能力暴露出的差异扩展协议。
 
-当前七个共享内置能力都由单一 Spec 驱动 JSON Schema、SDK 类型映射和 handler。统一执行器负责参数校验、deadline、来源和稳定错误码；`CapabilityAuthorizer` 已能在副作用前返回允许、拒绝或待审批。默认策略只拒绝未声明权限的写能力，按用户/作用域授权仍需在企业 Context 阶段接入。
+当前八个内置能力都由单一 Spec 驱动 JSON Schema、SDK 类型映射和 handler。统一执行器负责参数校验、deadline、来源和稳定错误码；`CapabilityAuthorizer` 已能在副作用前返回允许、拒绝或待审批。默认策略只拒绝未声明权限的写能力，按用户/作用域授权仍需在企业 Context 阶段接入。
+
+`send_file` 也已成为声明 `mattermost:file:write` 的 Capability。普通异步链路用 `ContextVar` 绑定不可变 `CapabilityContext`；Claude SDK 的持久 MCP reader 无法继承后续 task context，因此 SDK 查询通过实例级锁串行执行，并在查询生命周期内桥接、清理同一份上下文。该设计消除了跨频道覆盖 `current_post` 的竞态，但不等于 Step 4 的跨会话并行调度已经完成。
 
 ### 下一步顺序
 
@@ -159,7 +162,7 @@ Managed Agent 与 Router
 4. [x] 迁移 `get_user_profile`，收口 Memory 与 Mattermost 的组合读取；
 5. [x] 迁移 `analyze_link`，让 `SourcePolicy.AUTO` 真正驱动来源注入；
 6. [x] 迁移 `save_knowledge`，为 `WRITE` 能力接入确定性的权限检查和未来审批钩子；
-7. [ ] 单独处理 `send_file`：它依赖当前消息意图和文件边界，应与 Step 4 的不可变 `RunContext` 一起消除全局 `ToolContext.current_post`；
+7. [x] 将 `send_file` 迁移为受治理的写 Capability，并用请求级不可变上下文消除全局 `ToolContext.current_post`；
 8. [ ] 最后让外部 MCP 进入同一 Catalog/Policy 可见性链路，并删除两套重复工厂与 formatter。
 
 ### 退出标准
@@ -183,7 +186,7 @@ Managed Agent 与 Router
 - [ ] 将附件处理、摘要和长任务移出 WebSocket 读取循环；
 - [ ] 建立 Outbox 与独立 Delivery；
 - [ ] 增加背压、取消、deadline 和优雅关闭；
-- [ ] 删除全局 `current_post`，用不可变 `RunContext` 传递运行上下文；
+- [x] 删除全局 `current_post`，先用不可变 `CapabilityContext` 贯穿能力调用；
 - [ ] Mattermost REST 迁移到带 timeout/retry 的异步 Client。
 
 ### 退出标准
