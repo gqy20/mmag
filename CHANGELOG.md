@@ -8,6 +8,7 @@
 - 新增版本化 SQLite migration，支持旧库升级、失败回滚、历史校验和未来版本拒绝
 - 将 schema 初始化、旧 `message_cache` 迁移与 CJK FTS 预处理从 `Memory` 下沉到 SQLite infrastructure
 - Runtime 失败提示现在会投递给用户，不再被发送层静默丢弃
+- 重整 AI Native 路线图，明确工程门禁、Runtime、Capability、执行解耦和企业 Context 的实施顺序与验收标准
 
 ## 0.1.0 (2026-06-11) — 初始发布
 

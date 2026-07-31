@@ -1,6 +1,6 @@
 # mmag AI Native 协同架构重构方案
 
-> 状态：Draft / 方案讨论稿  
+> 状态：Active / 分阶段实施中
 > 基线日期：2026-07-31  
 > 适用版本：mmag 0.1.x（当前 `main`）  
 > 输入依据：当前代码、现有 Roadmap/Tech Debt、`ai_native.png` 架构图
@@ -9,7 +9,7 @@
 
 ### 实施进度
 
-截至 2026-07-31，Phase 0 已完成第一批测试护栏：
+截至 2026-07-31，Phase 0 已完成第一批测试护栏和数据演进基础：
 
 - 默认 pytest 不再收集 `tests/poc`；
 - 真实 Mattermost、LLM 和公网测试统一标记为 `external`，默认不执行；
@@ -20,6 +20,18 @@
 - `Memory` 不再负责建表和历史 schema 升级，默认离线基线为 `186 passed, 2 deselected`。
 
 尚未完成：CI、coverage、类型检查、wheel 资源打包和 Runtime/Capability 统一。
+
+下一步不直接拆分 `Agent` 或引入多 Agent，而是按以下依赖顺序推进：
+
+| 顺序 | 实施包 | 核心产出 | 为什么先做 |
+|---|---|---|---|
+| 1 | 收口 Phase 0 工程门禁 | CI、coverage 基线、类型检查基线、wheel smoke test | 让后续每次重构都有自动回归门禁 |
+| 2 | Runtime 契约 | `RunRequest`、`AgentResult`、`AgentRuntime` 与统一错误模型 | 先稳定调用边界，再替换内部实现 |
+| 3 | Capability 单一来源 | `CapabilitySpec`、执行器、一个只读能力的双 Runtime binding | 用垂直切片验证工具不再重复定义 |
+| 4 | Runtime 适配与切换 | SDK/LangGraph Adapter、默认路径和回退策略 | 消除上层对两套 Runtime 细节的判断 |
+| 5 | 入口与执行解耦 | `InboundEvent`、按会话分区的执行队列、Outbox | 在统一执行协议后再引入并发和恢复 |
+
+可执行任务、边界和验收标准以 [`ROADMAP.md`](./ROADMAP.md) 为准；本文档保留目标架构和设计理由。
 
 ## 1. 文档目的
 
@@ -585,13 +597,13 @@ infrastructure/adapters → application → domain
 
 工作项：
 
-- 建立隔离的 test suite，PoC 和真实服务测试不进入默认集合；
-- 增加 `WS → Route → Runtime → Capability → Reply` 契约测试；
-- 覆盖显式召唤、沉默、附件、工具、多轮、失败和重试；
+- [x] 建立隔离的 test suite，PoC 和真实服务测试不进入默认集合；
+- [x] 增加首条离线 `Message → Route → Runtime → Reply` 主链契约测试；
+- [ ] 补齐附件、工具、多轮、重试和幂等场景；
 - [x] 引入数据库 schema version 和正式 migration；
-- 建立 CI：ruff、pytest、coverage、类型检查；
-- 修复 wheel 未包含运行资源的问题；
-- 校正文档与当前代码的版本漂移。
+- [ ] 建立 CI：ruff、pytest、coverage、类型检查；
+- [ ] 修复 wheel 未包含运行资源的问题；
+- [x] 校正文档与当前代码的版本漂移。
 
 退出标准：
 
@@ -758,20 +770,102 @@ infrastructure/adapters → application → domain
 | SQLite 并发策略不清 | 锁、损坏或数据不一致 | 单写者/事务边界/Repository 测试 |
 | 文档愿景被误认为现状 | 错误决策 | 明确 Current/Planned 状态并持续更新 |
 
-## 15. 第一批实施清单
+## 15. 下一步实施思路
 
-建议第一个重构迭代只处理以下内容：
+### 15.1 总体方法
 
-1. 将 `tests/poc` 和真实服务测试从默认测试集合隔离；
-2. 新增一条完全离线的消息主链契约测试；
-3. 定义 `InboundEvent`、`RunContext`、`RunRequest`、`AgentResult`；
-4. 定义 `AgentRuntime` Protocol，在现有 Agent 后面先加适配层；
-5. 定义 `CapabilitySpec`，选一个只读工具验证双 Runtime binding；
-6. 引入数据库 schema version；
-7. 修复当前权限边界中的 MCP 全放行和路径前缀判断；
-8. 记录并冻结 SDK 与 Legacy 的差异，确定默认路径和淘汰策略。
+后续重构遵循六条原则：
 
-该迭代不移动所有文件，不引入多 Agent，不改变 Mattermost 用户交互。它的目标是建立后续重构所依赖的稳定契约。
+1. **契约先于搬文件**：先用输入、输出、错误和测试定义边界，再移动实现。
+2. **适配先于替换**：现有 SDK 和 LangGraph 先包进统一 Adapter，不在同一迭代重写其内部逻辑。
+3. **垂直切片先于批量迁移**：先迁移一个只读 Capability，跑通 schema、执行、来源和审计，再迁移其余工具。
+4. **外部行为保持稳定**：Phase 1 不改变 Mattermost 触发方式、回复格式和数据库格式。
+5. **数据演进必须可验证**：所有持久化变化继续使用 forward-only migration，并覆盖旧库升级和失败回滚。
+6. **保持模块化单体**：当前优先建立清晰模块边界，不提前引入微服务、分布式队列或复杂控制面。
+
+### 15.2 实施包 A：收口 Phase 0（下一步）
+
+目标：把本地已通过的基线变成每次变更都必须通过的工程门禁。
+
+实施内容：
+
+- 增加 CI，执行 Ruff、默认离线 pytest、coverage 和宽松模式类型检查；
+- 首次采集 coverage，只对核心模块设置可持续提高的最低阈值；
+- 构建 wheel 后在隔离环境执行导入、CLI 和 `prompts.yml` 加载 smoke test；
+- 将 external/PoC 测试保留为显式任务，不让密钥和公网依赖进入默认 CI；
+- 补齐当前主链尚缺的附件、工具、多轮、失败重试和重复事件测试。
+
+验收标准：
+
+- 干净环境中一条命令可完成 lint、测试、类型检查和构建验证；
+- 默认 CI 不访问真实 Mattermost、LLM 或公网；
+- wheel 安装后无需仓库源码目录即可启动并加载运行资源；
+- 门禁失败能明确指出是代码质量、行为、类型还是打包问题。
+
+### 15.3 实施包 B：建立 Runtime 契约
+
+目标：让应用层只依赖统一执行协议，不感知 Claude Agent SDK 或 LangGraph 细节。
+
+实施内容：
+
+- 定义不可变 `RunContext`、`RunRequest` 和结构化 `AgentResult`；
+- 定义 `AgentRuntime` Protocol，以及 timeout、rate-limit、rejected、unavailable 等统一错误；
+- 用现有实现包装 SDK/LangGraph Adapter，先保持行为不变；
+- 将 `MemoryCompactor` 等模型调用方改为依赖 Runtime Port；
+- 冻结两条现有路径的行为差异，形成默认 Runtime 和淘汰策略 ADR。
+
+验收标准：
+
+- `Agent` 不再直接判断 Runtime 私有异常或返回结构；
+- 两个 Adapter 通过同一组 contract tests；
+- 切换 Runtime 不改变消息路由和回复投递接口。
+
+### 15.4 实施包 C：Capability 单一来源
+
+目标：消除 `tools/builtin.py` 与 `sdk_tools.py` 的 schema、handler 和格式化逻辑重复。
+
+实施内容：
+
+- 定义 `CapabilitySpec`、`CapabilityResult`、权限/副作用元数据和执行器；
+- 选择 `get_channel_info` 作为首个只读切片；
+- 从同一 Capability 生成 ToolRegistry、SDK 和后续 MCP binding；
+- 统一来源信息、超时、错误和审计字段；
+- 验证后再逐个迁移其余内置工具，最后删除重复实现。
+
+验收标准：
+
+- 同一能力只有一份输入 schema 和 handler；
+- SDK/LangGraph 对相同输入产生等价结果；
+- 写能力能被明确标记，并为后续审批策略保留边界。
+
+### 15.5 实施包 D：入口与执行解耦
+
+目标：解决 WebSocket 读取循环等待完整 LLM/工具链的问题，为多人并发和任务恢复打基础。
+
+实施内容：
+
+- 定义与 Mattermost 无关的 `InboundEvent`；
+- 以 `conversation_id` 分区，同会话串行、跨会话并发；
+- 将执行结果写入 Outbox，再由投递器发送；
+- 建立事件幂等、背压、取消、超时和优雅关闭语义；
+- 删除全局 `current_post`，使用不可变上下文贯穿日志和能力调用。
+
+验收标准：
+
+- 慢任务不阻塞其他频道；
+- 重复事件不重复执行或回复；
+- Agent 成功但投递失败时只重试投递；
+- 并发测试中不存在会话、文件和 trace 串线。
+
+### 15.6 后续阶段
+
+入口与执行稳定后，再依次推进：
+
+1. 拆分 Message/Profile/Knowledge/Summary Repository，建立最小 Scope、Task、Run、Artifact 模型；
+2. 引入 Agent Registry 和确定性 Router，将 Link Agent 作为首个 Managed Agent；
+3. 最后增加策略审批、模型网关、审计、保留策略和私有化运维能力。
+
+在 Runtime、Capability 和执行队列稳定前，不新增第二个 Managed Agent，也不进行微服务拆分。
 
 ## 16. 待确认的架构决策
 

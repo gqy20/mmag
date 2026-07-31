@@ -1,139 +1,239 @@
 # Roadmap
 
-> 项目当前处于 **0.1.x 阶段** — 快速迭代,小版本发布频繁,主要做稳定性补丁、错误处理、可观测、测试与文档。
-> 0.1.0 已发布(2026-06-11),后续版本号 (0.1.1, 0.1.2, ...) 按完成里程碑的实际内容签发,不强绑定。
-> 详细的"问题清单"见 [`TECH_DEBT.md`](./TECH_DEBT.md),每个里程碑范围都从那里引用。
+> 状态：Active
+>
+> 更新时间：2026-07-31
+>
+> 当前阶段：Phase 0 收口
+>
+> 架构依据：[`AI_NATIVE_REFACTORING.md`](./AI_NATIVE_REFACTORING.md)
 
----
+本文档是 mmag 的可执行路线图，回答“下一步做什么、先后依赖是什么、做到什么算完成”。目标架构和设计理由由 `AI_NATIVE_REFACTORING.md` 维护，具体问题由 [`TECH_DEBT.md`](./TECH_DEBT.md) 跟踪。
 
-## 当前阶段: 0.1.x — 稳定性与质量
+## 1. 当前基线
 
-不做大架构改动,不做破坏性 API 变更。每个里程碑完成后直接发版。
+截至 2026-07-31，已经完成：
 
-### 0.1.1 — 稳定性补丁
+- [x] PoC 和真实外部服务测试退出默认 pytest 集合；
+- [x] 建立完全离线的消息主链契约测试；
+- [x] 修复 Runtime 失败提示被发送层静默丢弃的问题；
+- [x] 建立 SQLite schema version 和 forward-only migration；
+- [x] 覆盖新库初始化、旧库升级、FTS 重建、幂等、回滚和未来版本拒绝；
+- [x] 将 schema、migration 和 CJK FTS 预处理从 `Memory` 下沉到 infrastructure；
+- [x] 默认离线测试基线达到 `186 passed, 2 deselected`，Ruff 通过。
 
-**目标**: 网络抖动与认证失效场景下,Bot 不静默失能
+当前还没有完成：
 
-**范围** (引自 `TECH_DEBT.md` #1, #2):
-- MMClient REST 调用加重试(指数退避)
-- WebSocket 401 告警(运维侧可感知 Token 过期)
-- WebSocket 重连熔断(连续失败 N 次后停,不再无限重连)
+- [ ] 自动化 CI 门禁；
+- [ ] coverage 和类型检查基线；
+- [ ] wheel 运行资源打包验证；
+- [ ] Runtime/Capability 统一；
+- [ ] WebSocket 入口与长任务执行解耦。
 
-**不做**:
-- 任何架构拆分(留给 0.2.0)
-- LLM 异常分类(留给 0.1.2)
-- 测试基础设施(留给 0.1.3)
+## 2. 实施原则
 
-**验收**:
-- 模拟网络抖动 1 分钟内自动恢复
-- Token 过期 5 分钟内有日志告警
-- 0.1.1 版本起无"P0 级"未修复 bug
+1. **依赖顺序优先**：工程门禁 → Runtime → Capability → 执行解耦 → Context → Managed Agent → 治理。
+2. **契约优先**：每个边界先定义类型、错误和测试，再迁移调用方。
+3. **垂直切片**：先迁移一个能力验证全链路，不批量复制新结构。
+4. **兼容迁移**：Mattermost 交互和现有数据库在过渡期保持兼容。
+5. **单一事实来源**：工具 schema、handler、权限和结果格式不能继续在两个 Runtime 中分别维护。
+6. **模块化单体**：没有容量或隔离证据前，不拆微服务，不引入分布式基础设施。
 
----
+## 3. 推荐实施顺序
 
-### 0.1.2 — 错误处理与可观测
+```text
+Phase 0 工程门禁
+  ↓
+Runtime 契约与 Adapter
+  ↓
+Capability 单一来源
+  ↓
+入口 / 执行 / 投递解耦
+  ↓
+企业 Context 与任务状态
+  ↓
+Managed Agent 与 Router
+  ↓
+治理、审计与私有化运维
+```
 
-**目标**: 失败可定位,失败可恢复
+前一阶段的退出标准，是后一阶段开始大规模改动的前置条件。
 
-**范围** (引自 `TECH_DEBT.md` #3, #4, #13):
-- LLM 异常分类(`LLMTimeout` / `LLMRateLimit` / `LLMRejected` / `LLMUnavailable`),agent 层按类型做不同 fallback
-- 错误日志统一加上下文(`channel_id` / `post_id` / `batch_size` / `model` 等)
-- 统一错误处理规范文档(进 `docs/`)
-- `Agent.stats` 增 `llm_failures` / `mm_failures` 等指标字段
-- LLM 限流时指数退避重试(SDK 默认 0 次,改为最多 3 次)
+## 4. Step 1：收口 Phase 0 工程门禁（下一步）
 
-**不做**:
-- 完整监控/告警系统(留给 1.0.0)
-- 性能基线(留给 1.0.0)
+### 目标
 
-**验收**:
-- LLM 限流 1 分钟内自动恢复,无连续 10 条相同错误提示
-- 所有 `log.error` 含可定位上下文字段
-- 至少有 1 个 `docs/ERROR_HANDLING.md` 规范
+把当前本地基线固化为自动门禁，并证明发布产物可以脱离源码仓库运行。
 
----
+### 工作项
 
-### 0.1.3 — 测试基础设施与覆盖率
+- [ ] 引入 `pytest-cov`，记录当前覆盖率并设置初始阈值；
+- [ ] 引入宽松模式 `mypy`，只检查 `src/mmag`，先生成可控基线；
+- [ ] 建立 `.github/workflows/ci.yml`，依次执行 Ruff、默认离线测试、coverage、mypy 和 wheel 构建；
+- [ ] 增加 wheel smoke test：隔离安装后验证 `import mmag`、CLI 和 Prompt 加载；
+- [ ] 将 `prompts.yml` 改为明确的包资源或可配置外部资源，消除对仓库目录结构的依赖；
+- [ ] 为消息主链补附件、工具、多轮、失败重试和重复事件测试；
+- [ ] 提供 `make verify` 统一门禁命令，使本地与 CI 使用相同入口。
 
-**目标**: 改代码有安全感
+### 实施思路
 
-**范围** (引自 `TECH_DEBT.md` #5, #27, #29):
-- 补 `conftest.py`,fixture 跨文件复用
-- 补 4 条关键链路 e2e 测试:
-  - WebSocket → 触发 → LLM → 工具调用 → 回复
-  - LLM `agent_loop` 多轮工具调用
-  - 消息路由触发判定
-  - Backfill 分页
-- 补核心模块单元测试(`agent.py` / `memory.py` / `ws_client.py` / `mcp_bridge.py`)
-- 引入 `pytest-cov`,覆盖率 ≥ 50%
-- 引入 mypy(仅 src/ 目录,先 strict=False)
-- 配 GitHub Actions CI(跑 pytest + ruff + mypy)
+- CI 默认不注入 Mattermost/LLM 密钥，也不访问公网；
+- external 和 PoC 测试保留为手动任务，不作为普通变更的稳定性信号；
+- coverage 首先用于暴露盲区，不为了数字给简单代码堆测试；
+- 类型检查先锁定新增代码和核心契约，历史问题分批收敛；
+- wheel smoke test 在临时隔离环境执行，确保不是依赖 editable install 偶然通过。
 
-**不做**:
-- 覆盖率到 80%(留给 0.1.4 或 1.0.0)
-- mypy strict 模式(留给 1.0.0)
+### 退出标准
 
-**验收**:
-- CI 跑通,所有 PR 必过测试 + lint + type check
-- 核心模块单测覆盖率 ≥ 50%
-- 4 条 e2e 链路全部覆盖
+- [ ] 干净环境中一条命令可以执行完整工程门禁；
+- [ ] CI 默认流程完全离线且稳定；
+- [ ] wheel 安装后可以正常导入、显示 CLI 帮助并加载 Prompt；
+- [ ] coverage 和类型检查有明确、不会倒退的基线；
+- [ ] SQLite migration 和消息主链仍通过全部回归测试。
 
----
+## 5. Step 2：建立统一 Runtime 契约
 
-### 0.1.4 — 文档与开发者体验
+### 目标
 
-**目标**: 新人 30 分钟能上手,贡献者 1 小时内能跑通测试
+让应用层只表达“执行一次 Agent Run”，不再依赖 SDK/LangGraph 的参数、返回结构和异常。
 
-**范围** (引自 `TECH_DEBT.md` 部分文档相关项):
-- `docs/ARCHITECTURE.md` 详细架构图(分层 / 数据流 / 关键时序)
-- `docs/ERROR_HANDLING.md` 错误处理规范(从 0.1.2 输出)
-- `docs/CONTRIBUTING.md` 贡献指南(开发环境 / 测试 / 提 PR 流程)
-- `docs/API.md` 工具/MCP 集成参考
-- 处理 2 处 `TODO`(`post_edited` / `post_deleted` 当前是 `_noop`,决定是否实现)
+### 工作项
 
-**不做**:
-- 自动生成 API 文档(留给 1.0.0)
-- 国际化(留给 1.0.0)
+- [ ] 定义不可变 `RunContext`：trace、actor、conversation、scope 和 deadline；
+- [ ] 定义 `RunRequest`：消息、附件、可用能力和执行配置；
+- [ ] 定义 `AgentResult`：文本、结构化产物、能力调用、usage 和状态；
+- [ ] 定义 `AgentRuntime` Protocol；
+- [ ] 统一 timeout、rate-limit、rejected、unavailable 和 internal 错误语义；
+- [ ] 为 SDKLLM 和 Legacy LLM 建立 Adapter；
+- [ ] 让 `MemoryCompactor` 等调用方依赖 Runtime Port；
+- [ ] 形成默认 Runtime 与 Legacy 退出策略 ADR。
 
-**验收**:
-- `docs/` 至少包含: `ARCHITECTURE` / `ERROR_HANDLING` / `CONTRIBUTING` / `API`
-- README 链接到所有 docs
-- TODO 清零或显式延期
+### 实施思路
 
----
+第一轮只包裹现有实现，不同时重写 Agent 循环。先通过 contract tests 证明两个 Adapter 对统一请求和错误语义的行为一致，再逐步迁移调用方。
 
-## 远期(不锁时间,只列方向)
+### 退出标准
 
-### 0.2.0 — 架构清理
+- [ ] 上层代码不导入两套 Runtime 的私有类型和异常；
+- [ ] 两个 Adapter 通过同一组契约测试；
+- [ ] 切换 Runtime 不改变 Mattermost 路由和投递协议；
+- [ ] 每次运行都有稳定的 trace、状态和错误分类。
 
-不做时间承诺,大概率在 0.1.x 全部完成后启动。
+## 6. Step 3：统一 Capability
 
-**核心**: 拆 God class,统一风格
-- 拆 `agent.py`(629 行,7 职责)→ `MessageRouter` / `ContextBuilder` / `TriggerJudge` / `ResponseSender`
-- 拆 `memory.py`(1012 行,7 Repository)→ 5 个独立 Repository
-- 拆 `url_analyzer.py`(725 行)→ `ssrf_guard` / `github_api` / `html_extractor` / `cache`
-- `MMClient` 改 `httpx.AsyncClient`,消除 `requests` 依赖
-- `__init__.py` 不再 eager import,`from mmag import Config` 轻量
-- 依赖清理:`mcp[cli]` → `mcp`,`requests` 删除
-- 配置加 pydantic 校验
+### 目标
 
-**风险**: 大,需要 e2e 测试保底(0.1.3 必须先完成)
+消除 `tools/builtin.py` 与 `sdk_tools.py` 的重复定义，让能力成为可授权、可测试、可审计的一等对象。
 
-### 1.0.0 — 生产就绪
+### 工作项
 
-**核心**: 给运维/客户信心
-- 全套监控告警(metrics 收集 / 异常告警 / 性能基线)
-- 真实环境压测报告(并发 / 长跑 / 内存增长)
-- mypy strict 模式
-- 测试覆盖率 ≥ 80%
-- 完整 changelog + 迁移指南
-- 安全审计(prompt 注入 / 工具越权 / 密钥管理)
+- [ ] 定义 `CapabilitySpec`、`CapabilityResult` 和 `CapabilityExecutor`；
+- [ ] 在 Spec 中声明输入 schema、只读/写入属性、权限、超时和来源策略；
+- [ ] 以 `get_channel_info` 作为第一个只读垂直切片；
+- [ ] 从同一 Spec 生成 ToolRegistry 与 SDK binding；
+- [ ] 统一两条 Runtime 的返回结构、错误和来源信息；
+- [ ] 逐个迁移其他内置工具，最后删除重复 handler/formatter；
+- [ ] 收紧 MCP 默认权限和文件路径判断。
 
----
+### 实施思路
 
-## 修订规则
+不先设计覆盖所有未来 Agent 的万能抽象。首个切片只需要证明“一份 schema + 一份 handler + 多 Runtime binding”成立，再根据第二、第三个能力暴露出的差异扩展协议。
 
-- 每个里程碑完成后,更新本文件 + `CHANGELOG.md`
-- 里程碑顺序可调整(如 0.1.2 报错少可优先做 0.1.3)
-- 新增想法请先加到 `TECH_DEBT.md`,再决定进哪个里程碑
-- 远期方向(0.2.0 / 1.0.0)只增不删,完成后才移出
+### 退出标准
+
+- [ ] 同一能力只有一份 schema、handler 和策略；
+- [ ] SDK/LangGraph 对同一能力的成功和失败结果等价；
+- [ ] 写能力能被确定性识别，后续可挂接审批；
+- [ ] MCP 能力可见性不能绕过 Capability Policy。
+
+## 7. Step 4：解耦入口、执行和投递
+
+### 目标
+
+支持同会话保序、跨会话并发，以及执行成功后投递失败的独立恢复。
+
+### 工作项
+
+- [ ] 定义平台无关的 `InboundEvent`；
+- [ ] 建立 Inbox 幂等记录；
+- [ ] 按 `conversation_id` 分区调度：同会话串行、跨会话并发；
+- [ ] 将附件处理、摘要和长任务移出 WebSocket 读取循环；
+- [ ] 建立 Outbox 与独立 Delivery；
+- [ ] 增加背压、取消、deadline 和优雅关闭；
+- [ ] 删除全局 `current_post`，用不可变 `RunContext` 传递运行上下文；
+- [ ] Mattermost REST 迁移到带 timeout/retry 的异步 Client。
+
+### 退出标准
+
+- [ ] 慢 LLM 不阻塞其他频道；
+- [ ] 同一会话顺序稳定，重复事件不重复回复；
+- [ ] 投递失败只重试 Delivery，不重复执行 Agent；
+- [ ] 并发测试不存在上下文、附件和 trace 串线；
+- [ ] 关闭进程时不丢失已接受但尚未投递的任务。
+
+## 8. Step 5：企业 Context 与持久任务状态
+
+### 目标
+
+将“频道消息记忆”升级为有作用域、有来源、可追踪的企业上下文。
+
+### 工作项
+
+- [ ] 拆分 Message、Profile、Knowledge、Summary 和 URL Cache Repository；
+- [ ] 建立最小 `Scope`、`Task`、`TaskStep`、`AgentRun`、`Artifact` 和 `Delivery` 模型；
+- [ ] 增加 Organization、Project、Customer、Document 和 Decision 的最小映射；
+- [ ] 实现 Scope Resolver 与 Context Assembler；
+- [ ] 明确 SQLite 单写者/连接池、事务和备份策略；
+- [ ] 所有数据模型变化继续通过版本化 migration 发布。
+
+### 退出标准
+
+- [ ] 上下文可按组织、项目、会话安全检索；
+- [ ] 每次 Run、Capability Call、Artifact 和 Delivery 可以关联追踪；
+- [ ] Context Assembler 不依赖 Mattermost 原始事件结构；
+- [ ] `Memory` 不再聚合全部 Repository 职责。
+
+## 9. Step 6：Managed Agent 与 Router
+
+### 目标
+
+让数字员工通过注册接入，而不是继续扩展核心 `Agent` 的条件分支。
+
+### 工作项
+
+- [ ] 定义 `AgentSpec`、`ManagedAgent` 和 `AgentRegistry`；
+- [ ] 建立基于意图、权限、作用域、成本和健康度的 Router；
+- [ ] 将链接分析升级为第一个 Link Agent；
+- [ ] 支持结构化 Artifact 和 Agent handoff；
+- [ ] 验证稳定后再加入 Research Agent、Project Assistant 和 Presentation Agent。
+
+### 退出标准
+
+- [ ] 新 Agent 可通过注册接入，无需修改协同中枢；
+- [ ] Agent 的能力、权限、预算和输出均可检查；
+- [ ] 多 Agent 任务有明确步骤和状态；
+- [ ] 单个 Agent 失败不会破坏整个会话处理。
+
+## 10. Step 7：治理与私有化生产能力
+
+在上述控制面稳定后，再推进 Policy Engine、审批、脱敏、Secret Provider、Model Gateway、成本配额、审计、metrics/tracing、数据保留、备份恢复、压测和私有化部署拓扑。
+
+这一阶段的完成标准不是“功能齐全”，而是权限可解释、运行可追踪、数据可治理、故障可恢复。
+
+## 11. 当前不做
+
+- 不因重构直接拆成微服务；
+- 不在 Runtime/Capability 统一前增加多个专业 Agent；
+- 不一次性重写 `agent.py`、`memory.py` 或 `url_analyzer.py`；
+- 不把真实 LLM 或公网测试放进默认 CI；
+- 不用 Prompt 代替确定性的权限和路由规则；
+- 不在缺少数据模型和恢复语义时引入复杂异步队列。
+
+## 12. 文档维护规则
+
+- 完成工作项后，在本文件勾选并更新当前阶段；
+- 代码行为变化同步更新 `README.md` 和 `CHANGELOG.md`；
+- 新技术债先进入 `TECH_DEBT.md`，再决定归属步骤；
+- 架构方向变化同步修改 `AI_NATIVE_REFACTORING.md`；
+- 每个步骤开始前先确认上一步退出标准，未满足项必须显式记录风险；
+- 版本号根据实际交付内容签发，不强行绑定路线图阶段。

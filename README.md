@@ -155,8 +155,18 @@ Bot 支持三种触发方式：
 │       ├── registry.py
 │       └── builtin.py
 └── docs/
-    └── MATTERMOST_ID_GUIDE.md  # Mattermost ID 层级参考
+    ├── AI_NATIVE_REFACTORING.md # AI Native 目标架构与设计理由
+    ├── ROADMAP.md               # 当前状态、后续步骤与验收标准
+    ├── TECH_DEBT.md             # 已知技术债清单
+    └── MATTERMOST_ID_GUIDE.md   # Mattermost ID 层级参考
 ```
+
+## 文档导航
+
+- [AI Native 重构方案](docs/AI_NATIVE_REFACTORING.md)：目标架构、设计原则与阶段依赖；
+- [实施路线图](docs/ROADMAP.md)：当前完成情况、下一步任务和各阶段退出标准；
+- [技术债清单](docs/TECH_DEBT.md)：具体问题、风险和建议拆分方向；
+- [Mattermost ID 指南](docs/MATTERMOST_ID_GUIDE.md)：Team、Channel 和 User ID 的获取与配置。
 
 ## 记忆系统
 
