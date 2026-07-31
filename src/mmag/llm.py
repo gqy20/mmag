@@ -221,7 +221,7 @@ class LLM:
 
         # ---- tools 节点: 执行工具, 收集 tool_result ----
         async def _tools_node(state: _State) -> dict:
-            new_msgs: list[dict] = []
+            new_msgs: list[Any] = []
             last_msg = state["messages"][-1]
             content = last_msg.get("content", [])
             tool_calls = [

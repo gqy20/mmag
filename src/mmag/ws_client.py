@@ -103,7 +103,7 @@ class WebSocketClient:
                 break
 
             # 指数退避
-            retry_s = _MIN_RETRY_S
+            retry_s = float(_MIN_RETRY_S)
             if self._connect_fail_count > _MAX_FAILS_BEFORE_BACKOFF:
                 retry_s = min(_MIN_RETRY_S * self._connect_fail_count**2, _MAX_RETRY_S)
             retry_s += random.random() * _JITTER_RANGE_S  # jitter
@@ -187,13 +187,16 @@ class WebSocketClient:
                 log.warning(f"       🔌 WebSocket 断开: code={e.code}")
                 self._last_err_code = str(e.code)
 
-    async def _dispatch(self, raw: str) -> None:
+    async def _dispatch(self, raw: str | bytes) -> None:
         """解析并分发单条 WebSocket 消息
 
         官方协议区分两种消息类型 (见 websocket_client.go Listen()):
           1. **Event** (服务端推送): 有 `event` 字段, 带递增 `seq`
           2. **Response** (请求回复): 有 `seq_reply` 字段, 有 `status`
         """
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:

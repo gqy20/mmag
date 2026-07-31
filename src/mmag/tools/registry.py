@@ -55,26 +55,26 @@ def _enrich_with_sources(result: Any, tool_name: str, input_data: dict) -> Any:
     if isinstance(result, dict):
         # analyze_link: {url, title, kind, ...}
         if result.get("url") and result.get("title"):
-            src: dict[str, Any] = {
+            source: dict[str, Any] = {
                 "url": result["url"],
                 "title": result["title"],
                 "tool": tool_name,
             }
             kind = result.get("kind", "")
             if kind:
-                src["kind"] = kind
+                source["kind"] = kind
             # GitHub 特有元数据
             for meta_key in ("repo_info", "issue_info"):
                 meta = result.get(meta_key)
                 if isinstance(meta, dict):
                     if meta.get("created_at"):
-                        src["date"] = meta["created_at"]
+                        source["date"] = meta["created_at"]
                     if meta.get("full_name"):
-                        src["repo"] = meta["full_name"]
+                        source["repo"] = meta["full_name"]
                     if meta.get("user"):
-                        src["author"] = meta["user"]
+                        source["author"] = meta["user"]
                     break
-            sources.append(src)
+            sources.append(source)
 
     # ════════════════════════════════════════════════
     # B. MCP 工具：str 输入（JSON 字符串），需要解析
@@ -323,8 +323,10 @@ class ToolRegistry:
 
         try:
             result = tool.handler(**input_data)
-            # 支持 async handler / async generator
-            if inspect.iscoroutine(result) or inspect.isasyncgen(result):
+            # async generator 不是 awaitable，需要先逐项收集。
+            if inspect.isasyncgen(result):
+                result = [item async for item in result]
+            elif inspect.isawaitable(result):
                 result = await result
 
             # 为外部数据工具注入结构化来源元数据（_sources 字段）

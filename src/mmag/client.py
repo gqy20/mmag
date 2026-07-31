@@ -125,9 +125,8 @@ class MMClient:
         上传后文件不可见，需创建带 file_ids 的 post 才在频道显示。
         """
         if not content_type:
-            content_type, _ = mimetypes.guess_type(filename)
-        if not content_type:
-            content_type = "application/octet-stream"
+            guessed_type, _ = mimetypes.guess_type(filename)
+            content_type = guessed_type or "application/octet-stream"
         try:
             resp = self.session.post(
                 f"{self.base_url}/api/v4/files",

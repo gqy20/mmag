@@ -27,7 +27,7 @@ from claude_agent_sdk import (
     ResultMessage,
     create_sdk_mcp_server,
 )
-from claude_agent_sdk.types import ClaudeAgentOptions, TextBlock, ToolUseBlock
+from claude_agent_sdk.types import ClaudeAgentOptions, McpServerConfig, TextBlock, ToolUseBlock
 
 from .config import config
 from .logger import get_logger
@@ -358,7 +358,7 @@ class SDKLLM:
         # MCP servers: in-process "mmag" server (内置工具 + crawl 工具)
         # 注意: 外部 .mcp.json 子进程模式在当前环境下不工作 (uvx crawl-mcp stdio 无响应)
         # 改为 in-process 包装: 直接调用 crawl4ai_mcp.fastmcp_server.mcp.call_tool()
-        mcp_servers: dict[str, Any] = {}
+        mcp_servers: dict[str, McpServerConfig] = {}
 
         all_tool_funcs: list = list(tool_funcs) if tool_funcs else []
 
@@ -392,7 +392,7 @@ class SDKLLM:
                 "回答简洁、准确、有帮助。"
             ),
             permission_mode="default",
-            mcp_servers=mcp_servers if mcp_servers else None,
+            mcp_servers=mcp_servers,
             # 不设 allowed_tools → 工具保持可见，执行时由 can_use_tool 做显式策略判断
             # 注意: 必须用 "default" 而非 "bypassPermissions":
             #   1. bypassPermissions 会被 SDK 转为 --dangerously-skip-permissions CLI flag,

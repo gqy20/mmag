@@ -126,7 +126,7 @@ class MMDiscoverer:
             # 获取消息数
             try:
                 posts_data = self._get(f"/channels/{cid}/posts", per_page=1)
-                msg_count = len(posts_data.get("order", []))
+                msg_count: int | str = len(posts_data.get("order", []))
             except Exception:
                 msg_count = "?"
             print(

@@ -11,6 +11,7 @@ import random
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from .client import PROP_FROM_BOT, PROP_TRUE, MMClient
 from .config import _log_config_loading, _secret_status, config
@@ -722,7 +723,7 @@ class Agent:
         # 6a) 图片 → image blocks
         for i, (fid, name, mime, _declared_size) in enumerate(image_download_list):
             result = results[i]
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 log.warning("下载图片异常 file_id=%s: %s", fid[:12], result)
                 skipped_notes.append(f"[图片下载失败: {name}]")
                 continue
@@ -762,7 +763,7 @@ class Agent:
         # 6b) 文本文档 → text blocks
         for j, (fid, name, mime) in enumerate(text_download_list):
             result = results[n_images + j]
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 log.warning("下载文本附件异常 file_id=%s: %s", fid[:12], result)
                 skipped_notes.append(f"[文本附件下载失败: {name}]")
                 continue
@@ -998,7 +999,7 @@ class Agent:
         recent = window[-config.max_context_messages :]
 
         # 格式化为 LLM messages
-        messages = []
+        messages: list[dict[str, Any]] = []
         prev_ts_ms: float | None = None
         for m in recent:
             role = "assistant" if m.get("user_id") == self.bot_user_id else "user"

@@ -232,7 +232,7 @@ class _OGParser(HTMLParser):
             if prop.startswith("og:"):
                 self.og[prop[3:]] = content
             elif (
-                prop == "description" or attr_dict.get("name", "").lower() == "description"
+                prop == "description" or (attr_dict.get("name") or "").lower() == "description"
             ) and not self.description:
                 self.description = content
 
@@ -686,11 +686,11 @@ async def analyze_url(url: str, *, memory=None) -> dict:
     # 3. 路由分析
     t0 = time.monotonic()
     try:
-        if kind == "github_repo":
+        if kind == "github_repo" and match is not None:
             info = await _analyze_github_repo(match.group(1), match.group(2))
-        elif kind == "github_pr":
+        elif kind == "github_pr" and match is not None:
             info = await _analyze_github_pr(match.group(1), match.group(2), match.group(3))
-        elif kind == "github_issue":
+        elif kind == "github_issue" and match is not None:
             info = await _analyze_github_issue(match.group(1), match.group(2), match.group(3))
         elif kind == "webpage":
             info = await _analyze_webpage(url)
