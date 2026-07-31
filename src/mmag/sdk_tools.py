@@ -22,6 +22,7 @@ from .capabilities.catalog import (
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
+from .capabilities.link import create_analyze_link_capability
 
 # ============================================================
 # 工具参数上限（与 builtin.py 保持同一份数字）
@@ -125,30 +126,7 @@ def _make_sdk_get_user_profile(mm_client, memory):
 
 
 def _make_sdk_analyze_link(memory):
-    @tool(
-        "analyze_link",
-        (
-            "分析消息中的链接内容并返回结构化摘要。"
-            "GitHub 仓库 (github.com/owner/repo) 返回 stars/language/description/topics；"
-            "GitHub PR/Issue 返回标题、状态、作者、创建时间；"
-            "其他网页优先用 Trafilatura 提取正文（截断到 ~3000 字符，含头尾）"
-            "作为 summary，提取失败/过短时回退到 og:title + og:description。"
-            "结果会缓存 1 小时以避免重复请求（错误结果 5 分钟）。"
-            "遇到 404/限流/网络错误时返回明确的 status 字段，调用方应据此决定回退方案。"
-        ),
-        {"url": str},
-    )
-    async def sdk_analyze_link(args):
-        # 原生 async handler (httpx.AsyncClient)，无需 to_thread
-        from ..url_analyzer import analyze_url
-
-        info = await analyze_url(args["url"], memory=memory)
-        formatted = _format_link_info(info)
-        # analyze_link 是唯一含外部 URL 数据的工具 → 注入 _sources
-        enriched = _enrich_with_sources(formatted, "analyze_link", args)
-        return _sdk_tool_return(enriched)
-
-    return sdk_analyze_link
+    return bind_sdk_capability(create_analyze_link_capability(memory))
 
 
 def _make_sdk_send_file(mm_client, tool_context: ToolContext):
@@ -242,119 +220,7 @@ def _sdk_tool_return(result_data: Any) -> dict:
     }
 
 
-# ============================================================
-# 来源元数据提取（从 registry.py 搬运）
-# ============================================================
-
-
-def _enrich_with_sources(result: Any, tool_name: str, input_data: dict) -> Any:
-    """为工具结果添加结构化来源元数据（仅当结果包含可识别的外部来源时）
-
-    从 registry.py 原样搬运，仅保留 analyze_link 需要的 dict 分支。
-    """
-    sources: list[dict[str, Any]] = []
-
-    if isinstance(result, dict) and result.get("url") and result.get("title"):
-        src: dict[str, Any] = {
-            "url": result["url"],
-            "title": result["title"],
-            "tool": tool_name,
-        }
-        kind = result.get("kind", "")
-        if kind:
-            src["kind"] = kind
-        for meta_key in ("repo_info", "issue_info"):
-            meta = result.get(meta_key)
-            if isinstance(meta, dict):
-                if meta.get("created_at"):
-                    src["date"] = meta["created_at"]
-                if meta.get("full_name"):
-                    src["repo"] = meta["full_name"]
-                if meta.get("user"):
-                    src["author"] = meta["user"]
-                break
-        sources.append(src)
-
-    if sources and isinstance(result, dict):
-        result["_sources"] = sources
-
-    return result
-
-# ============================================================
-# 工具结果格式化辅助函数（从 builtin.py 原样搬运）
-# ============================================================
-
-
 def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:
     """保存知识并返回确认"""
     memory.add_knowledge(channel_id, key, value)
     return {"status": "ok", "key": key, "message": f"已记住: {key}"}
-
-
-def _format_link_info(info: dict) -> dict:
-    """格式化 url_analyzer 返回的 LinkInfo 为 LLM 友好的结构"""
-    kind = info.get("kind", "unknown")
-    status = info.get("status", "ok")
-    full_text = info.get("summary") or info.get("content") or ""
-
-    from ..url_analyzer import SUMMARY_MAX_CHARS, _truncate_summary
-
-    display_summary, was_truncated = _truncate_summary(full_text, SUMMARY_MAX_CHARS)
-    full_text_length = len(full_text)
-
-    result = {
-        "url": info.get("url", ""),
-        "kind": kind,
-        "status": status,
-        "title": info.get("title", ""),
-        "summary": display_summary,
-        "cached": info.get("cached", False),
-    }
-    if was_truncated:
-        result["full_text_length_chars"] = full_text_length
-        result["truncated"] = True
-
-    meta = info.get("metadata") or {}
-    if kind == "github_repo" and status == "ok":
-        result["stats"] = {
-            "stars": meta.get("stargazers_count"),
-            "forks": meta.get("forks_count"),
-            "language": meta.get("language"),
-            "license": (meta.get("license") or {}).get("spdx_id") if meta.get("license") else None,
-        }
-        result["repo_info"] = {
-            "full_name": meta.get("full_name"),
-            "description": meta.get("description"),
-            "topics": meta.get("topics", []),
-            "homepage": meta.get("homepage"),
-            "default_branch": meta.get("default_branch"),
-            "archived": meta.get("archived", False),
-            "private": meta.get("private", False),
-            "created_at": meta.get("created_at"),
-            "updated_at": meta.get("updated_at"),
-            "pushed_at": meta.get("pushed_at"),
-        }
-    elif kind in ("github_pr", "github_issue") and status == "ok":
-        result["issue_info"] = {
-            "number": meta.get("number"),
-            "state": meta.get("state"),
-            "title": meta.get("title"),
-            "user": (meta.get("user") or {}).get("login"),
-            "labels": [label.get("name") for label in (meta.get("labels") or [])],
-            "created_at": meta.get("created_at"),
-            "updated_at": meta.get("updated_at"),
-            "comments": meta.get("comments"),
-        }
-    elif kind == "webpage" and status == "ok":
-        result["webpage"] = {
-            "site_name": meta.get("og", {}).get("site_name"),
-            "image": meta.get("og", {}).get("image"),
-            "type": meta.get("og", {}).get("type"),
-            "text_length": meta.get("full_text_length_chars"),
-            "extraction_method": meta.get("extraction_method"),
-        }
-
-    if status != "ok":
-        result["error"] = info.get("error") or "未知错误"
-
-    return result

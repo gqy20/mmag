@@ -102,6 +102,7 @@ class CapabilityExecutor:
                 value = spec.handler(**dict(arguments))
                 if inspect.isawaitable(value):
                     value = await value
+                value = _apply_source_policy(spec, value)
         except TimeoutError:
             return self._result(
                 started_at,
@@ -160,3 +161,34 @@ def _validate_arguments(schema: Mapping[str, Any], arguments: Mapping[str, Any])
         if expected_type is not None and not isinstance(value, expected_type):
             return f"Invalid input '{name}': expected {expected_name}"
     return None
+
+
+def _apply_source_policy(spec: CapabilitySpec, value: Any) -> Any:
+    """Attach normalized source metadata when a capability declares AUTO."""
+    if spec.source_policy is not SourcePolicy.AUTO or not isinstance(value, dict):
+        return value
+    if not value.get("url") or not value.get("title"):
+        return value
+
+    source: dict[str, Any] = {
+        "url": value["url"],
+        "title": value["title"],
+        "tool": spec.name,
+    }
+    if value.get("kind"):
+        source["kind"] = value["kind"]
+    for metadata_key in ("repo_info", "issue_info"):
+        metadata = value.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        if metadata.get("created_at"):
+            source["date"] = metadata["created_at"]
+        if metadata.get("full_name"):
+            source["repo"] = metadata["full_name"]
+        if metadata.get("user"):
+            source["author"] = metadata["user"]
+        break
+
+    enriched = dict(value)
+    enriched["_sources"] = [source]
+    return enriched

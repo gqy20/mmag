@@ -743,7 +743,7 @@ class TestTrafilaturaExtraction:
         assert len(info["summary"]) > 3000  # 完整正文, 没截断
 
         # presentation 层 (_format_link_info) 才截断
-        from mmag.tools.builtin import _format_link_info
+        from mmag.capabilities.link import _format_link_info
 
         formatted = _format_link_info(info)
         assert formatted["truncated"] is True
@@ -755,7 +755,7 @@ class TestTrafilaturaExtraction:
     @pytest.mark.asyncio
     async def test_format_link_info_exposes_trafilatura_fields(self, mock_response):
         """_format_link_info 应暴露 extraction_method / text_length (webpage 级别)"""
-        from mmag.tools.builtin import _format_link_info
+        from mmag.capabilities.link import _format_link_info
 
         info = {
             "url": "https://example.com/x",
@@ -784,7 +784,7 @@ class TestTrafilaturaExtraction:
     @pytest.mark.asyncio
     async def test_format_link_info_truncates_github_repo_long_description(self):
         """GitHub 长 description 也应被 presentation 层截断 (虽然现在 description 通常不长)"""
-        from mmag.tools.builtin import _format_link_info
+        from mmag.capabilities.link import _format_link_info
 
         long_desc = "X" * 5000
         info = {

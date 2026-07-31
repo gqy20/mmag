@@ -16,6 +16,7 @@ from .catalog import (
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
+from .link import create_analyze_link_capability
 
 __all__ = [
     "CapabilityEffect",
@@ -26,6 +27,7 @@ __all__ = [
     "SourcePolicy",
     "bind_legacy_capability",
     "bind_sdk_capability",
+    "create_analyze_link_capability",
     "create_get_channel_info_capability",
     "create_get_posts_capability",
     "create_get_user_profile_capability",

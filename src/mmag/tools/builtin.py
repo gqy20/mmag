@@ -20,6 +20,7 @@ from ..capabilities.catalog import (
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
+from ..capabilities.link import create_analyze_link_capability
 from .registry import Tool
 
 # ============================================================
@@ -105,45 +106,7 @@ def _make_get_user_profile_tool(mm_client, memory) -> Tool:
 
 
 def _make_analyze_link_tool(memory) -> Tool:
-    """分析消息中链接的工具 (异步 handler，因为底层用 httpx async client)"""
-    return Tool(
-        name="analyze_link",
-        description=(
-            "分析消息中的链接内容并返回结构化摘要。"
-            "GitHub 仓库 (github.com/owner/repo) 返回 stars/language/description/topics；"
-            "GitHub PR/Issue 返回标题、状态、作者、创建时间；"
-            "其他网页优先用 Trafilatura 提取正文（截断到 ~3000 字符，含头尾）"
-            "作为 summary，提取失败/过短时回退到 og:title + og:description。"
-            "结果会缓存 1 小时以避免重复请求（错误结果 5 分钟）。"
-            "遇到 404/限流/网络错误时返回明确的 status 字段，调用方应据此决定回退方案。"
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "要分析的完整 URL (http/https)，例如 https://github.com/anthropics/anthropic-sdk-python",
-                },
-            },
-            "required": ["url"],
-        },
-        # handler 必须是 async，因为 ToolRegistry.execute() 会 await 它
-        handler=lambda url: _analyze_link_handler(memory, url),
-    )
-
-
-# ============================================================
-# 异步 handler：analyze_link
-# ============================================================
-
-
-async def _analyze_link_handler(memory, url: str) -> dict:
-    """analyze_link 工具的 async handler — 委托给 url_analyzer.analyze_url"""
-    # 延迟 import 避免 tools → url_analyzer → ... 循环依赖
-    from ..url_analyzer import analyze_url
-
-    info = await analyze_url(url, memory=memory)
-    return _format_link_info(info)
+    return bind_legacy_capability(create_analyze_link_capability(memory))
 
 
 # ============================================================
@@ -155,82 +118,3 @@ def _save_knowledge(memory, channel_id: str, key: str, value: str) -> dict:
     """保存知识并返回确认"""
     memory.add_knowledge(channel_id, key, value)
     return {"status": "ok", "key": key, "message": f"已记住: {key}"}
-
-
-def _format_link_info(info: dict) -> dict:
-    """格式化 url_analyzer 返回的 LinkInfo 为 LLM 友好的结构
-
-    设计:
-      - 数据库 / url_analyzer 层保留完整正文（content 字段）
-      - 本函数是 presentation 层：负责把全文截断到 LLM 友好的大小
-      - 只暴露对回答问题有用的字段，避免 LLM 被冗余 metadata 淹没
-    """
-    kind = info.get("kind", "unknown")
-    status = info.get("status", "ok")
-    full_text = info.get("summary") or info.get("content") or ""
-
-    # 截断只发生在 LLM 入口处 (避免把 50KB 正文一次性塞给 model)
-    # 延迟 import 避免 tools → url_analyzer 循环
-    from ..url_analyzer import SUMMARY_MAX_CHARS, _truncate_summary
-
-    display_summary, was_truncated = _truncate_summary(full_text, SUMMARY_MAX_CHARS)
-    full_text_length = len(full_text)
-
-    result = {
-        "url": info.get("url", ""),
-        "kind": kind,
-        "status": status,
-        "title": info.get("title", ""),
-        "summary": display_summary,
-        "cached": info.get("cached", False),
-    }
-    # 让 LLM 知道有更多内容 (可作为是否要求深入阅读的信号)
-    if was_truncated:
-        result["full_text_length_chars"] = full_text_length
-        result["truncated"] = True
-
-    # 关键元数据（按 kind 分组）
-    meta = info.get("metadata") or {}
-    if kind == "github_repo" and status == "ok":
-        result["stats"] = {
-            "stars": meta.get("stargazers_count"),
-            "forks": meta.get("forks_count"),
-            "language": meta.get("language"),
-            "license": (meta.get("license") or {}).get("spdx_id") if meta.get("license") else None,
-        }
-        result["repo_info"] = {
-            "full_name": meta.get("full_name"),
-            "description": meta.get("description"),
-            "topics": meta.get("topics", []),
-            "homepage": meta.get("homepage"),
-            "default_branch": meta.get("default_branch"),
-            "archived": meta.get("archived", False),
-            "private": meta.get("private", False),
-            "created_at": meta.get("created_at"),
-            "updated_at": meta.get("updated_at"),
-            "pushed_at": meta.get("pushed_at"),
-        }
-    elif kind in ("github_pr", "github_issue") and status == "ok":
-        result["issue_info"] = {
-            "number": meta.get("number"),
-            "state": meta.get("state"),
-            "title": meta.get("title"),
-            "user": (meta.get("user") or {}).get("login"),
-            "labels": [label.get("name") for label in (meta.get("labels") or [])],
-            "created_at": meta.get("created_at"),
-            "updated_at": meta.get("updated_at"),
-            "comments": meta.get("comments"),
-        }
-    elif kind == "webpage" and status == "ok":
-        result["webpage"] = {
-            "site_name": meta.get("og", {}).get("site_name"),
-            "image": meta.get("og", {}).get("image"),
-            "type": meta.get("og", {}).get("type"),
-            "text_length": meta.get("full_text_length_chars"),
-            "extraction_method": meta.get("extraction_method"),  # "trafilatura" | "og_fallback"
-        }
-
-    if status != "ok":
-        result["error"] = info.get("error") or "未知错误"
-
-    return result

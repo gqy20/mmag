@@ -47,6 +47,9 @@ def _enrich_with_sources(result: Any, tool_name: str, input_data: dict) -> Any:
     Returns:
         增强后的结果（dict 会原地修改并返回；str 会重新序列化；其他原样返回）
     """
+    if isinstance(result, dict) and result.get("_sources"):
+        return result
+
     sources: list[dict[str, Any]] = []
 
     # ════════════════════════════════════════════════
