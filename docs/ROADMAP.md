@@ -4,7 +4,7 @@
 >
 > 更新时间：2026-07-31
 >
-> 当前阶段：Step 3 Capability / MCP Policy 收口
+> 当前阶段：Step 4 入口、执行与投递解耦
 >
 > 架构依据：[`AI_NATIVE_REFACTORING.md`](./AI_NATIVE_REFACTORING.md)
 
@@ -28,15 +28,15 @@
 - [x] 将默认 Prompt 打入 wheel，并在隔离目录验证包、CLI 模块和 Prompt 加载；
 - [x] 重复 posted 事件在 Runtime 前按持久化 post ID 去重；
 - [x] Mattermost 回复使用 `pending_post_id` 对网络错误、超时、429/5xx 做有界幂等重试；
-- [x] 默认离线测试基线达到 `236 passed, 2 deselected`，实际分支覆盖率 `50.60%`；
+- [x] 默认离线测试基线达到 `242 passed, 2 deselected`，实际分支覆盖率 `55.18%`；
 - [x] 建立不可变 Runtime 输入/输出、统一错误模型和 SDK/Legacy Adapter；
 - [x] `Agent` 与 `MemoryCompactor` 已只依赖 `AgentRuntime` Port；
 - [x] 建立 Capability 核心契约，八个内置能力均已迁移到单一 Spec；
 - [x] 删除全局 `ToolContext.current_post`，文件能力改用请求级不可变上下文。
+- [x] 外部 MCP discovery 已适配为 Capability，SDK/Legacy 共享 Spec、Policy 和可见性。
 
 下一阶段尚未完成：
 
-- [ ] Capability 单一来源；
 - [ ] WebSocket 入口与长任务执行解耦。
 
 ## 2. 实施原则
@@ -130,7 +130,7 @@ Managed Agent 与 Router
 - [x] 切换 Runtime 不改变 Mattermost 路由和投递协议；
 - [x] 每次运行都有稳定的 trace、状态和错误分类。
 
-## 6. Step 3：统一 Capability
+## 6. Step 3：统一 Capability（已完成）
 
 ### 目标
 
@@ -145,6 +145,7 @@ Managed Agent 与 Router
 - [x] 统一两条 Runtime 的返回结构、错误和来源信息；
 - [x] 逐个迁移共享内置工具，删除重复 handler/formatter；
 - [x] 收紧 MCP 默认权限和文件路径判断。
+- [x] 外部 MCP 先进入 Capability Catalog/Policy，再生成 Legacy 与 SDK binding。
 
 ### 实施思路
 
@@ -153,6 +154,8 @@ Managed Agent 与 Router
 当前八个内置能力都由单一 Spec 驱动 JSON Schema、SDK 类型映射和 handler。统一执行器负责参数校验、deadline、来源和稳定错误码；`CapabilityAuthorizer` 已能在副作用前返回允许、拒绝或待审批。默认策略只拒绝未声明权限的写能力，按用户/作用域授权仍需在企业 Context 阶段接入。
 
 `send_file` 也已成为声明 `mattermost:file:write` 的 Capability。普通异步链路用 `ContextVar` 绑定不可变 `CapabilityContext`；Claude SDK 的持久 MCP reader 无法继承后续 task context，因此 SDK 查询通过实例级锁串行执行，并在查询生命周期内桥接、清理同一份上下文。该设计消除了跨频道覆盖 `current_post` 的竞态，但不等于 Step 4 的跨会话并行调度已经完成。
+
+外部 MCP 工具只发现一次：白名单命中的工具被转换为 `CapabilitySpec`，缺少 `readOnlyHint=true` 时保守视为写能力，并声明独立执行权限；随后同一 Spec 与 `CapabilityExecutor` 生成 ToolRegistry/SDK binding。SDK 权限回调由实际绑定集合动态生成，不再硬编码 crawl 能力。原 `sdk_crawl_tools.py` 及其重复 schema/formatter 已删除，crawl 等工具必须通过 `.mcp.json` 和 `MCP_ALLOWED_TOOLS` 显式接入。
 
 ### 下一步顺序
 
@@ -163,14 +166,14 @@ Managed Agent 与 Router
 5. [x] 迁移 `analyze_link`，让 `SourcePolicy.AUTO` 真正驱动来源注入；
 6. [x] 迁移 `save_knowledge`，为 `WRITE` 能力接入确定性的权限检查和未来审批钩子；
 7. [x] 将 `send_file` 迁移为受治理的写 Capability，并用请求级不可变上下文消除全局 `ToolContext.current_post`；
-8. [ ] 最后让外部 MCP 进入同一 Catalog/Policy 可见性链路，并删除两套重复工厂与 formatter。
+8. [x] 让外部 MCP 进入同一 Catalog/Policy 可见性链路，并删除两套重复工厂与 formatter。
 
 ### 退出标准
 
 - [x] 共享内置能力只有一份 schema、handler 和策略；
 - [x] SDK/LangGraph 对共享内置能力的成功和失败结果等价；
 - [x] 写能力能被确定性识别，后续可挂接审批；
-- [ ] MCP 能力可见性不能绕过 Capability Policy。
+- [x] MCP 能力可见性不能绕过 Capability Policy。
 
 ## 7. Step 4：解耦入口、执行和投递
 

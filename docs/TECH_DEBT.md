@@ -170,7 +170,7 @@
 - LLM 调用 kwargs 拼装重复 (`llm.py:50-74` vs `llm.py:88-153` 两份几乎一致的 create 调用)
 - `summary_parts` 构造瀑布式 if 链重复 (`url_analyzer.py:407-425` 与 `512-522` 结构高度相似)
 - `_respond → agent_loop` 与 `compactor → chat_with_system` 流水线重复
-- 八个内置能力已迁移为单一 `CapabilitySpec`，重复 schema/handler/formatter 与全局 `ToolContext.current_post` 已删除；当前剩余重复边界是外部 MCP 仍绕过 Capability Catalog/Policy
+- 八个内置能力和外部 MCP 均已进入 `CapabilitySpec` / `CapabilityExecutor`；重复 schema/handler/formatter、全局 `ToolContext.current_post` 和 SDK crawl 旁路已删除
 
 ### 20. 魔数 / 硬编码常量
 - `agent.py:240 per_page=200` / `:261 time.sleep(0.1)` / `:382 max_rounds=5` 等魔数
@@ -256,3 +256,4 @@
 | 2026-07-31 | `save_knowledge` 迁移为受治理写能力；Authorizer 在副作用前统一处理允许、拒绝和待审批 |
 | 2026-07-31 | `send_file` 迁移为受治理写能力；请求级不可变上下文替代全局消息槽，SDK 查询桥具备串行隔离 |
 | 2026-07-31 | 当前工程门禁：Ruff、236 个离线测试、50.60% 分支覆盖率、36 个源码文件 mypy 零错误、wheel smoke |
+| 2026-07-31 | Step 3 完成：外部 MCP 统一进入 Capability Catalog/Policy，删除 SDK crawl 旁路与重依赖；242 个测试、55.18% 分支覆盖率 |

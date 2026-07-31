@@ -19,11 +19,11 @@
 - 已建立版本化 SQLite migration，覆盖新库初始化、旧字段补齐、旧消息/FTS 迁移、幂等、失败回滚和未来版本拒绝；
 - `Memory` 不再负责建表和历史 schema 升级；业务消息与 FTS 写入也具备失败回滚；
 - Secret 日志、文件路径和 MCP 工具已经改为显式安全边界；
-- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `236 passed, 2 deselected`、50.60% 分支覆盖率、36 个源码文件 mypy 零错误；
+- GitHub Actions 与本地统一执行 `make verify`，当前基线为 `242 passed, 2 deselected`、55.18% 分支覆盖率、37 个源码文件 mypy 零错误；
 - `uv.lock` 已提交，默认 Prompt 已作为 wheel 资源发布并通过隔离 smoke test。
 - 重复 posted 事件已在执行前去重，Mattermost 回复已具备带 `pending_post_id` 的安全有界重试。
 
-Phase 0 与 Runtime 契约已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port，SDK/Legacy 通过相同契约测试。八个内置 Capability 已完成单一来源迁移，来源与写入三态策略进入执行链；全局 `ToolContext.current_post` 已由请求级不可变上下文替代，当前剩余 MCP Policy 可见性统一。
+Phase 0、Runtime 契约与 Capability 单一来源均已完成：`Agent`、`MemoryCompactor` 只依赖统一 Runtime Port；八个内置能力与外部 MCP 都经过 Capability Spec、Executor 和 Policy；SDK/Legacy 的 MCP 可见性由同一 discovery 结果生成。全局 `ToolContext.current_post` 和 SDK crawl 旁路均已删除，当前进入入口、执行与投递解耦。
 
 下一步不直接拆分 `Agent` 或引入多 Agent，而是按以下依赖顺序推进：
 
@@ -31,7 +31,7 @@ Phase 0 与 Runtime 契约已完成：`Agent`、`MemoryCompactor` 只依赖统�
 |---|---|---|---|
 | 1 | 收口 Phase 0 工程门禁（完成） | CI、coverage 基线、类型检查基线、wheel smoke test | 让后续每次重构都有自动回归门禁 |
 | 2 | Runtime 契约（完成） | `RunRequest`、`AgentResult`、`AgentRuntime` 与统一错误模型 | 先稳定调用边界，再替换内部实现 |
-| 3 | Capability 单一来源 | `CapabilitySpec`、执行器、一个只读能力的双 Runtime binding | 用垂直切片验证工具不再重复定义 |
+| 3 | Capability 单一来源（完成） | `CapabilitySpec`、执行器、内置与 MCP 的双 Runtime binding | 用垂直切片验证工具不再重复定义 |
 | 4 | 入口与执行解耦 | `InboundEvent`、按会话分区的执行队列、Outbox | 在统一执行协议后再引入并发和恢复 |
 
 可执行任务、边界和验收标准以 [`ROADMAP.md`](./ROADMAP.md) 为准；本文档保留目标架构和设计理由。
@@ -623,20 +623,21 @@ infrastructure/adapters → application → domain
 
 - [x] 定义 `AgentRuntime`、`RunRequest`、`AgentResult`；
 - [x] 定义单一 `CapabilitySpec` 和 `CapabilityExecutor`；
-- [ ] 从同一 Capability 生成 SDK、Anthropic 和 MCP binding（首个 Legacy/SDK 切片已完成）；
-- [ ] 统一能力来源和审计结构；
+- [x] 从同一 Capability 生成 SDK 与 ToolRegistry binding，并将 MCP discovery 适配为 Capability；
+- [x] 统一能力来源、执行结果和 Policy 入口；
 - [x] Runtime 统一错误、deadline 和 fallback 语义；
 - [x] MemoryCompactor 通过 Runtime Port 调用模型；
 - [x] 选定默认 Runtime，另一套仅作为启动回退；
 - [x] 删除共享内置工具的重复实现。
 - [x] 将 `send_file` 纳入写能力策略，并消除全局当前消息槽。
+- [x] 删除 SDK crawl 旁路，外部 MCP 在两个 Runtime 中共享白名单和授权结果。
 
 退出标准：
 
 - [x] 共享内置能力只存在一份 schema、handler 和策略；
 - [x] 两个 Runtime 通过同一组契约测试；
 - [x] 上层不再判断 SDK/Legacy 特有异常；
-- [ ] MCP 能力对不同 Runtime 的可见性一致。
+- [x] MCP 能力对不同 Runtime 的可见性一致。
 
 ### Phase 2：解耦入口和执行
 
@@ -827,7 +828,7 @@ infrastructure/adapters → application → domain
 - [x] 两个 Adapter 通过同一组 contract tests；
 - [x] 切换 Runtime 不改变消息路由和回复投递接口。
 
-### 15.4 实施包 C：Capability 单一来源
+### 15.4 实施包 C：Capability 单一来源（完成）
 
 目标：消除 `tools/builtin.py` 与 `sdk_tools.py` 的 schema、handler 和格式化逻辑重复。
 
@@ -835,16 +836,18 @@ infrastructure/adapters → application → domain
 
 - [x] 定义 `CapabilitySpec`、`CapabilityResult`、权限/副作用元数据和执行器；
 - [x] 选择 `get_channel_info` 完成首个只读切片；
-- [ ] 从同一 Capability 生成 ToolRegistry、SDK 和后续 MCP binding（ToolRegistry/SDK 已验证）；
+- [x] 从同一 Capability 生成 ToolRegistry/SDK binding，并将 MCP discovery 纳入同一 Catalog/Policy；
 - [x] 统一共享内置能力的来源信息、超时和错误字段；
 - [x] 逐个迁移共享内置工具，删除重复实现。
 - [x] 将文件发送迁移为受授权的写 Capability，并建立请求上下文隔离；
+- [x] 删除 SDK crawl 重复工厂和 formatter，权限回调只放行实际可见能力；
 
 验收标准：
 
 - [x] 首个切片只有一份输入 schema 和 handler；
 - [x] SDK/LangGraph 对首个切片的相同输入产生等价结果；
 - [x] 写能力能被明确标记，并为后续审批策略保留边界。
+- [x] 外部 MCP 在 SDK/LangGraph 中具有相同 schema、来源和 Policy 结果。
 
 ### 15.5 实施包 D：入口与执行解耦
 
