@@ -5,13 +5,12 @@ __pycache__/
 dist/
 build/
 *.egg
+.coverage
+coverage.xml
 
 # 虚拟环境
 .venv/
 venv/
-
-# uv
-uv.lock
 
 # 环境配置 (敏感信息)
 .env

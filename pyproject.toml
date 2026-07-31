@@ -36,8 +36,10 @@ packages = ["src/mmag"]
 
 [dependency-groups]
 dev = [
+    "mypy>=1.15",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
     "ruff>=0.9",
 ]
 
@@ -76,3 +78,23 @@ markers = [
     "slow: 调真实 LLM, 跑一次要 30-60s, 日常开发可跳过",
     "external: 访问真实 Mattermost、LLM 或公网, 默认测试集合排除",
 ]
+
+# ---- Coverage ----
+
+[tool.coverage.run]
+branch = true
+source = ["mmag"]
+
+[tool.coverage.report]
+fail_under = 40
+show_missing = true
+skip_covered = true
+
+# ---- mypy（Phase 0 宽松基线）----
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/mmag"]
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_unused_configs = true
