@@ -200,6 +200,7 @@ Bot 具备跨会话持久记忆：
 - **断线续传**：通过 `connection_id` + `sequence_number` 实现断线后恢复
 - **消息永久存储**：`message_log` 表只增不删，启动时 backfill 补全 Mattermost 端所有历史；FTS5 虚表（unicode61）支持中英文 BM25 全文检索
 - **Schema 演进**：启动时按版本顺序执行原子 migration；支持旧库字段补齐、`message_cache` 数据/FTS 迁移、失败回滚及未来版本拒绝
+- **MCP 权限**：SDK 内置 MCP 仅允许已知 mmag 能力；外部 MCP 默认不连接，需通过 `MCP_ALLOWED_TOOLS` 精确授权 `mcp_<server>_<tool>`
 - **长期运行注意**：message_log 持续累积，生产环境建议定期 `VACUUM INTO` 归档老消息（参考月度一次），避免 SQLite 库文件膨胀影响性能（数据保留周期按团队合规要求自行决定）
 - **LLM 适配**：`AsyncAnthropic` 原生异步客户端（SDK 内置 `max_retries=2`）；Agentic Tool Use 循环 + ThinkingBlock 自动过滤
 - **LLM 兼容**：通过 `ANTHROPIC_BASE_URL` 支持 StepFun 等兼容接口；调用失败抛 `LLMError` 由 agent 层转成用户友好提示

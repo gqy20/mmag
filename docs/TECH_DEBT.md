@@ -187,7 +187,7 @@
 ### 22. SQLite 并发与事务保护
 - `src/mmag/infrastructure/sqlite/database.py` 仍使用 `check_same_thread=False` 的共享连接，尚无请求级锁/单写者策略
 - 跨线程并发可能 corrupt (虽然 Agent 当前是单线程,加并发 worker 后会触发)
-- Schema migration 已具备逐版本原子事务和失败回滚；业务写入仍有多步事务不完整问题（如 `add_knowledge` 主表/FTS 一致性）
+- Schema migration 和 `log_message` 已具备原子事务和失败回滚；其他业务写入仍有多步事务不完整问题（如 `add_knowledge` 主表/FTS 一致性）
 
 ### 23. 摘要计数不清零 / 无重试退避
 - `src/mmag/memory_compactor.py:71-81` `maybe_compact` 用 `_msg_counter` 字典,失败时不清零,LLM 限流时可能连续触发
@@ -242,3 +242,5 @@
 | 2026-06-11 | P3-21 CHANGELOG + README 架构图更新 |
 | 2026-07-31 | Phase 0 默认测试隔离、离线消息主链契约、Ruff 基线通过 |
 | 2026-07-31 | SQLite 版本化 migration：旧库升级、FTS 重建、幂等、回滚和未来版本拒绝 |
+| 2026-07-31 | 安全边界收紧：Secret 零片段日志、真实路径边界、SDK/外部 MCP 显式白名单 |
+| 2026-07-31 | `Memory.log_message` 主表与 FTS 多步写入失败时完整回滚 |

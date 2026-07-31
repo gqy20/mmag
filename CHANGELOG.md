@@ -9,6 +9,8 @@
 - 将 schema 初始化、旧 `message_cache` 迁移与 CJK FTS 预处理从 `Memory` 下沉到 SQLite infrastructure
 - Runtime 失败提示现在会投递给用户，不再被发送层静默丢弃
 - 重整 AI Native 路线图，明确工程门禁、Runtime、Capability、执行解耦和企业 Context 的实施顺序与验收标准
+- 收紧安全边界：Secret 日志仅报告是否配置、文件路径使用真实目录边界、未知 SDK/外部 MCP 工具默认拒绝
+- `Memory.log_message` 的主表与 FTS 写入失败时完整回滚，避免后续提交半成品事务
 
 ## 0.1.0 (2026-06-11) — 初始发布
 

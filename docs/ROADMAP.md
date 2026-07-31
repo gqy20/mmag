@@ -20,7 +20,9 @@
 - [x] 建立 SQLite schema version 和 forward-only migration；
 - [x] 覆盖新库初始化、旧库升级、FTS 重建、幂等、回滚和未来版本拒绝；
 - [x] 将 schema、migration 和 CJK FTS 预处理从 `Memory` 下沉到 infrastructure；
-- [x] 默认离线测试基线达到 `186 passed, 2 deselected`，Ruff 通过。
+- [x] 修复消息/FTS 半事务、Secret 日志和路径前缀越界问题；
+- [x] SDK 与外部 MCP 工具改为显式白名单，未知能力默认拒绝；
+- [x] 默认离线测试基线达到 `194 passed, 2 deselected`，Ruff 通过。
 
 当前还没有完成：
 

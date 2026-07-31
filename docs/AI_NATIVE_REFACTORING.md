@@ -17,7 +17,8 @@
 - 修复 Runtime 失败提示被发送层吞掉的问题；
 - 测试数据库改用内存 SQLite；
 - 已建立版本化 SQLite migration，覆盖新库初始化、旧字段补齐、旧消息/FTS 迁移、幂等、失败回滚和未来版本拒绝；
-- `Memory` 不再负责建表和历史 schema 升级，默认离线基线为 `186 passed, 2 deselected`。
+- `Memory` 不再负责建表和历史 schema 升级；业务消息与 FTS 写入也具备失败回滚；
+- Secret 日志、文件路径和 MCP 工具已经改为显式安全边界，默认离线基线为 `194 passed, 2 deselected`。
 
 尚未完成：CI、coverage、类型检查、wheel 资源打包和 Runtime/Capability 统一。
 
