@@ -7,7 +7,7 @@ SDK LLM Adapter — 封装 Claude Agent SDK 持久客户端，提供与 LLM 类�
   - chat_with_system(system_prompt, user_message, max_tokens) -> str
 
 生命周期:
-  - start(tool_funcs, mcp_json_path) -> connect()
+  - start(tool_funcs) -> connect()
   - stop() -> disconnect()
   - reconnect() -> 断线后自动重建连接
 """
@@ -19,6 +19,7 @@ import re
 import time
 import uuid
 from contextlib import suppress
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -109,7 +110,7 @@ CLI_DANGEROUS_TOOLS = frozenset({
 
 # SDK 内注册到 in-process "mmag" MCP server 的已知能力。
 # 新增工具必须显式加入这里，否则权限回调默认拒绝执行。
-_MCP_ALLOWED_TOOLS = frozenset(
+_DEFAULT_MCP_ALLOWED_TOOLS = frozenset(
     f"mcp__mmag__{name}"
     for name in (
         "get_posts",
@@ -120,14 +121,6 @@ _MCP_ALLOWED_TOOLS = frozenset(
         "get_user_profile",
         "analyze_link",
         "send_file",
-        "crawl_single",
-        "crawl_site",
-        "crawl_batch",
-        "search_text",
-        "search_news",
-        "search_books",
-        "search_videos",
-        "search_images",
     )
 )
 
@@ -200,6 +193,8 @@ async def _tool_permission_callback(
     tool_name: str,
     input_data: dict[str, Any],
     context,  # ToolPermissionContext
+    *,
+    allowed_mcp_tools: frozenset[str] = _DEFAULT_MCP_ALLOWED_TOOLS,
 ) -> Any:
     """can_use_tool 回调 — 三层动态权限决策。
 
@@ -212,7 +207,7 @@ async def _tool_permission_callback(
 
     # ── 层级 1: MCP 工具 ──
     if tool_name.startswith("mcp__"):
-        if tool_name in _MCP_ALLOWED_TOOLS:
+        if tool_name in allowed_mcp_tools:
             log.debug("权限放行 [MCP allowlist]: %s", tool_name)
             return PermissionResultAllow()
         log.warning("权限拒绝 [未知 MCP]: %s", tool_name)
@@ -286,7 +281,6 @@ class SDKLLM:
     def __init__(self):
         self.client: ClaudeSDKClient | None = None
         self._connected = False
-        self._mcp_json_path: str | None = None
         self._saved_tool_funcs: list | None = None
         self.call_count = 0
         self.model = config.anthropic_model
@@ -302,14 +296,12 @@ class SDKLLM:
 
     # ---- 生命周期 ----
 
-    async def start(self, tool_funcs: list | None = None, mcp_json_path: str | None = None):
+    async def start(self, tool_funcs: list | None = None):
         """初始化并连接持久 SDK 客户端。在 Agent.start() 阶段 3.5 调用。
 
         Args:
             tool_funcs: @tool-decorated 函数列表（来自 create_sdk_tools）
-            mcp_json_path: 外部 .mcp.json 路径（如 crawl-mcp 配置）
         """
-        self._mcp_json_path = mcp_json_path
         self._saved_tool_funcs = tool_funcs  # 保存供 reconnect 使用
 
         options = self._build_options(
@@ -340,15 +332,12 @@ class SDKLLM:
                 self._connected = False
 
     async def reconnect(self):
-        """断线后重建连接。用保存的 tool_funcs / mcp_json_path 完整重建。"""
+        """断线后用保存的 Capability bindings 重建连接。"""
         log.warning("SDK Client 尝试重连...")
         with suppress(Exception):
             await self.stop()
         if self._saved_tool_funcs is not None:
-            await self.start(
-                tool_funcs=self._saved_tool_funcs,
-                mcp_json_path=self._mcp_json_path,
-            )
+            await self.start(tool_funcs=self._saved_tool_funcs)
             log.info("SDK Client 重连完成")
         else:
             log.error("SDK Client 无法重连: 无保存的 tool_funcs")
@@ -366,28 +355,19 @@ class SDKLLM:
         if config.anthropic_base_url:
             env["ANTHROPIC_BASE_URL"] = config.anthropic_base_url
 
-        # MCP servers: in-process "mmag" server (内置工具 + crawl 工具)
-        # 注意: 外部 .mcp.json 子进程模式在当前环境下不工作 (uvx crawl-mcp stdio 无响应)
-        # 改为 in-process 包装: 直接调用 crawl4ai_mcp.fastmcp_server.mcp.call_tool()
+        # 所有内置和外部能力都已在上层进入 Catalog，这里只生成一个 SDK server。
         mcp_servers: dict[str, McpServerConfig] = {}
-
         all_tool_funcs: list = list(tool_funcs) if tool_funcs else []
-
-        # 注入 crawl-mcp 工具 (in-process 包装)
-        try:
-            from .sdk_crawl_tools import create_sdk_crawl_tools
-
-            crawl_tools = create_sdk_crawl_tools()
-            all_tool_funcs.extend(crawl_tools)
-            log.info("已注入 %d 个 crawl-mcp 工具 (in-process)", len(crawl_tools))
-        except ImportError as e:
-            log.warning("crawl4ai_mcp 未安装, 跳过爬虫工具: %s", e)
 
         if all_tool_funcs:
             mmag_server = create_sdk_mcp_server(
                 name="mmag", version="0.1.0", tools=all_tool_funcs
             )
             mcp_servers["mmag"] = mmag_server
+
+        visible_mcp_tools = frozenset(
+            f"mcp__mmag__{tool_def.name}" for tool_def in all_tool_funcs
+        )
 
         options = ClaudeAgentOptions(
             model=config.anthropic_model,
@@ -397,8 +377,7 @@ class SDKLLM:
                 "你可以使用以下工具:"
                 "- get_posts / search_messages / search_knowledge: 查询 Mattermost 消息和知识库"
                 "- analyze_link: 分析链接内容"
-                "- crawl_single / crawl_site / crawl_batch: 爬取网页内容"
-                "- search_text / search_news / search_books / search_videos / search_images: 搜索互联网内容"
+                "- allowlisted external MCP capabilities: 使用已授权的企业系统"
                 "- Read / Grep / Glob: 阅读和搜索项目文件"
                 "回答简洁、准确、有帮助。"
             ),
@@ -411,7 +390,10 @@ class SDKLLM:
             #   2. bypassPermissions 会 shadow can_use_tool 回调 (回调永不执行),
             #      使三层权限防护全部失效
             disallowed_tools=list(CLI_DANGEROUS_TOOLS),  # 安全网: 黑名单危险工具
-            can_use_tool=_tool_permission_callback,       # 动态权限回调 (MCP 白名单 + CLI 防护)
+            can_use_tool=partial(
+                _tool_permission_callback,
+                allowed_mcp_tools=visible_mcp_tools,
+            ),
             env=env,
             setting_sources=[],  # 不加载项目 CLAUDE.md
             cwd=str(Path(__file__).resolve().parents[2]),  # 限制工作目录为项目根目录

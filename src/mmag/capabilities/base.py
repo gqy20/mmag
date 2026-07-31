@@ -10,6 +10,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol
 
+from .sources import enrich_with_sources
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
@@ -176,7 +178,7 @@ class CapabilityExecutor:
                 value = spec.handler(**dict(arguments))
                 if inspect.isawaitable(value):
                     value = await value
-                value = _apply_source_policy(spec, value)
+                value = _apply_source_policy(spec, value, dict(arguments))
         except TimeoutError:
             return self._result(
                 started_at,
@@ -237,32 +239,12 @@ def _validate_arguments(schema: Mapping[str, Any], arguments: Mapping[str, Any])
     return None
 
 
-def _apply_source_policy(spec: CapabilitySpec, value: Any) -> Any:
+def _apply_source_policy(
+    spec: CapabilitySpec,
+    value: Any,
+    arguments: dict[str, Any],
+) -> Any:
     """Attach normalized source metadata when a capability declares AUTO."""
-    if spec.source_policy is not SourcePolicy.AUTO or not isinstance(value, dict):
+    if spec.source_policy is not SourcePolicy.AUTO:
         return value
-    if not value.get("url") or not value.get("title"):
-        return value
-
-    source: dict[str, Any] = {
-        "url": value["url"],
-        "title": value["title"],
-        "tool": spec.name,
-    }
-    if value.get("kind"):
-        source["kind"] = value["kind"]
-    for metadata_key in ("repo_info", "issue_info"):
-        metadata = value.get(metadata_key)
-        if not isinstance(metadata, dict):
-            continue
-        if metadata.get("created_at"):
-            source["date"] = metadata["created_at"]
-        if metadata.get("full_name"):
-            source["repo"] = metadata["full_name"]
-        if metadata.get("user"):
-            source["author"] = metadata["user"]
-        break
-
-    enriched = dict(value)
-    enriched["_sources"] = [source]
-    return enriched
+    return enrich_with_sources(value, spec.name, arguments)

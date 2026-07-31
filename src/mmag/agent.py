@@ -198,14 +198,10 @@ class Agent:
                     self.memory,
                     context_provider=self.sdk_llm.get_capability_context,
                 )
-
-                # 解析 .mcp.json 路径供外部 MCP 使用
-                _mcp_candidate = Path(__file__).resolve().parents[2] / ".mcp.json"
-                mcp_json_path = str(_mcp_candidate) if _mcp_candidate.exists() else None
+                sdk_tool_funcs.extend(self.mcp_bridge.get_sdk_bindings())
 
                 await self.sdk_llm.start(
                     tool_funcs=sdk_tool_funcs,
-                    mcp_json_path=mcp_json_path,
                 )
                 self.runtime = ClaudeSDKRuntimeAdapter(
                     self.sdk_llm,

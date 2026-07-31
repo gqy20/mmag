@@ -43,7 +43,7 @@ def bind_sdk_capability(
     """Expose a capability through Claude Agent SDK's ``@tool`` contract."""
     runner = executor or CapabilityExecutor()
 
-    @tool(spec.name, spec.description, _sdk_input_schema(spec))
+    @tool(spec.name, spec.description, dict(spec.input_schema))
     async def sdk_handler(arguments: dict[str, Any]):
         result = await runner.execute(spec, arguments)
         return {
@@ -56,25 +56,3 @@ def bind_sdk_capability(
         }
 
     return sdk_handler
-
-
-def _sdk_input_schema(spec: CapabilitySpec) -> dict[str, type[Any]]:
-    properties = spec.input_schema.get("properties", {})
-    return {
-        name: _sdk_type(property_schema.get("type"))
-        for name, property_schema in properties.items()
-    }
-
-
-def _sdk_type(json_type: str | None) -> type[Any]:
-    if json_type is None:
-        return str
-    type_mapping: dict[str, type[Any]] = {
-        "string": str,
-        "integer": int,
-        "number": float,
-        "boolean": bool,
-        "array": list,
-        "object": dict,
-    }
-    return type_mapping.get(json_type, str)

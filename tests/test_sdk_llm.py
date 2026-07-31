@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from claude_agent_sdk import tool
 from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -258,4 +259,24 @@ class TestPermissionPolicy:
         )
 
         assert isinstance(allowed, PermissionResultAllow)
+        assert isinstance(hidden, PermissionResultDeny)
+
+    @pytest.mark.asyncio
+    async def test_sdk_options_expose_only_bound_capabilities(self, sdk):
+        @tool(
+            "mcp_docs_search",
+            "search docs",
+            {"type": "object", "properties": {}, "required": []},
+        )
+        async def search_docs(_arguments):
+            return {"content": []}
+
+        options = sdk._build_options([search_docs])
+
+        visible = await options.can_use_tool(
+            "mcp__mmag__mcp_docs_search", {}, None
+        )
+        hidden = await options.can_use_tool("mcp__mmag__search_text", {}, None)
+
+        assert isinstance(visible, PermissionResultAllow)
         assert isinstance(hidden, PermissionResultDeny)

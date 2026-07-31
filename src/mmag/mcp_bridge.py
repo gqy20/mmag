@@ -21,6 +21,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from .capabilities import (
+    CapabilityExecutor,
+    CapabilitySpec,
+    bind_legacy_capability,
+    bind_sdk_capability,
+    create_mcp_capability,
+)
 from .logger import get_logger
 
 if TYPE_CHECKING:
@@ -155,14 +162,28 @@ class MCPClientBridge:
         registry: ToolRegistry,
         *,
         allowed_tools: set[str] | frozenset[str] | tuple[str, ...] = (),
+        executor: CapabilityExecutor | None = None,
     ):
         self.registry = registry
         self.allowed_tools = frozenset(allowed_tools)
+        self.executor = executor or CapabilityExecutor()
         self._sessions: dict[str, _McpConn] = {}  # name → (transport, session)
+        self._capabilities: dict[str, CapabilitySpec] = {}
 
     def is_tool_allowed(self, server_name: str, tool_name: str) -> bool:
         """Return whether an external MCP tool is explicitly enabled."""
         return f"mcp_{server_name}_{tool_name}" in self.allowed_tools
+
+    def get_capabilities(self) -> tuple[CapabilitySpec, ...]:
+        """Return the allowlisted external capabilities in discovery order."""
+        return tuple(self._capabilities.values())
+
+    def get_sdk_bindings(self) -> list:
+        """Generate SDK bindings from the same specs and executor as Legacy."""
+        return [
+            bind_sdk_capability(spec, executor=self.executor)
+            for spec in self._capabilities.values()
+        ]
 
     async def load_and_connect(self) -> int:
         """读取 .mcp.json 并连接所有配置的 Server
@@ -278,28 +299,11 @@ class MCPClientBridge:
                 self._sessions.pop(item.name, None)
                 return 0
 
-            # 4) 注册到 ToolRegistry
-            registered = 0
-            for tool in tools:
-                tool_name = f"mcp_{item.name}_{tool.name}"
-                if not self.is_tool_allowed(item.name, tool.name):
-                    log.warning("MCP 工具未在白名单中，跳过注册: %s", tool_name)
-                    continue
-                input_schema = tool.inputSchema or {}
-                handler = self._make_handler(session, tool.name, item.name)
-
-                from .tools import Tool
-
-                self.registry.register(
-                    Tool(
-                        name=tool_name,
-                        description=tool.description or f"[MCP:{item.name}] {tool.name}",
-                        input_schema=input_schema,
-                        handler=handler,
-                    )
-                )
-                registered += 1
-
+            # 4) 发现结果先进入 Capability，再派生 Legacy/SDK bindings。
+            registered = self._register_discovered_tools(item.name, session, tools)
+            if registered == 0:
+                await self._close_conn(item.name, transport, session)
+                self._sessions.pop(item.name, None)
             return registered
 
         except BaseException:
@@ -326,42 +330,26 @@ class MCPClientBridge:
             except Exception as e:
                 log.warning("MCP Server '%s' transport 关闭异常: %s", name, e)
 
-    @staticmethod
-    def _make_handler(session: Any, tool_name: str, server_name: str):
-        """创建闭包 handler，将 ToolRegistry 调用转发到 MCP Server"""
-
-        async def handler(**kwargs: Any) -> str:
-            import json as _json
-
-            try:
-                result = await session.call_tool(tool_name, arguments=kwargs)
-                # 提取文本内容
-                texts = []
-                for content in result.content:
-                    if hasattr(content, "text"):
-                        texts.append(content.text)
-                    elif isinstance(content, str):
-                        texts.append(content)
-                    elif hasattr(content, "__dict__"):
-                        texts.append(str(content.__dict__))
-                    else:
-                        texts.append(str(content))
-
-                output = "\n".join(texts)
-                log.debug(
-                    "[MCP:%s.%s] → %d 字符",
-                    server_name,
-                    tool_name,
-                    len(output),
-                )
-                return output
-
-            except Exception as e:
-                err_msg = f"MCP 工具调用错误 [{server_name}/{tool_name}]: {type(e).__name__}: {e}"
-                log.error(err_msg)
-                return _json.dumps({"error": err_msg}, ensure_ascii=False)
-
-        return handler
+    def _register_discovered_tools(
+        self,
+        server_name: str,
+        session: Any,
+        tools: list[Any],
+    ) -> int:
+        """Register allowlisted discovery results through the Capability policy path."""
+        registered = 0
+        for tool in tools:
+            capability_name = f"mcp_{server_name}_{tool.name}"
+            if not self.is_tool_allowed(server_name, tool.name):
+                log.warning("MCP 工具未在白名单中，跳过注册: %s", capability_name)
+                continue
+            spec = create_mcp_capability(server_name, tool, session)
+            self._capabilities[spec.name] = spec
+            self.registry.register(
+                bind_legacy_capability(spec, executor=self.executor)
+            )
+            registered += 1
+        return registered
 
     async def close_all(self):
         """关闭所有 MCP 连接，并同步注销注入到 ToolRegistry 的 mcp_* 工具
@@ -374,6 +362,13 @@ class MCPClientBridge:
             await self._close_conn(name, conn.transport, conn.session)
             # 注销该 Server 注入的全部工具（mcp_<name>_*）
             removed = self.registry.unregister_prefix(f"mcp_{name}_")
+            capability_names = [
+                capability_name
+                for capability_name in self._capabilities
+                if capability_name.startswith(f"mcp_{name}_")
+            ]
+            for capability_name in capability_names:
+                del self._capabilities[capability_name]
             if removed:
                 log.debug("MCP Server '%s': 已注销 %d 个工具", name, removed)
         self._sessions.clear()
