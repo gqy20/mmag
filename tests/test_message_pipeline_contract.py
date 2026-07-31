@@ -4,12 +4,12 @@
 所有外部依赖均使用 mock，默认测试集合不得访问真实 Mattermost 或 LLM。
 """
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from mmag.agent import Agent
+from mmag.capabilities import get_capability_context
 from mmag.config import config
 from mmag.runtimes import AgentResult, RunRequest, RuntimeUnavailableError
 
@@ -20,8 +20,6 @@ def _make_agent(runtime_result: str = "已完成") -> Agent:
     agent.bot_username = "agent2"
     agent.stats = {"messages": 0, "responses": 0, "dropped_messages": 0}
     agent.working_memory = {}
-    agent.tool_context = SimpleNamespace(current_post=None)
-
     agent.mm = MagicMock()
     agent.mm.get_username.return_value = "alice"
     agent.mm.get_channel.return_value = {
@@ -143,3 +141,26 @@ async def test_explicit_message_builds_provider_neutral_run_request():
     assert request.context.trace_id != "----"
     assert request.context.scope == "mattermost:team-1/channel-1"
     assert request.max_rounds == config.max_tool_rounds
+
+
+@pytest.mark.asyncio
+async def test_runtime_executes_with_originating_message_capability_context():
+    agent = _make_agent("任务完成")
+    observed = None
+
+    async def observe_context(_request):
+        nonlocal observed
+        observed = get_capability_context()
+        return AgentResult(text="任务完成", runtime="test")
+
+    agent.runtime.run.side_effect = observe_context
+
+    with patch.multiple(config, mm_channel_id="", mm_team_id="", use_sdk_llm=True):
+        await agent._on_posted(_posted_event())
+
+    assert observed is not None
+    assert observed.actor_id == "user-1"
+    assert observed.conversation_id == "channel-1"
+    assert observed.message_id == "post-1"
+    assert observed.message == "@agent2 帮我处理"
+    assert get_capability_context() is None
