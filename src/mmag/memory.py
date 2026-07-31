@@ -3,9 +3,10 @@ SQLite 持久化记忆
 """
 
 import json
-import sqlite3
 import time
 
+from .infrastructure.sqlite import SQLiteDatabase
+from .infrastructure.sqlite.fts import cjk_tokenize_for_fts as _cjk_tokenize_for_fts
 from .logger import get_logger
 
 log = get_logger(__name__)
@@ -16,206 +17,8 @@ class Memory:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
-        self._conn: sqlite3.Connection | None = None
-        self._init_db()
-
-    def _init_db(self):
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        c = self._conn.cursor()
-        # 对话片段
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS conversation_segments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel_id TEXT NOT NULL,
-                started_at REAL,
-                ended_at REAL,
-                topic TEXT,
-                summary TEXT,
-                participants TEXT,
-                key_points TEXT,
-                status TEXT DEFAULT 'active'
-            )
-        """)
-        # 待办事项
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS open_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel_id TEXT,
-                description TEXT,
-                mentioned_by TEXT,
-                created_at REAL,
-                resolved_at REAL,
-                resolution TEXT
-            )
-        """)
-        # 用户画像（含自动推断字段）
-        c.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_profiles (
-                user_id TEXT PRIMARY KEY,
-                username TEXT,
-                first_seen REAL,
-                message_count INTEGER DEFAULT 0,
-                expertise TEXT,
-                preferences TEXT,
-                style TEXT DEFAULT 'casual',
-                notes TEXT,
-                last_interaction REAL,
-                topics TEXT,
-                active_hours TEXT,
-                _question_count INTEGER DEFAULT 0,
-                is_bot INTEGER DEFAULT 0
-            )
-            """
-        )
-        # 团队知识
-        c.execute(
-            """
-            CREATE TABLE IF NOT EXISTS team_knowledge (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel_id TEXT,
-                key TEXT,
-                value TEXT,
-                source TEXT DEFAULT 'conversation',
-                confidence REAL DEFAULT 0.5,
-                updated_at REAL,
-                mentioned_count INTEGER DEFAULT 0
-            )
-            """
-        )
-
-        # FTS5 全文搜索虚拟表（与 team_knowledge 同步维护）
-        # 注意: 中文文本需预分词（插入空格），否则 FTS5 将整段中文视为一个 token
-        c.execute(
-            """
-            CREATE VIRTUAL TABLE IF NOT EXISTS team_knowledge_fts USING fts5(
-                key,
-                value,
-                content='team_knowledge',
-                content_rowid='id'
-            )
-            """
-        )
-        # 消息日志（永久,所有历史消息只增不删,供 LLM 检索/回顾）
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS message_log (
-                id TEXT PRIMARY KEY,
-                channel_id TEXT NOT NULL,
-                user_id TEXT,
-                username TEXT,
-                message TEXT,
-                create_at REAL,
-                post_type TEXT DEFAULT '',
-                root_id TEXT DEFAULT ''
-            )
-        """)
-        c.execute(
-            "CREATE INDEX IF NOT EXISTS idx_message_log_ch_time "
-            "ON message_log(channel_id, create_at DESC)"
-        )
-        # FTS5 虚表（独立 storage,不用 content=） — 用于全文检索
-        c.execute(
-            """
-            CREATE VIRTUAL TABLE IF NOT EXISTS message_log_fts USING fts5(
-                message,
-                tokenize = 'unicode61 remove_diacritics 2'
-            )
-            """
-        )
-        # 主表 ↔ FTS 关联表（unicode61 虚表无 rowid 自动关联,需手工维护）
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS message_log_fts_map (
-                rowid INTEGER PRIMARY KEY,
-                message_id TEXT UNIQUE NOT NULL,
-                FOREIGN KEY (message_id) REFERENCES message_log(id) ON DELETE CASCADE
-            )
-        """)
-        # URL 分析结果缓存（GitHub API / 通用网页）
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS url_cache (
-                url TEXT PRIMARY KEY,
-                url_hash TEXT NOT NULL,
-                kind TEXT,
-                status TEXT,
-                title TEXT,
-                summary TEXT,
-                content TEXT,
-                metadata TEXT,
-                fetched_at REAL,
-                expires_at REAL,
-                error TEXT
-            )
-        """)
-        # ---- 一次性迁移:旧 message_cache → message_log (必须在新表都建好之后) ----
-        self._migrate_message_cache_to_log(c)
-        self._conn.commit()
-        log.info(f"记忆数据库就绪: {self.db_path}")
-
-    def _migrate_message_cache_to_log(self, c):
-        """一次性迁移:旧 message_cache 表 → 新 message_log + FTS5 索引,完成后 DROP
-
-        逻辑:
-          1) 检查 sqlite_master 是否有 message_cache 表
-          2) INSERT OR IGNORE INTO message_log FROM message_cache(原数据进新表)
-          3) 给每条 message 写 FTS5 索引 + 关联表
-          4) DROP message_cache
-        全程单事务,失败回滚不污染。
-        """
-        exists = c.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_cache'"
-        ).fetchone()
-        if not exists:
-            return  # 新库,跳过
-
-        log.info("检测到旧 message_cache 表,开始迁移到 message_log...")
-        try:
-            count_row = c.execute("SELECT COUNT(*) as cnt FROM message_cache").fetchone()
-            old_count = count_row["cnt"] if count_row else 0
-
-            # 1) 主表迁移
-            c.execute(
-                """
-                INSERT OR IGNORE INTO message_log
-                    (id, channel_id, user_id, username, message, create_at, post_type, root_id)
-                SELECT id, channel_id, user_id, username, message, create_at, post_type, root_id
-                FROM message_cache
-                """
-            )
-            # 2) 重建 FTS5 索引(独立 storage,需逐条插入)
-            rows = c.execute(
-                "SELECT id, message FROM message_log "
-                "WHERE id NOT IN (SELECT message_id FROM message_log_fts_map)"
-            ).fetchall()
-            for r in rows:
-                # CJK 预分词 (跟 log_message 写入路径保持一致, 否则搜索不命中)
-                fts_text = _cjk_tokenize_for_fts(r["message"] or "")
-                c.execute(
-                    "INSERT INTO message_log_fts(message) VALUES (?)",
-                    (fts_text,),
-                )
-                fts_rowid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
-                c.execute(
-                    "INSERT INTO message_log_fts_map(rowid, message_id) VALUES (?, ?)",
-                    (fts_rowid, r["id"]),
-                )
-
-            # 3) DROP 旧表
-            c.execute("DROP TABLE message_cache")
-
-            new_count_row = c.execute("SELECT COUNT(*) as cnt FROM message_log").fetchone()
-            new_count = new_count_row["cnt"] if new_count_row else 0
-            log.info(
-                "迁移完成: 旧 %d 条 → 新 %d 条 (+ %d 新增); FTS 索引 %d 条",
-                old_count,
-                new_count,
-                new_count - old_count,
-                len(rows),
-            )
-        except Exception as e:
-            log.error("message_cache 迁移失败(已回滚): %s", e, exc_info=True)
-            raise
+        self._database = SQLiteDatabase(db_path)
+        self._conn = self._database.connect()
 
     # ---- 消息日志（永久存储,供检索/回顾）----
 
@@ -318,8 +121,7 @@ class Memory:
         if order not in ("DESC", "ASC"):
             order = "DESC"
         rows = self._conn.execute(
-            f"SELECT * FROM message_log WHERE channel_id=? "
-            f"ORDER BY create_at {order} LIMIT ?",
+            f"SELECT * FROM message_log WHERE channel_id=? ORDER BY create_at {order} LIMIT ?",
             (channel_id, limit),
         ).fetchall()
         # 摘要(ASC)按原序返回,普通(DESC)反转成正序
@@ -356,9 +158,7 @@ class Memory:
         """
         # ---- 路径 1: FTS5 关键词检索 ----
         if query and query.strip():
-            return self._search_messages_fts(
-                query, channel_id, user_id, before_ts, after_ts, limit
-            )
+            return self._search_messages_fts(query, channel_id, user_id, before_ts, after_ts, limit)
 
         # ---- 路径 2: 纯条件过滤(无关键词)----
         clauses = []
@@ -379,8 +179,7 @@ class Memory:
         where = " AND ".join(clauses) if clauses else "1=1"
         params.append(limit)
         rows = self._conn.execute(
-            f"SELECT m.* FROM message_log m WHERE {where} "
-            f"ORDER BY m.create_at DESC LIMIT ?",
+            f"SELECT m.* FROM message_log m WHERE {where} ORDER BY m.create_at DESC LIMIT ?",
             params,
         ).fetchall()
         return [dict(r) for r in rows]
@@ -478,8 +277,7 @@ class Memory:
         where = " AND ".join(clauses)
         params.append(limit)
         rows = self._conn.execute(
-            f"SELECT m.* FROM message_log m WHERE {where} "
-            f"ORDER BY m.create_at DESC LIMIT ?",
+            f"SELECT m.* FROM message_log m WHERE {where} ORDER BY m.create_at DESC LIMIT ?",
             params,
         ).fetchall()
         return [dict(r) for r in rows]
@@ -974,35 +772,3 @@ class Memory:
     def close(self):
         if self._conn:
             self._conn.close()
-
-
-# ============================================================
-# CJK 预分词（FTS5 中文支持）
-# ============================================================
-
-
-def _cjk_tokenize_for_fts(text: str) -> str:
-    """为 FTS5 预处理中文文本：在 CJK 字符间插入空格
-
-    FTS5 默认 tokenizer (unicode61) 按空格/标点分词，
-    对无空格的中文文本会整段视为一个 token，导致部分匹配失败。
-
-    本函数在 CJK 字符之间插入空格，使 FTS5 能逐字索引:
-      "部署流程" → "部 署 流 程"
-      "k8s集群部署" → "k8s 集 群 部 署"
-
-    英文/数字保持不变（它们本身有空格分隔）。
-    """
-    import re
-
-    result = []
-    prev_is_cjk = False
-    for ch in text:
-        is_cjk = bool(re.match(r"[一-鿿㐀-䶿]", ch))
-        if is_cjk and prev_is_cjk:
-            # 连续 CJK 字符之间插空格
-            result.append(f" {ch}")
-        else:
-            result.append(ch)
-        prev_is_cjk = is_cjk
-    return "".join(result)

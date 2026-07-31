@@ -13,6 +13,7 @@ from mmag.infrastructure.sqlite import (
     SQLiteDatabase,
     apply_migrations,
 )
+from mmag.memory import Memory
 
 
 def _memory_connection() -> sqlite3.Connection:
@@ -184,3 +185,20 @@ def test_future_database_version_fails_fast():
 
     with pytest.raises(FutureSchemaError, match="newer than supported"):
         apply_migrations(conn)
+
+
+def test_memory_opens_and_migrates_legacy_database():
+    path = "file:mmag-legacy-integration?mode=memory&cache=shared"
+    legacy = sqlite3.connect(path, uri=True)
+    _create_legacy_message_cache(legacy)
+
+    memory = Memory(path)
+    legacy.close()
+    messages = memory.get_recent_messages("ch1")
+    verification = sqlite3.connect(path, uri=True)
+    version = verification.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+    verification.close()
+    memory.close()
+
+    assert [message["id"] for message in messages] == ["p1"]
+    assert version == LATEST_SCHEMA_VERSION
