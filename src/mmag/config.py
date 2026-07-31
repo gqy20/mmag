@@ -49,6 +49,11 @@ _FIELD_TO_ENV: dict[str, str] = {
 _SECRET_FIELD_NAMES: frozenset[str] = frozenset({"mm_token", "anthropic_api_key"})
 
 
+def _secret_status(value: str | None) -> str:
+    """Return presence-only status so logs never contain secret fragments."""
+    return "(已设置)" if value else "(未设置)"
+
+
 def _log_config_loading():
     """遍历 Config 字段打印加载结果，新增/删除配置项时无需改这里"""
     log.info("═══ 配置加载 ═══")
@@ -59,7 +64,7 @@ def _log_config_loading():
             continue
         v = os.getenv(env_key, "")
         if f.name in _SECRET_FIELD_NAMES:
-            v = f"{v[:8]}...{v[-4:]}" if len(v) > 12 else (v or "(未设置)")
+            v = _secret_status(v)
         log.info("  %s = %s", env_key, v)
     log.info("  .env path = %s (%s)", _ENV_PATH, "✅ 存在" if _ENV_PATH.exists() else "❌ 不存在")
     log.info("═══════════════")

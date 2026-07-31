@@ -105,6 +105,30 @@ CLI_DANGEROUS_TOOLS = frozenset({
     "Edit",       # 🔴 编辑文件 (sed-like)
 })
 
+# SDK 内注册到 in-process "mmag" MCP server 的已知能力。
+# 新增工具必须显式加入这里，否则权限回调默认拒绝执行。
+_MCP_ALLOWED_TOOLS = frozenset(
+    f"mcp__mmag__{name}"
+    for name in (
+        "get_posts",
+        "search_messages",
+        "search_knowledge",
+        "get_channel_info",
+        "save_knowledge",
+        "get_user_profile",
+        "analyze_link",
+        "send_file",
+        "crawl_single",
+        "crawl_site",
+        "crawl_batch",
+        "search_text",
+        "search_news",
+        "search_books",
+        "search_videos",
+        "search_images",
+    )
+)
+
 
 def _resolve_path(path: str | None) -> str | None:
     """解析路径并返回绝对路径。返回 None 表示无法解析或非法路径。"""
@@ -128,8 +152,9 @@ def _is_path_allowed(path: str) -> bool:
     resolved = _resolve_path(path)
     if not resolved:
         return False
-    # 必须以项目根目录为前缀
-    if not resolved.startswith(_PROJECT_ROOT):
+    resolved_path = Path(resolved)
+    project_root = Path(_PROJECT_ROOT).resolve()
+    if not resolved_path.is_relative_to(project_root):
         log.warning("路径越界: %s (不在 %s 内)", resolved, _PROJECT_ROOT)
         return False
     return True
@@ -176,7 +201,7 @@ async def _tool_permission_callback(
 ) -> Any:
     """can_use_tool 回调 — 三层动态权限决策。
 
-    层级 1 — MCP 工具: mcp__ 前缀 → ✅ 全部放行
+    层级 1 — MCP 工具: 仅显式 allowlist 中的 mmag 能力放行
     层级 2 — 危险工具黑名单: Bash/Write/Edit → ❌ 无条件拒绝
     层级 3 — 安全工具路径检查: Read/Grep/Glob/LSP → 仅允许项目目录内
     层级 4 — 未知工具 → ❌ 默认拒绝（安全优先）
@@ -185,8 +210,13 @@ async def _tool_permission_callback(
 
     # ── 层级 1: MCP 工具 ──
     if tool_name.startswith("mcp__"):
-        log.debug("权限放行 [MCP]: %s", tool_name)
-        return PermissionResultAllow()
+        if tool_name in _MCP_ALLOWED_TOOLS:
+            log.debug("权限放行 [MCP allowlist]: %s", tool_name)
+            return PermissionResultAllow()
+        log.warning("权限拒绝 [未知 MCP]: %s", tool_name)
+        return PermissionResultDeny(
+            message=f"MCP 工具 '{tool_name}' 未在 mmag 显式白名单中",
+        )
 
     # ── 层级 2: 危险工具无条件拒绝 ──
     if tool_name in CLI_DANGEROUS_TOOLS:
@@ -363,15 +393,14 @@ class SDKLLM:
             ),
             permission_mode="default",
             mcp_servers=mcp_servers if mcp_servers else None,
-            # 不设 allowed_tools → 所有工具(含MCP)都对LLM可见
-            # 安全控制交给 disallowed_tools + can_use_tool 回调
+            # 不设 allowed_tools → 工具保持可见，执行时由 can_use_tool 做显式策略判断
             # 注意: 必须用 "default" 而非 "bypassPermissions":
             #   1. bypassPermissions 会被 SDK 转为 --dangerously-skip-permissions CLI flag,
             #      该 flag 在 root/sudo 下被 CLI 拒绝运行
             #   2. bypassPermissions 会 shadow can_use_tool 回调 (回调永不执行),
             #      使三层权限防护全部失效
             disallowed_tools=list(CLI_DANGEROUS_TOOLS),  # 安全网: 黑名单危险工具
-            can_use_tool=_tool_permission_callback,       # 动态权限回调 (三层防护)
+            can_use_tool=_tool_permission_callback,       # 动态权限回调 (MCP 白名单 + CLI 防护)
             env=env,
             setting_sources=[],  # 不加载项目 CLAUDE.md
             cwd=str(Path(__file__).resolve().parents[2]),  # 限制工作目录为项目根目录

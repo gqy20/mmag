@@ -83,6 +83,7 @@ class Memory:
             self._conn.commit()
             return True
         except Exception as e:
+            self._conn.rollback()
             # 升级为 error: 静默吞掉会导致消息/索引永久丢失,运维侧无信号
             log.error(
                 "log_message 失败 (id=%s channel=%s): %s",

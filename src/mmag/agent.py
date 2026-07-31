@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .client import PROP_FROM_BOT, PROP_TRUE, MMClient
-from .config import _log_config_loading, config
+from .config import _log_config_loading, _secret_status, config
 from .llm import LLM, LLMError
 from .logger import get_logger, trace
 from .mcp_bridge import MCPClientBridge
@@ -150,12 +150,7 @@ class Agent:
         log.info("[2/5] 检查 LLM 配置...")
         log.info(f"       模型: {config.anthropic_model}")
         log.info(f"       API:  {config.anthropic_base_url or '默认 (api.anthropic.com)'}")
-        key_preview = (
-            f"{config.anthropic_api_key[:8]}...{config.anthropic_api_key[-4:]}"
-            if config.anthropic_api_key
-            else "(未设置!)"
-        )
-        log.info(f"       Key:  {key_preview}")
+        log.info("       Key:  %s", _secret_status(config.anthropic_api_key))
         if not config.anthropic_api_key:
             log.error("       ❌ ANTHROPIC_API_KEY 未设置! 请检查 .env")
             self.running = False
