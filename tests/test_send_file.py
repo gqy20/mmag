@@ -17,6 +17,7 @@ from mmag.capabilities import (
     create_send_file_capability,
     get_capability_context,
 )
+from mmag.sdk_llm import SDKLLM
 
 
 def _make_mock_mm():
@@ -171,3 +172,33 @@ async def test_capability_context_is_isolated_between_concurrent_requests():
 
     assert observed == [first, second]
     assert get_capability_context() is None
+
+
+@pytest.mark.asyncio
+async def test_persistent_sdk_transport_serializes_request_context_bridge():
+    sdk = SDKLLM()
+    first = CapabilityContext("trace-1", "user-1", "channel-1", "post-1", "导出 A")
+    second = CapabilityContext("trace-2", "user-2", "channel-2", "post-2", "导出 B")
+    observed: list[CapabilityContext | None] = []
+    active_calls = 0
+    max_active_calls = 0
+
+    async def observe(_content):
+        nonlocal active_calls, max_active_calls
+        active_calls += 1
+        max_active_calls = max(max_active_calls, active_calls)
+        observed.append(sdk.get_capability_context())
+        await asyncio.sleep(0)
+        active_calls -= 1
+        return "done", False
+
+    sdk._execute_query_unlocked = observe
+
+    await asyncio.gather(
+        sdk._execute_query([], capability_context=first),
+        sdk._execute_query([], capability_context=second),
+    )
+
+    assert observed == [first, second]
+    assert max_active_calls == 1
+    assert sdk.get_capability_context() is None
