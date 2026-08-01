@@ -73,3 +73,39 @@ async def test_send_post_async_uses_caller_idempotency_key():
     assert result == "post-1"
     payload = client._request_async.await_args.kwargs["json"]
     assert payload["pending_post_id"] == "delivery-1"
+
+
+@pytest.mark.asyncio
+async def test_upload_file_async_uses_channel_query_and_multipart_filename():
+    client = MMClient(base_url="https://mattermost.example", token="token")
+    response = MagicMock()
+    response.json.return_value = {"file_infos": [{"id": "file-1"}]}
+    client._request_async = AsyncMock(return_value=response)
+
+    result = await client.upload_file_async(
+        "channel-1", "preview.png", b"png", "image/png"
+    )
+
+    assert result == "file-1"
+    request = client._request_async.await_args
+    assert request.args == ("POST", "/files")
+    assert request.kwargs["params"] == {"channel_id": "channel-1"}
+    assert request.kwargs["files"] == {
+        "files": ("preview.png", b"png", "image/png")
+    }
+    assert "data" not in request.kwargs
+
+
+def test_upload_file_uses_channel_query_and_multipart_filename():
+    client = MMClient(base_url="https://mattermost.example", token="token")
+    response = MagicMock()
+    response.json.return_value = {"file_infos": [{"id": "file-1"}]}
+    client.session.post = MagicMock(return_value=response)
+
+    result = client.upload_file("channel-1", "deck.pptx", b"pptx")
+
+    assert result == "file-1"
+    request = client.session.post.call_args
+    assert request.kwargs["params"] == {"channel_id": "channel-1"}
+    assert request.kwargs["files"]["files"][:2] == ("deck.pptx", b"pptx")
+    assert "data" not in request.kwargs

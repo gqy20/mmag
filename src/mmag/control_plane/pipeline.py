@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 Processor = Callable[[InboundEvent], Awaitable[tuple[OutboundMessage, ...]]]
 Deliverer = Callable[[OutboundMessage], Awaitable[str]]
+AcceptedHook = Callable[[InboundEvent], Awaitable[None]]
 log = get_logger(__name__)
 
 
@@ -112,10 +113,17 @@ class MessagePipeline:
             await self.scheduler.submit(record.event)
         self._delivery_wake.set()
 
-    async def accept(self, event: InboundEvent) -> bool:
+    async def accept(
+        self,
+        event: InboundEvent,
+        *,
+        on_accepted: AcceptedHook | None = None,
+    ) -> bool:
         if not self.store.accept_event(event):
             return False
         self._ensure_execution_entities(event)
+        if on_accepted is not None:
+            await on_accepted(event)
         await self.scheduler.submit(event)
         return True
 

@@ -74,9 +74,12 @@ MMAG Run ID、响应 Hash、断言、耗时和错误码。报告文件是本地�
 ## 真实体验录制
 
 仓库提供可重复的三分钟演示录制脚本。它使用独立 Playwright session 登录 Mattermost，依次展示默认
-`get`、MMChat、Project 知识写入与回读、PPT 审批和 PPTX Artifact 交付；只加速 LLM、执行和上传等待，
-输入、审批和最终结果保持正常速度。凭据只从 `.env` 中的评估账号变量读取，不写入命令参数、日志或产物。
-当前测试录制使用 1920×1080；流程、节奏和画面验收通过后，正式成片切换为 2560×1440（2K/QHD）。
+`get`、MMChat、Project 知识写入与回读、PPT 审批、PNG 预览和 PPTX Artifact 交付；脚本通过当前
+Thread 的真实 `file_ids` 核验 `preview.png` 与 `deck.pptx`，并打开 Mattermost 原生图片预览。只加速
+LLM、执行和上传等待，输入、审批和最终结果保持正常速度。凭据只从 `.env` 中的评估账号变量读取，
+不写入 Bot 日志、录制文件或最终产物。
+录制脚本使用原生 2560×1440（2K/QHD），并在片段之间复用同一浏览器页面，避免把 Mattermost 整页
+重载动画录入等待阶段。
 
 先做无外部访问的配置与分镜检查：
 

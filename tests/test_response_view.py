@@ -15,7 +15,7 @@ from mmag.application import (
     RunStatus,
     split_markdown,
 )
-from mmag.application.views import ResponseKind
+from mmag.application.views import ResponseKind, ResponseSection
 from mmag.control_plane import InboundEvent, OutboundMessage, SQLiteControlPlane
 
 
@@ -84,6 +84,34 @@ def test_renderer_uses_text_fallback_without_callback():
 
     assert "attachments" not in rendered.props
     assert "批准 approval-1" in rendered.chunks[0]
+
+
+def test_renderer_preserves_markdown_for_agent_content():
+    """agent 写的 Markdown 应原样进入 message，由 Mattermost marked 渲染，不被反斜杠转义。"""
+    view = ResponseView(
+        kind=ResponseKind.RESULT,
+        title="标题",
+        summary="**粗体** 与 `代码` 和 [链接](https://example.com)",
+        status=RunStatus.SUCCEEDED,
+        sections=(
+            ResponseSection(
+                "分析",
+                body="| a | b |\n|---|---|\n| 1 | 2 |",
+                items=("~~删除线~~ 项",),
+            ),
+        ),
+    )
+    markdown = MattermostRenderer().render(view).chunks[0]
+
+    assert "**粗体**" in markdown
+    assert "`代码`" in markdown
+    assert "[链接](https://example.com)" in markdown
+    assert "~~删除线~~" in markdown
+    assert "| a | b |" in markdown
+    # 回归保护:不得出现反斜杠转义的 md 字符(否则 Mattermost 会当字面量)
+    assert "\\*" not in markdown
+    assert "\\`" not in markdown
+    assert "\\[" not in markdown
 
 
 def test_action_token_is_signed_short_lived_and_one_time(tmp_path):

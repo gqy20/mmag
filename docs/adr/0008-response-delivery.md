@@ -35,3 +35,11 @@ Envelope/Audit/Artifact，不作为默认聊天正文；文件外发回到 Polic
 
 当前交互回调只把批准/拒绝接入真实审批状态机。Delivery 手工重试、Artifact 下载授权和返工创建新
 Run 需要各自的业务状态与授权服务，在完成前不得只靠按钮 token 模拟成功。
+
+## 修订
+
+- 2026-08-01：第 2 条中的“转义”策略调整。`MattermostRenderer.clean()` 不再用反斜杠转义
+  Markdown 语法（`\ ` * _ [ ] ( ) # ! | ~`），改为只保留安全边界清洗：控制字符剔除、
+  `@`→`@​` 防 Mention 注入、`<`/`>` 实体化（Mattermost 不渲染 HTML）。动机：Mattermost
+  用 marked 渲染 message 字段，agent 写的粗体/代码/链接/表格应原样渲染，而非退化成字面字符。
+  URL 安全仍由 `safe_url` 在框架层兜底。

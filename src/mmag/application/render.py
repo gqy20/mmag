@@ -125,8 +125,12 @@ class MattermostRenderer:
     @staticmethod
     def clean(value: str, limit: int = _MAX_FIELD) -> str:
         text = _CONTROL.sub("", str(value or "")).replace("@", "@\u200b")
+        # ponytail: 不转义 Markdown 语法 —— Mattermost 用 marked 渲染 message 字段，
+        # agent 写的 **粗体** / `代码` / [链接](url) / 表格应原样渲染。保留的安全边界：
+        # 控制字符剔除、@mention 防误触发(@→@​)、<> 实体化(Mattermost 不渲染 HTML)。
+        # 已知 ceiling: 内容里未闭合的代码围栏 / 不成对的 []() 可能干扰骨架渲染；若 agent
+        # 大量原始 md 导致布局错乱，再按字段白名单精细控制。
         text = text.replace("<", "&lt;").replace(">", "&gt;")
-        text = re.sub(r"([\\`*_\[\]()#!|~])", r"\\\1", text)
         if len(text) <= limit:
             return text
         return text[: max(0, limit - 1)].rstrip() + "…"

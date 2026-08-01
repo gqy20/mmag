@@ -81,6 +81,7 @@ class MessageHandler:
         self._action_tasks: set[asyncio.Task] = set()
         self.presenter = ResponsePresenter()
         self.pipeline: MessagePipeline | None = None
+        self._ingress_status_posts: dict[str, str] = {}
 
     async def on_posted(self, event: dict) -> None:
         if self.pipeline is None:
@@ -88,7 +89,19 @@ class MessageHandler:
             return
         inbound = self.to_inbound_event(event)
         if inbound is not None:
-            await self.pipeline.accept(inbound)
+            await self.pipeline.accept(inbound, on_accepted=self._acknowledge_accepted)
+
+    async def _acknowledge_accepted(self, event: InboundEvent) -> None:
+        post = self._parse_post(dict(event.payload))
+        if post is None or not self._accept(post):
+            return
+        message = str(post.get("message") or "").strip()
+        file_metas = (post.get("metadata") or {}).get("files") or []
+        if not message and not file_metas:
+            return
+        status_post_id = await self.delivery.send_ack(post) or ""
+        if status_post_id:
+            self._ingress_status_posts[event.event_id] = status_post_id
 
     @staticmethod
     def to_inbound_event(event: dict) -> InboundEvent | None:
@@ -137,7 +150,9 @@ class MessageHandler:
             log.info("⏭️ 跳过重复消息: %s", post_id[:12])
             return
 
-        status_post_id = await self.delivery.send_ack(post) or ""
+        status_post_id = self._ingress_status_posts.pop(post_id, "")
+        if not status_post_id:
+            status_post_id = await self.delivery.send_ack(post) or ""
         self.stats["messages"] += 1
         user_id = str(post.get("user_id") or "")
         post["username"] = self.mm.get_username(user_id)

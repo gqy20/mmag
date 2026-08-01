@@ -126,6 +126,35 @@ async def test_explicit_message_routes_and_delivers_reply():
 
 
 @pytest.mark.asyncio
+async def test_pipeline_ack_is_sent_at_acceptance_and_reused_by_processor():
+    handler, runtime = _make_handler("任务完成")
+    accepted = None
+
+    class ImmediatePipeline:
+        async def accept(self, event, *, on_accepted=None):
+            nonlocal accepted
+            accepted = event
+            if on_accepted is not None:
+                await on_accepted(event)
+            return True
+
+    handler.pipeline = ImmediatePipeline()
+    handler.delivery.send_ack.return_value = "status-1"
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
+        await handler.on_posted(_posted_event())
+
+    handler.delivery.send_ack.assert_awaited_once()
+    runtime.run.assert_not_awaited()
+    assert accepted is not None
+
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
+        messages = await handler.process_inbound(accepted)
+
+    handler.delivery.send_ack.assert_awaited_once()
+    assert messages[0].update_post_id == "status-1"
+
+
+@pytest.mark.asyncio
 async def test_runtime_failure_delivers_user_visible_error():
     handler, runtime = _make_handler()
     runtime.run.side_effect = RuntimeUnavailableError("model unavailable", runtime="test")

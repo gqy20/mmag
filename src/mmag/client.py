@@ -287,7 +287,7 @@ class MMClient:
             response = await self._request_async(
                 "POST",
                 "/files",
-                data={"channel_id": channel_id, "filename": filename},
+                params={"channel_id": channel_id},
                 files={"files": (filename, data, content_type)},
             )
             result = response.json()
@@ -316,7 +316,7 @@ class MMClient:
         try:
             resp = self.session.post(
                 f"{self.base_url}/api/v4/files",
-                data={"channel_id": channel_id, "filename": filename},
+                params={"channel_id": channel_id},
                 files={"files": (filename, data, content_type)},
                 timeout=60,
             )
