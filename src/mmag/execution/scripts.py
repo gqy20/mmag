@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import struct
+import zipfile
 from typing import TYPE_CHECKING, Any
 
 from ..capabilities import get_capability_context
@@ -52,9 +54,11 @@ class ScriptExecutor:
         *,
         profile_ref: str,
         capability: str,
+        command_id: str,
         permission: str,
         payload: Mapping[str, Any],
         source_ref: str = "",
+        provenance: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         context = get_capability_context()
         session = get_skill_resource_session()
@@ -64,7 +68,14 @@ class ScriptExecutor:
         profile = self.profiles.get(profile_ref)
         input_hash = self._input_hash(payload)
         try:
-            command = self._authorize(profile, skill, capability, permission, context)
+            command = self._authorize(
+                profile,
+                skill,
+                capability,
+                command_id,
+                permission,
+                context,
+            )
             script_hash = self._script_hash(skill, command)
         except ScriptExecutionError as error:
             self._audit_preflight_denial(
@@ -80,11 +91,13 @@ class ScriptExecutor:
                 profile,
                 command,
                 skill,
+                capability,
                 payload,
                 source_ref,
                 context.run_id or context.trace_id,
                 context.scope,
                 script_hash,
+                dict(provenance or {}),
             )
         except asyncio.CancelledError:
             self._audit(
@@ -94,12 +107,12 @@ class ScriptExecutor:
                 "cancelled",
                 input_hash,
                 script_hash,
-                {"error_code": "execution_cancelled"},
+                {"capability": capability, "error_code": "execution_cancelled"},
             )
             raise
         except Exception as error:
             code = getattr(error, "code", "execution_failed")
-            details = {"error_code": str(code)}
+            details = {"capability": capability, "error_code": str(code)}
             audit_details = getattr(error, "audit_details", {})
             if isinstance(audit_details, dict):
                 details.update(audit_details)
@@ -123,7 +136,7 @@ class ScriptExecutor:
             "succeeded",
             input_hash,
             script_hash,
-            result["audit"],
+            {"capability": capability, **result["audit"]},
         )
         return result["payload"]
 
@@ -132,11 +145,13 @@ class ScriptExecutor:
         profile: ExecutionProfile,
         command: ExecutionCommand,
         skill: SkillPackage,
+        capability: str,
         payload: Mapping[str, Any],
         source_ref: str,
         run_id: str,
         scope_id: str,
         script_hash: str,
+        extra_provenance: Mapping[str, str],
     ) -> dict[str, Any]:
         with self.workspaces.create(run_id) as workspace:
             input_path = self.workspaces.write_input(
@@ -158,10 +173,16 @@ class ScriptExecutor:
                     source_path,
                 )
             )
-            self._validate_output(output_path, profile.limits.max_artifact_bytes)
+            self._validate_output(
+                output_path,
+                command.output.kind,
+                profile.limits.max_artifact_bytes,
+            )
             provenance = {
                 **profile.provenance(),
                 **skill.snapshot.to_dict(),
+                **extra_provenance,
+                "execution_capability": capability,
                 "execution_command": command.id,
                 "execution_script_hash": script_hash,
                 "execution_executable_hash": process_result.executable_sha256,
@@ -200,6 +221,7 @@ class ScriptExecutor:
         profile: ExecutionProfile,
         skill: SkillPackage,
         capability: str,
+        command_id: str,
         permission: str,
         context,
     ) -> ExecutionCommand:
@@ -228,7 +250,7 @@ class ScriptExecutor:
                 code="agent_profile_forbidden",
             )
         try:
-            command = profile.commands[capability]
+            command = profile.commands[command_id]
         except KeyError as error:
             raise ScriptExecutionError(
                 "Execution Profile does not allow this capability",
@@ -293,12 +315,44 @@ class ScriptExecutor:
             raise ScriptExecutionError("command references an unregistered Skill script") from error
 
     @staticmethod
-    def _validate_output(path, max_bytes: int) -> None:
+    def _validate_output(path, kind: str, max_bytes: int) -> None:
         info = path.lstat()
         if path.is_symlink() or not path.is_file():
             raise ScriptExecutionError("managed output must be a regular non-symlink file")
         if info.st_size < 1 or info.st_size > max_bytes:
             raise ScriptExecutionError("managed output exceeds its Artifact limit")
+        try:
+            if kind == "slide_deck":
+                with zipfile.ZipFile(path) as archive:
+                    names = frozenset(archive.namelist())
+                    required = {"[Content_Types].xml", "ppt/presentation.xml"}
+                    if not required <= names or not any(
+                        name.startswith("ppt/slides/slide") and name.endswith(".xml")
+                        for name in names
+                    ):
+                        raise ScriptExecutionError("renderer did not produce a valid PPTX")
+                    if archive.testzip() is not None:
+                        raise ScriptExecutionError("renderer produced a corrupt PPTX")
+            elif kind == "presentation_pdf":
+                if not path.read_bytes()[:5] == b"%PDF-":
+                    raise ScriptExecutionError("renderer did not produce a valid PDF")
+            elif kind == "presentation_source":
+                if not path.read_text(encoding="utf-8").startswith("---\n"):
+                    raise ScriptExecutionError("renderer did not produce normalized Markdown")
+            elif kind == "presentation_preview_svg":
+                content = path.read_text(encoding="utf-8")
+                if not content.lstrip().startswith("<svg") or "</svg>" not in content:
+                    raise ScriptExecutionError("renderer did not produce a valid SVG preview")
+            elif kind == "presentation_preview":
+                with path.open("rb") as handle:
+                    header = handle.read(24)
+                if header[:8] != b"\x89PNG\r\n\x1a\n" or len(header) != 24:
+                    raise ScriptExecutionError("renderer did not produce a valid PNG preview")
+                width, height = struct.unpack(">II", header[16:24])
+                if width < 640 or height < 360 or abs(width / height - 16 / 9) > 0.03:
+                    raise ScriptExecutionError("presentation preview has invalid dimensions")
+        except (UnicodeDecodeError, zipfile.BadZipFile) as error:
+            raise ScriptExecutionError(f"renderer produced invalid {kind} content") from error
 
     @staticmethod
     def _input_hash(payload: Mapping[str, Any]) -> str:

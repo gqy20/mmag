@@ -29,6 +29,10 @@ _MISSING_INTENT = "用户未明确请求交付文件。"
 def _user_requests_file(context: CapabilityContext | None) -> bool:
     if context is None:
         return False
+    # A presentation is not useful as a text-only result. The PPT Package explicitly
+    # grants ppt.build, so successful deck generation is itself a delivery intent.
+    if "ppt.build" in context.allowed_capabilities:
+        return True
     message = context.message.lower()
     return any(keyword in message for keyword in _FILE_REQUEST_KEYWORDS)
 
@@ -74,6 +78,7 @@ def create_send_file_capability(
         name="send_file",
         description=(
             "请求将一个已生成、同 Scope 的 Artifact 作为 Mattermost 附件交付。"
+            "PPT Agent 生成演示文稿后默认为 PPTX 创建交付意图；其他 Agent 仍需用户明确请求。"
             "本能力只创建交付意图，不读取任意路径、不接收文件内容，也不直接上传或发帖。"
         ),
         input_schema={

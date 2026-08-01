@@ -1,5 +1,5 @@
 id: ppt
-version: 1.0.0
+version: 2.2.0
 default_effect: deny
 
 rules:
@@ -19,12 +19,18 @@ rules:
 
   - id: generate-presentation-artifact
     effect: allow
-    actions: [ppt.render, ppt.export_pdf]
+    actions: [ppt.build]
     permissions: [artifact:generate]
-    reason: Local generation is constrained by the registered offline Execution Profile.
+    reason: Presentation generation is constrained to registered commands and Artifact staging.
+
+  - id: run-host-demo-shell
+    effect: allow
+    actions: [ppt.shell]
+    permissions: [execution:shell]
+    reason: Explicit Demo authorization for host Shell; parent Secrets are not inherited.
 
   - id: approve-deck-delivery
     effect: require_approval
     actions: [send_file]
     permissions: [mattermost:file:write]
-    reason: Delivering generated slide source is an external side effect.
+    reason: Every generated PPTX enters explicit approval before Mattermost attachment delivery.

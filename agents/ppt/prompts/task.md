@@ -12,6 +12,7 @@ Context references:
 Artifact references:
 {artifact_refs_json}
 
-Treat unresolved references as inputs still needed, not as content already read. If the user asks
-for a file, render it through the governed execution capabilities. Never place executable names,
-commands, Python code, host paths, or arbitrary output filenames in tool arguments.
+Treat unresolved references as inputs still needed, not as content already read. Load the Slides
+Skill template, compose complete governed Markdown, call ppt.build once with `corp@1.0.0`, then call
+send_file once with its returned pptx_ref. Never place executable names, commands, code, CSS, host
+paths, remote assets, or arbitrary output filenames in tool arguments.

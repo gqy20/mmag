@@ -3,8 +3,8 @@ kind: Skill
 
 metadata:
   name: slides
-  version: 1.2.0
-  description: Turn validated material into an audience-aware, editable presentation structure.
+  version: 2.2.0
+  description: Compose governed Markdown into editable PPTX, source, and direct image preview Artifacts.
 
 spec:
   instruction_ref: SKILL.md
@@ -18,25 +18,30 @@ spec:
 
   required_capabilities:
     - load_skill_resource
-    - ppt.render
+    - ppt.build
   optional_capabilities:
     - search_knowledge
-    - ppt.export_pdf
+    - ppt.shell
     - send_file
 
   execution_profiles:
-    - ppt@1.0.0
+    - ppt@2.1.0
 
   resources:
     templates:
       - templates/deck.md
+      - templates/corp.theme.json
     references:
       - references/story.md
     scripts:
-      - scripts/ppt.py
+      - scripts/package.json
+      - scripts/package-lock.json
+      - scripts/ppt-src.cjs
+      - scripts/ppt.cjs
+      - scripts/shell.py
 
   disclosure:
-    max_resources: 2
-    max_resource_bytes: 16384
-    max_total_bytes: 24576
-    max_estimated_tokens: 6000
+    max_resources: 3
+    max_resource_bytes: 65536
+    max_total_bytes: 98304
+    max_estimated_tokens: 12000

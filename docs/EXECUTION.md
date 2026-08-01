@@ -1,6 +1,6 @@
 # 受控执行平面
 
-MMAG 的 Python/CLI 执行不是模型可编程的 Shell，而是由平台注册的窄口 Capability：模型只提交业务参数，平台选择已发布的 `ExecutionProfile`、已登记脚本和固定 argv。
+MMAG 的生产 Python/CLI 执行以平台注册的窄口 Capability 为默认方式：模型只提交业务参数，平台选择已发布的 `ExecutionProfile`、已登记脚本和固定 argv。当前 `ppt@2.1.0` 为了 Demo 可用性显式开放 `ppt.shell` 宿主机 Shell，这是已知的临时高风险例外，不代表生产安全边界。
 
 ```text
 Agent allowlist
@@ -21,22 +21,26 @@ execution-profiles/
   ppt.yml                 # metadata.version: 1.0.0
 
 skills/slides/
-  skill.yml               # execution_profiles: [ppt@1.0.0]
-  scripts/ppt.py          # 只哈希和执行，不向模型披露
+  skill.yml               # execution_profiles: [ppt@2.1.0]
+  scripts/ppt.cjs         # 锁定依赖的离线 bundle，只哈希和执行，不向模型披露
 ```
 
 `ExecutionProfileLoader` 使用 Draft 2020-12 Schema 严格拒绝未知字段，并额外校验文件名、命令 ID、可信可执行文件、占位符和挂载边界。Registry 以 `name@version` 原子加载；Profile YAML Hash、runner、运行时镜像/依赖摘要与网络模式进入 Agent Package、Skill provenance 和 Artifact provenance。Profile 内容变化必须提升 SemVer，CI 会比较目标分支。
 
-当前 `ppt@1.0.0` 只注册：
+当前 `ppt@2.1.0` 向 PPT Agent 暴露高层 `ppt.build` 与 Demo 专用 `ppt.shell`。`ppt.build` 内部注册四个固定步骤：
 
-- `ppt.render`：固定调用受校验的 `skills/slides/scripts/ppt.py`，输出 `slide_deck` PPTX；
-- `ppt.export_pdf`：固定调用 LibreOffice 转换同 scope 的 `slide_deck` Artifact，输出 `presentation_pdf`。
+- `ppt.source`：校验并保存规范化 `slides.md`；
+- `ppt.render`：固定调用锁定的 PptxGenJS bundle，输出原生可编辑 `slide_deck` PPTX；
+- `ppt.preview_svg`：从同一份 Markdown 与主题直接生成首页 SVG；
+- `ppt.preview`：固定调用 rsvg-convert 输出 1280×720 PNG 并校验尺寸。
 
-没有 `shell.exec`、`python.eval`、`python.exec` 或任意命令字符串入口。
+内部步骤不是模型 Capability。`ppt.build` 负责依次执行并只在源文件、PPTX 和预览均成功后返回完整 Bundle；PptxGenJS、主题和 Markdown 语法版本写入每个 Artifact provenance。PDF 不再是生成预览的前置条件。
+
+`ppt.shell` 通过注册脚本启动完整 Bash，允许任意命令字符串、宿主文件和网络访问。它从独立临时目录启动，父进程环境被清空且 stdout/stderr 有上限，但这不是文件系统 Sandbox；投入生产前必须移除或重新绑定到真正隔离的 Runner。
 
 ## 隔离与生命周期
 
-`ProcessRunner` 只使用 `asyncio.create_subprocess_exec`。Bubblewrap 为每次进程建立新 namespace，默认断网、清空父进程环境，只读挂载运行时/系统库/已校验输入与 Skill 脚本，仅开放本次 Run 的 `tmp` 和 `staging` 写入。进程还受 wall-clock timeout、CPU、地址空间、进程数、文件大小、文件描述符与 stdout/stderr 总量限制。
+`ProcessRunner` 使用 `asyncio.create_subprocess_exec`。PPT Demo 的 `host` Runner 清空父进程环境、从本次 Run 的 `tmp` 启动，并保留 wall-clock timeout、CPU、地址空间、增量进程数、文件大小、文件描述符与 stdout/stderr 总量限制；它不隔离宿主文件系统或网络。Bubblewrap Runner 仍用于受控 Profile，但当前 PPT Profile 不依赖它。
 
 每次调用创建独立 `runs/<run-hash>-<random>/` 工作区：
 
@@ -65,9 +69,9 @@ Capability 常规日志同样只记录参数 key 和输入摘要。stdout/stderr
 
 ## 部署前提与失败方式
 
-目标 Linux 主机必须安装 Bubblewrap，并允许服务账户创建所需 namespace。PDF 导出还要求安装 LibreOffice。`EXECUTION_RUNTIME_ROOT` 必须指向包含锁定 Python 依赖的发布运行时；默认使用当前 `sys.prefix`。
+PPT Demo 主机必须安装 Node.js 与 rsvg-convert。PPTX 由锁定的 PptxGenJS bundle 生成，预览不依赖 LibreOffice。
 
-若 Bubblewrap、运行时、LibreOffice 或 namespace 权限不可用，能力会以 `sandbox_unavailable` 失败；系统不会降级为宿主机直接执行。当前开发容器禁止创建所需 namespace，因此这里可以完成静态和负向验证，但真实渲染 smoke 必须在部署环境执行。
+可执行文件、资源限制或渲染器不可用时，能力返回结构化执行错误，不静默换用另一个渲染器。当前开发环境已完成真实 PPTX 与 PNG smoke。
 
 相关配置：
 
@@ -83,7 +87,7 @@ ARTIFACT_STORE_PATH
 
 ## 与 LangGraph、Deep Agents Sandbox 的边界
 
-Bubblewrap 是 MMAG 当前选择的本地隔离 Runner，不是 LangGraph 原生组件。LangGraph 只负责图状态、
+Process Runner 不是 LangGraph 原生组件。LangGraph 只负责图状态、
 工具调度、checkpoint 与 `interrupt/resume`；真正的 Python/CLI 进程始终由执行平面负责。
 
 Deep Agents 是构建在 LangGraph 上层的 Agent Harness，可以通过可插拔 Sandbox Backend 向 Agent

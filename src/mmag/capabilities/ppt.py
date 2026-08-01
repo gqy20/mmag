@@ -1,100 +1,181 @@
-"""Narrow presentation-generation capabilities backed by Execution Profiles."""
+"""Atomic presentation build capability backed by governed execution steps."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import hashlib
+import json
+from typing import TYPE_CHECKING, Any
 
+from ..skill_packages import get_skill_resource_session
 from .base import CapabilityEffect, CapabilitySpec, SourcePolicy
+from .context import get_capability_context
 
 if TYPE_CHECKING:
     from ..execution import ScriptExecutor
 
-PPT_PROFILE_REF = "ppt@1.0.0"
+PPT_PROFILE_REF = "ppt@2.1.0"
 ARTIFACT_PERMISSION = "artifact:generate"
+SHELL_PERMISSION = "execution:shell"
+THEMES = {"corp@1.0.0": "templates/corp.theme.json"}
+
+
+def _load_theme(theme_ref: str) -> tuple[dict[str, Any], str]:
+    session = get_skill_resource_session()
+    if session is None:
+        raise RuntimeError("presentation build requires an active Skill")
+    try:
+        resource_ref = THEMES[theme_ref]
+        asset = session.package.resources[resource_ref]
+    except KeyError as error:
+        raise ValueError(f"unknown presentation theme {theme_ref!r}") from error
+    path = session.package.root / resource_ref
+    content = path.read_bytes()
+    digest = hashlib.sha256(content).hexdigest()
+    if digest != asset.sha256:
+        raise RuntimeError("presentation theme no longer matches its Skill Package")
+    theme = json.loads(content)
+    metadata = theme.get("metadata", {})
+    actual_ref = f"{metadata.get('name')}@{metadata.get('version')}"
+    if actual_ref != theme_ref:
+        raise RuntimeError("presentation theme metadata does not match its registered ref")
+    return theme, digest
 
 
 def create_ppt_capabilities(executor: ScriptExecutor) -> tuple[CapabilitySpec, ...]:
-    async def render(deck: dict) -> dict:
-        return await executor.execute(
+    async def build(source: str, theme_ref: str) -> dict[str, Any]:
+        theme, theme_hash = _load_theme(theme_ref)
+        payload = {"source": source, "theme_ref": theme_ref, "theme": theme}
+        provenance = {
+            "presentation_source_format": "mmag-markdown@1.0.0",
+            "presentation_renderer": "pptxgenjs@4.0.1",
+            "presentation_theme": theme_ref,
+            "presentation_theme_hash": theme_hash,
+        }
+        source_result = await executor.execute(
             profile_ref=PPT_PROFILE_REF,
-            capability="ppt.render",
+            capability="ppt.build",
+            command_id="ppt.source",
             permission=ARTIFACT_PERMISSION,
-            payload={"deck": deck},
+            payload=payload,
+            provenance=provenance,
         )
+        pptx_result = await executor.execute(
+            profile_ref=PPT_PROFILE_REF,
+            capability="ppt.build",
+            command_id="ppt.render",
+            permission=ARTIFACT_PERMISSION,
+            payload=payload,
+            provenance=provenance,
+        )
+        preview_svg_result = await executor.execute(
+            profile_ref=PPT_PROFILE_REF,
+            capability="ppt.build",
+            command_id="ppt.preview_svg",
+            permission=ARTIFACT_PERMISSION,
+            payload=payload,
+            provenance=provenance,
+        )
+        preview_result = await executor.execute(
+            profile_ref=PPT_PROFILE_REF,
+            capability="ppt.build",
+            command_id="ppt.preview",
+            permission=ARTIFACT_PERMISSION,
+            payload={"artifact_ref": preview_svg_result["artifact_ref"]},
+            source_ref=preview_svg_result["artifact_ref"],
+            provenance=provenance,
+        )
+        artifacts = [
+            *source_result["artifacts"],
+            *pptx_result["artifacts"],
+            *preview_result["artifacts"],
+        ]
+        return {
+            "status": "succeeded",
+            "source_ref": source_result["artifact_ref"],
+            "pptx_ref": pptx_result["artifact_ref"],
+            "preview_refs": [preview_result["artifact_ref"]],
+            "theme_ref": theme_ref,
+            "editable_ratio": 1.0,
+            "artifacts": artifacts,
+            "execution": pptx_result["execution"],
+        }
 
-    async def export_pdf(artifact_ref: str) -> dict:
-        return await executor.execute(
+    async def shell(command: str) -> dict[str, Any]:
+        result = await executor.execute(
             profile_ref=PPT_PROFILE_REF,
-            capability="ppt.export_pdf",
-            permission=ARTIFACT_PERMISSION,
-            payload={"artifact_ref": artifact_ref},
-            source_ref=artifact_ref,
+            capability="ppt.shell",
+            command_id="ppt.shell",
+            permission=SHELL_PERMISSION,
+            payload={"command": command},
+            provenance={"execution_mode": "demo-host-shell"},
         )
+        context = get_capability_context()
+        if context is None:
+            raise RuntimeError("PPT shell requires an active Agent context")
+        _, path = executor.artifacts.resolve(
+            result["artifact_ref"],
+            scope_id=context.scope,
+            expected_kind="execution_report",
+        )
+        report = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            **report,
+            "report_ref": result["artifact_ref"],
+            "execution": result["execution"],
+        }
 
     return (
         CapabilitySpec(
-            name="ppt.render",
+            name="ppt.build",
             description=(
-                "Render a validated slide-deck structure into a governed PPTX Artifact. "
-                "The renderer runs offline inside the registered Execution Profile."
+                "Build a complete presentation bundle from governed MMAG Markdown. "
+                "Returns editable PPTX, normalized source, and direct PNG preview Artifact refs."
             ),
             input_schema={
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "deck": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": [
-                            "title",
-                            "audience",
-                            "objective",
-                            "narrative",
-                            "slides",
-                        ],
-                        "properties": {
-                            "title": {"type": "string"},
-                            "audience": {"type": "string"},
-                            "objective": {"type": "string"},
-                            "narrative": {"type": "string"},
-                            "slides": {
-                                "type": "array",
-                                "minItems": 1,
-                                "maxItems": 40,
-                                "items": {"type": "object"},
-                            },
-                        },
-                    }
+                    "source": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200000,
+                        "description": "MMAG presentation Markdown using registered layouts.",
+                    },
+                    "theme_ref": {
+                        "type": "string",
+                        "enum": sorted(THEMES),
+                    },
                 },
-                "required": ["deck"],
+                "required": ["source", "theme_ref"],
             },
-            handler=render,
+            handler=build,
             effect=CapabilityEffect.WRITE,
             permission=ARTIFACT_PERMISSION,
-            timeout_seconds=180,
+            timeout_seconds=420,
             source_policy=SourcePolicy.NONE,
         ),
         CapabilitySpec(
-            name="ppt.export_pdf",
+            name="ppt.shell",
             description=(
-                "Export one same-scope slide_deck Artifact to a governed PDF Artifact "
-                "through fixed LibreOffice argv inside the offline Execution Profile."
+                "Run a full host shell command for the PPT demo, starting in an ephemeral "
+                "workspace. Host files and network are accessible; parent Secrets are not inherited."
             ),
             input_schema={
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "artifact_ref": {
+                    "command": {
                         "type": "string",
-                        "pattern": "^artifact://[a-f0-9]{32}$",
+                        "minLength": 1,
+                        "maxLength": 16384,
                     }
                 },
-                "required": ["artifact_ref"],
+                "required": ["command"],
             },
-            handler=export_pdf,
+            handler=shell,
             effect=CapabilityEffect.WRITE,
-            permission=ARTIFACT_PERMISSION,
-            timeout_seconds=180,
+            permission=SHELL_PERMISSION,
+            timeout_seconds=90,
             source_policy=SourcePolicy.NONE,
         ),
     )

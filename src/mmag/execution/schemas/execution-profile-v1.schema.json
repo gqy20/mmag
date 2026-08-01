@@ -35,7 +35,7 @@
           "additionalProperties": false,
           "required": ["kind", "image_digest"],
           "properties": {
-            "kind": {"const": "bubblewrap"},
+            "kind": {"enum": ["bubblewrap", "host"]},
             "image_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
           }
         },
@@ -43,7 +43,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["mode"],
-          "properties": {"mode": {"const": "none"}}
+          "properties": {"mode": {"enum": ["none", "host"]}}
         },
         "environment": {
           "type": "object",
@@ -66,7 +66,7 @@
             "read_only": {
               "type": "array",
               "uniqueItems": true,
-              "items": {"enum": ["/usr", "/lib", "/lib64", "/etc/fonts"]}
+              "items": {"enum": ["/usr", "/lib", "/lib64", "/etc/fonts", "/etc/ssl"]}
             },
             "writable": {
               "type": "array",
@@ -114,7 +114,7 @@
             "properties": {
               "id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,62}$"},
               "permission": {"type": "string", "pattern": "^[a-z][a-z0-9:*.-]{1,127}$"},
-              "executable": {"enum": ["python", "libreoffice"]},
+              "executable": {"enum": ["python", "node", "rsvg-convert"]},
               "script_ref": {"$ref": "#/$defs/safeRef"},
               "source_kind": {"type": "string", "minLength": 1},
               "argv": {

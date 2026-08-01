@@ -5,6 +5,7 @@ __pycache__/
 dist/
 build/
 *.egg
+node_modules/
 .coverage
 coverage.xml
 

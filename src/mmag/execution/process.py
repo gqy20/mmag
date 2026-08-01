@@ -1,4 +1,4 @@
-"""Fail-closed fixed-argv process execution inside Bubblewrap."""
+"""Fail-closed process execution inside a registered sandbox runner."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import resource
 import shutil
 import signal
 import stat
+import sys
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -68,7 +69,8 @@ class ProcessRunner:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={},
+            env=self._process_environment(request),
+            cwd=str(request.workspace.temporary) if request.profile.runner == "host" else None,
             start_new_session=True,
             preexec_fn=self._limits(request),
         )
@@ -90,7 +92,7 @@ class ProcessRunner:
             details = _failure_details(return_code, stdout, stderr)
             if self._is_sandbox_bootstrap_failure(stderr):
                 raise SandboxUnavailableError(
-                    "bubblewrap could not create the required sandbox",
+                    f"{request.profile.runner} could not create the required sandbox",
                     audit_details=details,
                 )
             raise ProcessFailedError(return_code, stdout, stderr)
@@ -115,6 +117,8 @@ class ProcessRunner:
 
     def build_argv(self, request: ProcessRequest) -> tuple[tuple[str, ...], Path]:
         profile = request.profile
+        if profile.runner == "host":
+            return self._build_host_argv(request)
         if profile.runner != "bubblewrap" or profile.network != "none":
             raise SandboxUnavailableError("Execution Profile does not enforce an offline sandbox")
         bwrap = Path(self.bubblewrap_path)
@@ -160,6 +164,26 @@ class ProcessRunner:
         argv.extend(command_argv)
         return tuple(argv), executable_path
 
+    def _build_host_argv(self, request: ProcessRequest) -> tuple[tuple[str, ...], Path]:
+        self._validate_paths(request)
+        executable_path, _ = self._resolve_executable(request.command.executable, local=True)
+        mappings = self._host_mappings(request)
+        command_argv = tuple(mappings.get(token, token) for token in request.command.argv)
+        return (str(executable_path), *command_argv), executable_path
+
+    def _process_environment(self, request: ProcessRequest) -> dict[str, str]:
+        if request.profile.runner != "host":
+            return {}
+        executable, _ = self._resolve_executable(request.command.executable, local=True)
+        roots = self._local_executable_roots(executable, Path(sys.executable).resolve())
+        return {
+            **request.profile.environment,
+            "HOME": str(request.workspace.temporary),
+            "PATH": ":".join(str(path) for path in roots if path.name == "bin"),
+            "PYTHONNOUSERSITE": "1",
+            "TMPDIR": str(request.workspace.temporary),
+        }
+
     @staticmethod
     def _validate_paths(request: ProcessRequest) -> None:
         workspace = request.workspace
@@ -190,14 +214,18 @@ class ProcessRunner:
         if request.output_path.parent != workspace.staging or request.output_path.is_symlink():
             raise SandboxUnavailableError("managed output escapes Artifact staging")
 
-    def _resolve_executable(self, alias: str) -> tuple[Path, str]:
+    def _resolve_executable(self, alias: str, *, local: bool = False) -> tuple[Path, str]:
         if alias == "python":
-            executable = self.runtime_root / "bin" / "python"
+            executable = Path(sys.executable).resolve() if local else self.runtime_root / "bin" / "python"
             sandbox_path = "/runtime/bin/python"
-        elif alias == "libreoffice":
-            resolved = shutil.which("libreoffice") or shutil.which("soffice")
+        elif alias == "node":
+            resolved = shutil.which("node") if local else None
+            executable = Path(resolved).resolve() if resolved else self.runtime_root / "bin" / "node"
+            sandbox_path = "/runtime/bin/node"
+        elif alias == "rsvg-convert":
+            resolved = shutil.which("rsvg-convert")
             if not resolved:
-                raise SandboxUnavailableError("LibreOffice is not installed")
+                raise SandboxUnavailableError("rsvg-convert is not installed")
             executable = Path(resolved).resolve()
             sandbox_path = str(executable)
         else:
@@ -206,11 +234,25 @@ class ProcessRunner:
             raise SandboxUnavailableError(f"managed executable {alias!r} is unavailable")
         return executable, sandbox_path
 
+    def _local_executable_roots(self, executable: Path, python: Path) -> tuple[Path, ...]:
+        candidates = [Path("/usr/bin"), Path("/bin"), self.runtime_root / "bin"]
+        for path in (executable, python):
+            candidates.append(path.parent)
+            if path.parent.name == "bin":
+                candidates.append(path.parent.parent)
+        for alias in ("node", "rsvg-convert"):
+            resolved = shutil.which(alias)
+            if resolved:
+                path = Path(resolved).resolve()
+                candidates.extend((path.parent, path.parent.parent))
+        return tuple(dict.fromkeys(path.resolve() for path in candidates if path.exists()))
+
     @staticmethod
     def _sandbox_mappings(request: ProcessRequest) -> dict[str, str]:
         mappings = {
             "{input}": f"/work/input/{request.input_path.name}",
             "{output}": f"/work/staging/{request.output_path.name}",
+            "{output_stem}": f"/work/staging/{request.output_path.stem}",
             "{staging}": "/work/staging",
             "{temporary}": "/work/tmp",
         }
@@ -218,6 +260,21 @@ class ProcessRunner:
             mappings["{script}"] = f"/assets/{request.script.name}"
         if request.source_path is not None:
             mappings["{source}"] = f"/work/input/{request.source_path.name}"
+        return mappings
+
+    @staticmethod
+    def _host_mappings(request: ProcessRequest) -> dict[str, str]:
+        mappings = {
+            "{input}": str(request.input_path),
+            "{output}": str(request.output_path),
+            "{output_stem}": str(request.output_path.with_suffix("")),
+            "{staging}": str(request.workspace.staging),
+            "{temporary}": str(request.workspace.temporary),
+        }
+        if request.script is not None:
+            mappings["{script}"] = str(request.script)
+        if request.source_path is not None:
+            mappings["{source}"] = str(request.source_path)
         return mappings
 
     @staticmethod
@@ -232,11 +289,12 @@ class ProcessRunner:
     @staticmethod
     def _limits(request: ProcessRequest):
         limits = request.profile.limits
+        process_ceiling = ProcessRunner._owned_task_count() + limits.max_processes
 
         def apply() -> None:
             resource.setrlimit(resource.RLIMIT_CPU, (limits.cpu_seconds, limits.cpu_seconds))
             resource.setrlimit(resource.RLIMIT_AS, (limits.memory_bytes, limits.memory_bytes))
-            resource.setrlimit(resource.RLIMIT_NPROC, (limits.max_processes, limits.max_processes))
+            resource.setrlimit(resource.RLIMIT_NPROC, (process_ceiling, process_ceiling))
             resource.setrlimit(
                 resource.RLIMIT_FSIZE,
                 (limits.max_artifact_bytes, limits.max_artifact_bytes),
@@ -244,6 +302,18 @@ class ProcessRunner:
             resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
 
         return apply
+
+    @staticmethod
+    def _owned_task_count() -> int:
+        uid = os.getuid()
+        count = 0
+        for path in Path("/proc").iterdir():
+            if not path.name.isdigit():
+                continue
+            with suppress(FileNotFoundError, PermissionError):
+                if path.stat().st_uid == uid:
+                    count += sum(1 for task in (path / "task").iterdir() if task.name.isdigit())
+        return count
 
     async def _communicate(
         self,

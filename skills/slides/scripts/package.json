@@ -1,0 +1,15 @@
+{
+  "name": "@mmag/slides-renderer",
+  "private": true,
+  "version": "2.1.0",
+  "license": "MIT",
+  "scripts": {
+    "bundle": "esbuild ppt-src.cjs --bundle --platform=node --format=cjs --minify --legal-comments=eof --outfile=ppt.cjs"
+  },
+  "dependencies": {
+    "pptxgenjs": "4.0.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.8"
+  }
+}

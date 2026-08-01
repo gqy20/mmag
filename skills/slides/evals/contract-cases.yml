@@ -1,4 +1,4 @@
-version: 1
+version: 2
 cases:
   - id: selects-for-ppt
     input:
@@ -7,7 +7,7 @@ cases:
       parameters: {}
     expect:
       selected: true
-      capability_subset: [load_skill_resource]
+      capability_subset: [load_skill_resource, ppt.build]
 
   - id: rejects-empty-goal
     input:

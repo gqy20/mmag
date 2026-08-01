@@ -3,6 +3,7 @@ import hashlib
 import json
 import shutil
 import sys
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -51,7 +52,10 @@ class WritingRunner:
             with request.output_path.open("wb") as handle:
                 handle.truncate(request.profile.limits.max_artifact_bytes + 1)
         else:
-            request.output_path.write_bytes(b"PK\x03\x04governed-pptx")
+            with zipfile.ZipFile(request.output_path, "w") as archive:
+                archive.writestr("[Content_Types].xml", "<Types/>")
+                archive.writestr("ppt/presentation.xml", "<presentation/>")
+                archive.writestr("ppt/slides/slide1.xml", "<slide/>")
         return ProcessResult(0, 12, 0, 0, "a" * 64, "b" * 64)
 
 
@@ -86,9 +90,9 @@ def _context() -> CapabilityContext:
         "post-1",
         "create the deck",
         "mattermost:team/channel-1",
-        frozenset({"ppt.render"}),
+        frozenset({"ppt.build", "ppt.shell"}),
         "run-1",
-        frozenset({"ppt@1.0.0"}),
+        frozenset({"ppt@2.1.0"}),
     )
 
 
@@ -112,17 +116,27 @@ def _deck(marker: str = "safe") -> dict:
     }
 
 
-def test_profile_registry_loads_fixed_offline_commands():
-    profile = _profiles().get("ppt@1.0.0")
+def test_profile_registry_loads_ppt_demo_commands():
+    profile = _profiles().get("ppt@2.1.0")
 
-    assert profile.runner == "bubblewrap"
-    assert profile.network == "none"
-    assert set(profile.commands) == {"ppt.render", "ppt.export_pdf"}
-    assert profile.commands["ppt.render"].argv[0:2] == ("-I", "-B")
+    assert profile.runner == "host"
+    assert profile.network == "host"
+    assert set(profile.commands) == {
+        "ppt.source",
+        "ppt.render",
+        "ppt.preview_svg",
+        "ppt.preview",
+        "ppt.shell",
+    }
+    assert profile.commands["ppt.render"].executable == "node"
+    assert profile.commands["ppt.render"].argv[0] == "{script}"
     assert len(profile.sha256) == 64
     assert (
         profile.image_digest
-        == f"sha256:{hashlib.sha256((ROOT / 'uv.lock').read_bytes()).hexdigest()}"
+        == "sha256:"
+        + hashlib.sha256(
+            (ROOT / "skills/slides/scripts/package-lock.json").read_bytes()
+        ).hexdigest()
     )
 
 
@@ -130,7 +144,7 @@ def test_profile_registry_loads_fixed_offline_commands():
     ("field", "value"),
     [
         (("spec", "runner", "kind"), "shell"),
-        (("spec", "network", "mode"), "host"),
+        (("spec", "network", "mode"), "public"),
         (("spec", "environment", "inherit"), ["PATH"]),
         (("spec", "environment", "set"), {"PATH": "/tmp/host"}),
     ],
@@ -174,25 +188,25 @@ def test_profile_rejects_shell_and_dynamic_python_commands(tmp_path):
         ExecutionProfileLoader().load(path)
 
 
-def test_process_argv_is_fixed_offline_and_contains_no_payload(tmp_path):
-    profile = _profiles().get("ppt@1.0.0")
+def test_fixed_ppt_command_argv_contains_no_payload(tmp_path):
+    profile = _profiles().get("ppt@2.1.0")
     manager = WorkspaceManager(tmp_path / "workspaces")
     marker = "x; touch /tmp/owned"
     with manager.create("run-1") as workspace:
         input_path = manager.write_input(
             workspace,
-            {"deck": _deck(marker)},
+            {"source": marker},
             max_bytes=profile.limits.max_input_bytes,
         )
         skill = _slides()
-        asset = skill.resources["scripts/ppt.py"]
+        asset = skill.resources["scripts/ppt.cjs"]
         script = manager.copy_asset(
             workspace,
-            skill.root / "scripts/ppt.py",
+            skill.root / "scripts/ppt.cjs",
             expected_sha256=asset.sha256,
         )
         output = manager.output_path(workspace, "deck.pptx")
-        runner = ProcessRunner(Path(sys.prefix), bubblewrap_path="/usr/bin/bwrap")
+        runner = ProcessRunner(Path(sys.prefix))
         argv, _ = runner.build_argv(
             ProcessRequest(
                 profile,
@@ -204,19 +218,18 @@ def test_process_argv_is_fixed_offline_and_contains_no_payload(tmp_path):
             )
         )
 
-    assert "--unshare-all" in argv
-    assert "--clearenv" in argv
+    assert argv[0].endswith("/node")
     assert marker not in " ".join(argv)
     assert not any(token in argv for token in ("sh", "bash", "-c", "eval", "exec"))
 
 
 def test_process_runner_fails_closed_without_sandbox(tmp_path):
-    profile = _profiles().get("ppt@1.0.0")
+    profile = replace(_profiles().get("ppt@2.1.0"), runner="bubblewrap", network="none")
     manager = WorkspaceManager(tmp_path / "workspaces")
     with manager.create("run-1") as workspace:
         input_path = manager.write_input(
             workspace,
-            {"deck": _deck()},
+            {"source": "safe"},
             max_bytes=profile.limits.max_input_bytes,
         )
         output = manager.output_path(workspace, "deck.pptx")
@@ -248,7 +261,7 @@ async def test_process_communication_timeout_cancels_stream_tasks(tmp_path):
         async def wait(self):
             await asyncio.Future()
 
-    profile = _profiles().get("ppt@1.0.0")
+    profile = _profiles().get("ppt@2.1.0")
     profile = replace(
         profile,
         limits=replace(profile.limits, timeout_seconds=0.01),
@@ -277,8 +290,9 @@ async def test_script_executor_commits_artifact_and_redacted_audit(tmp_path):
 
     with bind_capability_context(_context()), bind_skill_resource_session(session):
         result = await executor.execute(
-            profile_ref="ppt@1.0.0",
-            capability="ppt.render",
+            profile_ref="ppt@2.1.0",
+            capability="ppt.build",
+            command_id="ppt.render",
             permission="artifact:generate",
             payload={"deck": _deck(marker)},
         )
@@ -320,14 +334,15 @@ async def test_script_executor_denies_missing_agent_profile_before_process(tmp_p
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
-            profile_ref="ppt@1.0.0",
-            capability="ppt.render",
+            profile_ref="ppt@2.1.0",
+            capability="ppt.build",
+            command_id="ppt.render",
             permission="artifact:generate",
             payload={"deck": _deck()},
         )
 
     assert runner.requests == []
-    audit = store.list_audits(event_type="execution.process", target="ppt.render")[0]
+    audit = store.list_audits(event_type="execution.process", target="ppt.build")[0]
     assert audit.decision == "denied"
     assert audit.details["error_code"] == "agent_profile_forbidden"
 
@@ -346,8 +361,9 @@ async def test_script_executor_rejects_symlink_and_oversized_artifacts(tmp_path,
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
-            profile_ref="ppt@1.0.0",
-            capability="ppt.render",
+            profile_ref="ppt@2.1.0",
+            capability="ppt.build",
+            command_id="ppt.render",
             permission="artifact:generate",
             payload={"deck": _deck()},
         )
@@ -361,7 +377,7 @@ async def test_script_executor_rejects_tampered_skill_script(tmp_path):
     skill_root = tmp_path / "slides"
     shutil.copytree(ROOT / "skills" / "slides", skill_root)
     skill = SkillPackageLoader().load(skill_root)
-    (skill_root / "scripts" / "ppt.py").write_text("raise SystemExit(0)", encoding="utf-8")
+    (skill_root / "scripts" / "ppt.cjs").write_text("process.exit(0)", encoding="utf-8")
     executor, _, _, _ = _executor(tmp_path, WritingRunner())
     session = SkillResourceLoader().create_session(skill)
 
@@ -371,8 +387,9 @@ async def test_script_executor_rejects_tampered_skill_script(tmp_path):
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
-            profile_ref="ppt@1.0.0",
-            capability="ppt.render",
+            profile_ref="ppt@2.1.0",
+            capability="ppt.build",
+            command_id="ppt.render",
             permission="artifact:generate",
             payload={"deck": _deck()},
         )
@@ -389,8 +406,9 @@ async def test_script_executor_audits_content_free_process_failure_details(tmp_p
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
-            profile_ref="ppt@1.0.0",
-            capability="ppt.render",
+            profile_ref="ppt@2.1.0",
+            capability="ppt.build",
+            command_id="ppt.render",
             permission="artifact:generate",
             payload={"deck": _deck()},
         )

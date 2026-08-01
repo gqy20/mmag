@@ -21,10 +21,18 @@ from .models import (
 )
 
 _PLACEHOLDERS = frozenset(
-    {"{script}", "{input}", "{output}", "{source}", "{staging}", "{temporary}"}
+    {
+        "{script}",
+        "{input}",
+        "{output}",
+        "{output_stem}",
+        "{source}",
+        "{staging}",
+        "{temporary}",
+    }
 )
-_EXECUTABLES = frozenset({"python", "libreoffice"})
-_READ_ONLY_PATHS = frozenset({"/usr", "/lib", "/lib64", "/etc/fonts"})
+_EXECUTABLES = frozenset({"python", "node", "rsvg-convert"})
+_READ_ONLY_PATHS = frozenset({"/usr", "/lib", "/lib64", "/etc/fonts", "/etc/ssl"})
 _FORBIDDEN_COMMANDS = frozenset({"shell.exec", "python.eval", "python.exec"})
 _ENVIRONMENT_NAMES = frozenset({"LANG", "LC_ALL", "PYTHONHASHSEED", "TZ"})
 
@@ -122,6 +130,10 @@ class ExecutionProfileLoader:
             raise ExecutionProfileError("only temporary and staging may be writable")
         if set(profile.environment) - _ENVIRONMENT_NAMES:
             raise ExecutionProfileError("Execution Profile sets an unsafe environment variable")
+        if profile.runner not in {"bubblewrap", "host"}:
+            raise ExecutionProfileError("Execution Profile requests an unknown sandbox runner")
+        if (profile.runner, profile.network) not in {("bubblewrap", "none"), ("host", "host")}:
+            raise ExecutionProfileError("Execution Profile runner and network mode are incompatible")
         if len(profile.commands) == 0:
             raise ExecutionProfileError("Execution Profile must declare commands")
         for command in profile.commands.values():
@@ -141,6 +153,15 @@ class ExecutionProfileLoader:
             if any(token in {"-c", "-m"} for token in command.argv):
                 raise ExecutionProfileError(
                     f"Python command {command.id!r} cannot execute dynamic code or modules"
+                )
+        elif command.executable == "node":
+            if command.script_ref is None or command.argv[0] != "{script}":
+                raise ExecutionProfileError(
+                    f"Node command {command.id!r} must run a registered script"
+                )
+            if any(token in {"-e", "--eval", "-p", "--print"} for token in command.argv):
+                raise ExecutionProfileError(
+                    f"Node command {command.id!r} cannot execute dynamic code"
                 )
         elif command.script_ref is not None:
             raise ExecutionProfileError(
@@ -166,8 +187,10 @@ class ExecutionProfileLoader:
             raise ExecutionProfileError(f"command {command.id!r} has an undeclared source")
         if command.source_kind is not None and "{source}" not in tokens:
             raise ExecutionProfileError(f"command {command.id!r} does not bind its source")
-        if command.source_kind is not None and "{staging}" not in tokens:
-            raise ExecutionProfileError(f"command {command.id!r} does not bind staging")
+        if command.source_kind is not None and not tokens.intersection(
+            {"{staging}", "{output}", "{output_stem}"}
+        ):
+            raise ExecutionProfileError(f"command {command.id!r} does not bind an output")
         if any("\x00" in token for token in command.argv):
             raise ExecutionProfileError(f"command {command.id!r} contains a NUL byte")
 

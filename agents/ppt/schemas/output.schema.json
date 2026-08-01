@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mmag.ai/agents/ppt/output/1.1.0",
-  "x-version": "1.1.0",
+  "$id": "https://mmag.ai/agents/ppt/output/2.0.0",
+  "x-version": "2.0.0",
   "type": "object",
   "additionalProperties": false,
   "required": ["status", "agent", "result", "artifacts", "sources", "warnings", "usage", "provenance"],
@@ -16,42 +16,40 @@
     "provenance": {"$ref": "#/$defs/provenance"}
   },
   "$defs": {
+    "artifactRef": {"type": "string", "pattern": "^artifact://[a-f0-9]{32}$"},
     "result": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["title", "audience", "objective", "narrative", "slides", "delivery"],
+      "required": ["title", "audience", "objective", "narrative", "source", "theme_ref", "slide_count", "bundle", "delivery"],
       "properties": {
         "title": {"type": "string", "minLength": 1},
         "audience": {"type": "string", "minLength": 1},
         "objective": {"type": "string", "minLength": 1},
         "narrative": {"type": "string", "minLength": 1},
-        "slides": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["number", "title", "purpose", "body", "visual", "source_refs", "notes"],
-            "properties": {
-              "number": {"type": "integer", "minimum": 1},
-              "title": {"type": "string", "minLength": 1},
-              "purpose": {"type": "string", "minLength": 1},
-              "body": {"type": "array", "items": {"type": "string", "minLength": 1}},
-              "visual": {"type": ["string", "null"]},
-              "source_refs": {"type": "array", "items": {"type": "string"}},
-              "notes": {"type": "string"}
+        "source": {"type": "string", "minLength": 1, "maxLength": 200000},
+        "theme_ref": {"const": "corp@1.0.0"},
+        "slide_count": {"type": "integer", "minimum": 1, "maximum": 40},
+        "bundle": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source_ref", "pptx_ref", "preview_refs", "editable_ratio"],
+              "properties": {
+                "source_ref": {"$ref": "#/$defs/artifactRef"},
+                "pptx_ref": {"$ref": "#/$defs/artifactRef"},
+                "preview_refs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/artifactRef"}},
+                "editable_ratio": {"type": "number", "minimum": 0, "maximum": 1}
+              }
             }
-          }
+          ]
         },
         "delivery": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["format", "filename", "status"],
-          "properties": {
-            "format": {"enum": ["markdown", "json", "pptx", "pdf", "pptx_pdf"]},
-            "filename": {"type": ["string", "null"]},
-            "status": {"enum": ["not_requested", "pending_approval", "delivered"]}
-          }
+          "required": ["status"],
+          "properties": {"status": {"enum": ["not_requested", "pending_approval", "delivered"]}}
         }
       }
     },
@@ -68,18 +66,7 @@
     "provenance": {
       "type": "object",
       "additionalProperties": {"type": "string"},
-      "required": [
-        "agent_name",
-        "agent_spec_version",
-        "package_hash",
-        "prompt_id",
-        "prompt_version",
-        "prompt_hash",
-        "input_schema_version",
-        "output_schema_version",
-        "policy_version",
-        "model_policy_version"
-      ]
+      "required": ["agent_name", "agent_spec_version", "package_hash", "prompt_id", "prompt_version", "prompt_hash", "input_schema_version", "output_schema_version", "policy_version", "model_policy_version"]
     }
   }
 }

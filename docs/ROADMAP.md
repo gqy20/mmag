@@ -202,17 +202,17 @@
 - [x] 定义版本化 `ExecutionProfile` YAML、Schema 与 Registry，将 runner、运行时摘要、固定可执行文件、环境变量、文件系统、网络和资源限制纳入 Hash/provenance；
 - [x] 实现通用 `ProcessRunner` 和受管 `ScriptExecutor`，只使用固定 argv 启动已注册的可执行文件，禁止 `shell=True`、任意命令字符串和动态 `eval/exec`；
 - [x] 执行前校验 Skill `resources.scripts` 声明、Package provenance 和脚本 SHA-256；Skill 脚本不可作为普通可披露资源；
-- [x] 每个 Run 创建独立临时工作区，只读挂载已验证的 Skill 脚本/输入，仅允许写入 Run tmp 和 Artifact staging；
-- [x] 强制超时、CPU、内存、进程数、文件/输出大小和默认断网；父进程环境与秘密不继承；
+- [ ] 生产 Runner 为每个 Run 建立真实文件系统边界；当前 PPT Demo 从独立 tmp 启动，但完整宿主 Shell 可越出工作区；
+- [x] 强制超时、CPU、内存、进程数、文件/输出大小并清空父进程环境；当前 PPT Demo 按明确授权保留宿主网络；
 - [x] 将 Agent `capabilities.allow/deny` 与 `execution_profiles`、Skill `required/optional_capabilities` 与 Profile、Package Policy、Execution Profile command 计算为最终权限交集；Manifest 只能缩小权限；
-- [x] 注册 `ppt.render`、`ppt.export_pdf` 窄口 Capability，不向模型暴露通用 `shell.exec`、`python.eval` 或命令参数；
+- [x] 注册高层 `ppt.build` Capability，内部固定编排 source/render/preview；Demo 阶段另以显式 `ppt.shell` Capability 开放宿主 Shell，Policy 与审计独立；
 - [x] 将命令摘要、Profile/脚本/可执行文件 Hash、返回码、观测字节/时长、限制、错误码和产物 Hash 写入结构化审计，日志不记录秘密和完整输入；
 - [x] 成功输出原子提交到 Artifact Repository，失败/取消/超时清理 staging，异常遗留临时目录按 retention 回收；
-- [x] 添加命令注入、非固定 runner、环境/网络放宽、符号链接、超限产物、篡改脚本、缺失 sandbox、Manifest 自授权和跨 scope Artifact 等负向测试。
+- [x] 添加命令注入、非法 runner/环境、符号链接、超限产物、篡改脚本、缺失 sandbox、Manifest 自授权和跨 scope Artifact 等负向测试；宿主 Shell 风险作为 Demo 例外显式记录。
 
-实现与部署前提见 [受控执行平面](EXECUTION.md)。当前开发容器不允许 Bubblewrap 创建所需 namespace；运行时因此按设计失败关闭，目标 Linux 环境仍需完成真实 PPTX/PDF smoke 与资源压力验收。
+实现与部署前提见 [受控执行平面](EXECUTION.md)。当前开发环境已完成 PPTX/PNG smoke；宿主 Shell 是 Demo 例外，生产发布前必须换回真正隔离的 Runner 并补安全负向验收。
 
-退出标准：Agent 只能调用 Agent、Skill、Policy 和 Execution Profile 共同允许的固定执行能力；任意命令、未声明脚本、越界文件访问和未授权网络请求均在副作用前被拒绝，临时文件、Artifact 和审计记录可按 Run 追踪。
+退出标准尚未满足：生产 Runner 必须重新禁止任意命令、越界文件访问和未授权网络。当前已实现 Agent/Skill/Policy/Profile 权限交集、Artifact 与审计链路，但 `ppt.shell` 是显式 Demo 例外。
 
 ## 下一步 8：Presentation Package 与严格 handoff
 
@@ -220,12 +220,12 @@
 
 - [ ] Presentation 只接受 `research-report` ref；
 - [ ] 输入 Artifact 在执行前校验版本和 scope；
-- [x] 定义 `slides@1.2.0` Skill、演示叙事模板和严格输出契约；
-- [x] 定义 `ppt@1.2.0` Agent Manifest 和默认拒绝 Policy，对外交付要求审批；
-- [x] Presentation Package 绑定 `ppt@1.0.0` Execution Profile、受管脚本以及 `ppt.render` / `ppt.export_pdf`；
-- [ ] 通过受控执行平面输出 presentation outline/file/preview Artifact；
-- [ ] 交付同时生成 PPTX、可预览 PDF 和封面/关键页 PNG，由 Mattermost Presenter 组装摘要、预览与下载入口；
-- [ ] 文件交付仍经过审批和 Outbox；
+- [x] 定义 `slides@2.2.0` Skill、受控 Markdown、注册主题、PptxGenJS 原生对象渲染、严格 Presentation Bundle 契约与默认 PPTX 审批交付；
+- [x] 定义 `ppt@2.2.0` Agent Manifest 和默认拒绝 Policy，PPTX 默认进入审批交付；
+- [x] Presentation Package `ppt@2.2.0` 绑定 `ppt@2.1.0` Execution Profile、锁定的 PptxGenJS bundle、高层 `ppt.build` 与 Demo `ppt.shell`；
+- [x] 通过执行平面输出规范化 Markdown、可编辑 PPTX 与直接 PNG 预览 Artifact；
+- [x] 同一份 Markdown/Theme 生成 PPTX 与首页 PNG，不再以 LibreOffice/PDF 作为预览前置；
+- [x] PPTX 默认经过 LangGraph 审批和 Outbox 交付；
 - [ ] handoff 每一步持久化状态、失败、重试和成本。
 
 退出标准：Research → Presentation 不传自由文本；非法或越权 Artifact 不能进入下游；PPT 生成不依赖宿主机通用 Shell/Python 权限。

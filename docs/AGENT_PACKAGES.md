@@ -139,7 +139,7 @@ provenance 当前记录：
 - `mmchat@1.2.0`：Mattermost 默认对话 Agent；使用 `langgraph/text-v1`，允许 `web-research@1.0.0`；普通对话不拥有文件外发能力；
 - `link@1.2.0`：确定性链接分析 Agent；绑定 `link-read@1.0.0` 和专属只读 Policy；
 - `report@1.0.0`：结构化研报 Agent；绑定只读 `report@1.0.0` Skill；
-- `ppt@1.2.0`：演示文稿 Agent；绑定 `slides@1.2.0` 与 `ppt@1.0.0` Execution Profile，文件交付只接受同 Scope Artifact ref 并需要审批；
+- `ppt@2.2.0`：演示文稿 Agent；绑定 `slides@2.2.0` 与 `ppt@2.1.0` Execution Profile，通过 `ppt.build` 生成可编辑 PPTX、源文件和 PNG 预览，并默认将 PPTX 送入审批交付；Demo 阶段显式开放宿主 `ppt.shell`；
 - `project@1.0.0`：项目助理 Agent；绑定 `project@1.0.0`，共享知识写入需要审批。
 
 这些 Package 都具备 Manifest、Prompt、输入/输出与 Artifact Schema、Policy、预算、eval 和
@@ -151,7 +151,7 @@ provenance。当前能力边界及下一步见 [数字员工清单](WORKERS.md)�
 - 成功运行的完整 provenance 已写入 AuditEvent；失败阶段和细粒度 usage 仍需归一化；
 - Model Policy 已严格加载并参与 Hash，但 `model_class` 与 temperature 还没有驱动多模型路由；
 - Report → PPT 的 research report Artifact 持久化与严格 ref handoff 尚未实现；
-- 受管 PPTX/PDF 执行平面已实现并失败关闭；目标环境仍需验证 Bubblewrap namespace 和 LibreOffice，Mattermost Artifact 展示/交付层尚未接入。
+- PPTX 与直接 PNG 预览链路已实现并完成本机 smoke；`ppt.shell` 当前是无文件系统隔离的 Demo 权限，生产化前必须替换为隔离 Runner。
 
 这些缺口不会通过兼容层或假实现掩盖，统一记录在 [TECH_DEBT.md](TECH_DEBT.md) 和 [ROADMAP.md](ROADMAP.md)。
 

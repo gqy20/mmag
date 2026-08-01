@@ -102,7 +102,7 @@ def test_registry_loads_flat_packages_and_resolves_governance_hashes():
     assert {(item.manifest.metadata.name, item.manifest.metadata.version) for item in loaded} == {
         ("link", "1.2.0"),
         ("mmchat", "1.2.0"),
-        ("ppt", "1.2.0"),
+        ("ppt", "2.2.0"),
         ("project", "1.0.0"),
         ("report", "1.0.0"),
     }
@@ -224,7 +224,7 @@ def test_factory_auto_constructs_every_declared_agent():
     capabilities = CapabilityRegistry()
     for binding in build_builtin_bindings(MagicMock(), MagicMock(), executor=executor):
         capabilities.register(binding)
-    for name in ("ppt.render", "ppt.export_pdf"):
+    for name in ("ppt.build", "ppt.shell"):
         capability = CapabilitySpec(
             name=name,
             description=name,

@@ -1,0 +1,24 @@
+{
+  "metadata": {
+    "name": "corp",
+    "version": "1.0.0",
+    "description": "Editorial enterprise theme for editable MMAG presentations."
+  },
+  "fonts": {
+    "head": "Noto Sans CJK SC",
+    "body": "Noto Sans CJK SC",
+    "mono": "DejaVu Sans Mono"
+  },
+  "colors": {
+    "night": "0B1020",
+    "ink": "151923",
+    "muted": "667085",
+    "canvas": "F3F1EB",
+    "paper": "FFFDF8",
+    "line": "D9D5CC",
+    "accent": "5268E8",
+    "coral": "F06C57",
+    "green": "1F9D73",
+    "amber": "D9972F"
+  }
+}

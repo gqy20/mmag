@@ -3,8 +3,8 @@ kind: ManagedAgent
 
 metadata:
   name: ppt
-  version: 1.2.0
-  description: Design structured presentation decks and deliver editable slide source on request.
+  version: 2.2.0
+  description: Build governed Markdown into editable presentation bundles and deliver on approval.
 
 spec:
   execution:
@@ -49,26 +49,26 @@ spec:
     allow:
       - load_skill_resource
       - search_knowledge
-      - ppt.render
-      - ppt.export_pdf
+      - ppt.build
+      - ppt.shell
       - send_file
     deny: []
 
   skills:
     allow:
-      - slides@1.2.0
+      - slides@2.2.0
     deny: []
 
   execution_profiles:
     allow:
-      - ppt@1.0.0
+      - ppt@2.1.0
     deny: []
 
   context:
     read_scopes: [conversation, project]
     write_scopes: [task]
 
-  policy_ref: ppt@1.0.0
+  policy_ref: ppt@2.2.0
   model_policy_ref: reasoning-medium@1.0.0
 
   budget:
@@ -80,5 +80,7 @@ spec:
     produces:
       - kind: slide_deck
         schema_ref: schemas/artifact.schema.json
-      - kind: presentation_pdf
-        schema_ref: schemas/pdf.schema.json
+      - kind: presentation_source
+        schema_ref: schemas/source.schema.json
+      - kind: presentation_preview
+        schema_ref: schemas/preview.schema.json

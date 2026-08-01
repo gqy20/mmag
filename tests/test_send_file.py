@@ -1,5 +1,6 @@
 """Artifact-only file delivery capability contract."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -86,6 +87,21 @@ async def test_send_file_requires_explicit_user_intent():
 
     assert "error" in result
     assert artifacts.calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_file_treats_ppt_generation_as_delivery_intent():
+    artifacts = FakeArtifacts()
+    context = replace(
+        _context("做一份 PPT"),
+        allowed_capabilities=frozenset({"ppt.build", "send_file"}),
+    )
+    spec = create_send_file_capability(artifacts, context_provider=lambda: context)
+
+    result = await spec.handler(_REF)
+
+    assert result["success"] is True
+    assert artifacts.calls == [(_REF, "mattermost:team-1/channel-1")]
 
 
 @pytest.mark.asyncio

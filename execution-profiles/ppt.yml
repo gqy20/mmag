@@ -3,66 +3,88 @@ kind: ExecutionProfile
 
 metadata:
   name: ppt
-  version: 1.0.0
-  description: Offline, fixed-argv rendering of governed presentation Artifacts.
+  version: 2.1.0
+  description: Demo host-shell build pipeline for editable presentations.
 
 spec:
   runner:
-    kind: bubblewrap
-    image_digest: sha256:7168268cf9af1e86383ad137fe3426185ef7d0add8b15c2bbad759191836b619
+    kind: host
+    image_digest: sha256:5843123dcc720fbd8e4d1a0cd69d715ac475b574bc33c6c04afca4ede66093e4
 
   network:
-    mode: none
+    mode: host
 
   environment:
     inherit: []
     set:
       LC_ALL: C.UTF-8
-      PYTHONHASHSEED: "0"
       TZ: UTC
 
   filesystem:
-    read_only: [/usr, /lib, /lib64, /etc/fonts]
+    read_only: [/usr, /lib, /lib64, /etc/fonts, /etc/ssl]
     writable: [temporary, staging]
 
   resources:
-    timeout_seconds: 120
-    cpu_seconds: 90
-    memory_bytes: 536870912
-    max_processes: 16
+    timeout_seconds: 180
+    cpu_seconds: 120
+    memory_bytes: 2147483648
+    max_processes: 24
     max_input_bytes: 1048576
     max_output_bytes: 65536
     max_artifact_bytes: 52428800
 
   commands:
+    - id: ppt.source
+      permission: artifact:generate
+      executable: node
+      script_ref: scripts/ppt.cjs
+      argv: ["{script}", "source", "--input", "{input}", "--output", "{output}"]
+      output:
+        filename: slides.md
+        kind: presentation_source
+        media_type: text/markdown
+        schema_version: 1.0.0
+
     - id: ppt.render
       permission: artifact:generate
-      executable: python
-      script_ref: scripts/ppt.py
-      argv: ["-I", "-B", "{script}", "render", "--input", "{input}", "--output", "{output}"]
+      executable: node
+      script_ref: scripts/ppt.cjs
+      argv: ["{script}", "render", "--input", "{input}", "--output", "{output}"]
       output:
         filename: deck.pptx
         kind: slide_deck
         media_type: application/vnd.openxmlformats-officedocument.presentationml.presentation
-        schema_version: 1.1.0
+        schema_version: 2.0.0
 
-    - id: ppt.export_pdf
+    - id: ppt.preview_svg
       permission: artifact:generate
-      executable: libreoffice
-      source_kind: slide_deck
-      argv:
-        - --headless
-        - --nologo
-        - --nodefault
-        - --nolockcheck
-        - --norestore
-        - --convert-to
-        - pdf
-        - --outdir
-        - "{staging}"
-        - "{source}"
+      executable: node
+      script_ref: scripts/ppt.cjs
+      argv: ["{script}", "preview", "--input", "{input}", "--output", "{output}"]
       output:
-        filename: deck.pdf
-        kind: presentation_pdf
-        media_type: application/pdf
+        filename: preview.svg
+        kind: presentation_preview_svg
+        media_type: image/svg+xml
+        schema_version: 1.0.0
+
+    - id: ppt.preview
+      permission: artifact:generate
+      executable: rsvg-convert
+      source_kind: presentation_preview_svg
+      argv: ["--format", "png", "--width", "1280", "--height", "720", "--output", "{output}", "{source}"]
+      output:
+        filename: preview.png
+        kind: presentation_preview
+        media_type: image/png
+        schema_version: 1.0.0
+
+    - id: ppt.shell
+      permission: execution:shell
+      executable: python
+      script_ref: scripts/shell.py
+      argv: ["-I", "-B", "{script}", "--input", "{input}", "--output", "{output}"]
+      output:
+        filename: shell-result.json
+        kind: execution_report
+        media_type: application/json
         schema_version: 1.0.0
