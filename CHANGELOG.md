@@ -4,10 +4,14 @@
 
 **工程能力**
 
+- 新增受控 Python/CLI 执行平面：严格 Execution Profile YAML/Schema/Registry、Bubblewrap 默认断网隔离、固定 argv `ProcessRunner`、受管 `ScriptExecutor` 和版本门禁
+- Agent/Skill Manifest 支持精确 Execution Profile 引用；最终执行权限收窄为 Agent、Skill、Policy 与 Profile command 交集，禁止 Manifest 自授权、通用 Shell 和动态 Python
+- 新增独立 Run 工作区、Artifact staging/原子文件提交、scope/kind/Hash 校验、失败/取消清理和遗留目录回收；执行审计只记录输入摘要与 Profile/脚本/可执行文件/argv/产物 provenance
+- Presentation 升级为 `ppt@1.1.0` + `slides@1.1.0`，注册 `ppt.render` / `ppt.export_pdf` 和受管 `python-pptx` 渲染脚本；缺少 sandbox 或 LibreOffice 时失败关闭
 - 新增 Skill Package v1：严格 `skill.yml`、按需加载 `SKILL.md`、输入/输出 Schema、资源/eval Hash 与扁平版本目录
 - 新增 Skill Registry/Resolver；消息主链先选 Agent 再选 Skill，并将模型工具、CapabilityContext 与 Policy 能力集合收窄到交集
 - Agent Manifest 支持版本化 Skill allow/deny；Skill Required Capability 不能扩权，Skill/Instruction/Schema/eval provenance 写入成功运行审计
-- 新增 `web-research@1.0.0`，由 `mmchat@1.1.0` 绑定；Skill scripts 在 v1 仅作为不可执行的哈希资源
+- 新增 `web-research@1.0.0`，由 `mmchat@1.1.0` 绑定；Skill scripts 默认不可披露，只有受控执行平面可按注册 Hash 启动
 - 新增 `report`、`ppt`、`project` 三个 LangGraph JSON Agent Package，以及 `report`、`slides`、
   `project` Skill；链接 Agent 升级为 `link@1.2.0` 并绑定 `link-read` 契约
 - 三个新 Agent 分别使用独立默认拒绝 Policy：研报只读，PPT 文件交付和项目共享知识写入进入审批

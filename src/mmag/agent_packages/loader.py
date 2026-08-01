@@ -23,6 +23,7 @@ from .models import (
     ContextDeclaration,
     EvalAsset,
     ExecutionDeclaration,
+    ExecutionProfileDeclaration,
     PackageMetadata,
     PackageVersionSnapshot,
     PromptDeclaration,
@@ -218,6 +219,10 @@ class AgentPackageLoader:
             ),
             CapabilityDeclaration(tuple(capabilities["allow"]), tuple(capabilities["deny"])),
             SkillDeclaration(tuple(spec["skills"]["allow"]), tuple(spec["skills"]["deny"])),
+            ExecutionProfileDeclaration(
+                tuple(spec.get("execution_profiles", {}).get("allow", ())),
+                tuple(spec.get("execution_profiles", {}).get("deny", ())),
+            ),
             ContextDeclaration(tuple(context["read_scopes"]), tuple(context["write_scopes"])),
             spec["policy_ref"],
             spec["model_policy_ref"],

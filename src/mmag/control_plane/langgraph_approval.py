@@ -66,6 +66,7 @@ class LangGraphApprovalCoordinator:
                 "conversation_id": capability_context.conversation_id,
                 "message_id": capability_context.message_id,
                 "message": capability_context.message,
+                "run_id": capability_context.run_id,
             }
         approval = self.approvals.request(
             names or "langgraph_tool_batch",
@@ -75,6 +76,7 @@ class LangGraphApprovalCoordinator:
                 "tool_calls": tool_calls,
                 "governance_context": payload.get("governance_context", {}),
                 "skill_resource_state": payload.get("skill_resource_state", {}),
+                "execution_profiles": payload.get("execution_profiles", []),
                 **(
                     {"capability_context": payload["capability_context"]}
                     if "capability_context" in payload
@@ -148,16 +150,20 @@ class LangGraphApprovalCoordinator:
             message_id=str(original_context.get("message_id") or request_id),
             message=str(original_context.get("message") or "approval resume"),
             scope=request.scope_id,
+            run_id=str(original_context.get("run_id") or thread_id),
         )
         governance = payload.get("governance_context", {})
         if not isinstance(governance, dict):
             governance = {}
         allowed_capabilities = governance.get("allowed_capabilities", ())
+        execution_profiles = payload.get("execution_profiles", ())
         roles = governance.get("roles", ())
         if not isinstance(allowed_capabilities, (list, tuple)):
             allowed_capabilities = ()
         if not isinstance(roles, (list, tuple)):
             roles = ()
+        if not isinstance(execution_profiles, (list, tuple)):
+            execution_profiles = ()
         resource_session = self._restore_skill_resource_session(payload)
         resource_context = (
             bind_skill_resource_session(resource_session)
@@ -171,9 +177,9 @@ class LangGraphApprovalCoordinator:
             context.message_id,
             context.message,
             context.scope,
-            frozenset(
-                str(name) for name in allowed_capabilities if isinstance(name, str) and name
-            ),
+            frozenset(str(name) for name in allowed_capabilities if isinstance(name, str) and name),
+            context.run_id,
+            frozenset(str(ref) for ref in execution_profiles if isinstance(ref, str) and ref),
         )
         self._transition_run(thread_id, "running", request_id)
         with (

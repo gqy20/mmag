@@ -5,6 +5,7 @@ import pytest
 from mmag.agent_packages import AgentPackageError, AgentPackageRegistry, ContractAgentDecorator
 from mmag.agent_system import AgentDescriptor, AgentRequest, RuntimeAgent, SkillInvocation
 from mmag.capabilities import CapabilityBinding, CapabilityRegistry
+from mmag.execution import ExecutionProfileRegistry
 from mmag.runtimes import AgentResult, RunContext, RunRequest
 from mmag.skill_packages import (
     SkillPackageLoader,
@@ -36,7 +37,12 @@ def _capabilities() -> CapabilityRegistry:
 def _packages():
     skills = SkillPackageRegistry()
     skills.load_directory(ROOT / "skills")
-    agents = AgentPackageRegistry(skill_registry=skills)
+    profiles = ExecutionProfileRegistry()
+    profiles.load_directory(ROOT / "execution-profiles")
+    agents = AgentPackageRegistry(
+        skill_registry=skills,
+        execution_profile_registry=profiles,
+    )
     agents.load_directory(ROOT / "agents")
     return skills, agents
 

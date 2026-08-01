@@ -112,6 +112,23 @@
             "deny": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/versionedRef"}}
           }
         },
+        "execution_profiles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allow", "deny"],
+          "properties": {
+            "allow": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"$ref": "#/$defs/versionedRef"}
+            },
+            "deny": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"$ref": "#/$defs/versionedRef"}
+            }
+          }
+        },
         "context": {
           "type": "object",
           "additionalProperties": false,

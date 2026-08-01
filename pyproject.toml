@@ -18,6 +18,7 @@ dependencies = [
     "langgraph>=1.2.0",
     "langgraph-checkpoint-sqlite>=3.1.1",
     "jsonschema>=4.23",
+    "python-pptx>=1.0.2",
 ]
 
 [project.scripts]
@@ -35,6 +36,7 @@ packages = ["src/mmag"]
 "skills" = "mmag/skills"
 "policies" = "mmag/policies"
 "model-policies" = "mmag/model-policies"
+"execution-profiles" = "mmag/execution-profiles"
 
 # ---- uv 依赖分组 ----
 

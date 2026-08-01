@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/schemas/execution-profile-v1.schema.json",
+  "title": "MMAG Execution Profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "kind", "metadata", "spec"],
+  "properties": {
+    "api_version": {"const": "mmag.ai/v1"},
+    "kind": {"const": "ExecutionProfile"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "description"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "description": {"type": "string", "minLength": 1}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runner",
+        "network",
+        "environment",
+        "filesystem",
+        "resources",
+        "commands"
+      ],
+      "properties": {
+        "runner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "image_digest"],
+          "properties": {
+            "kind": {"const": "bubblewrap"},
+            "image_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {"mode": {"const": "none"}}
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inherit", "set"],
+          "properties": {
+            "inherit": {"type": "array", "maxItems": 0},
+            "set": {
+              "type": "object",
+              "propertyNames": {"enum": ["LANG", "LC_ALL", "PYTHONHASHSEED", "TZ"]},
+              "additionalProperties": {"type": "string", "maxLength": 1024}
+            }
+          }
+        },
+        "filesystem": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["read_only", "writable"],
+          "properties": {
+            "read_only": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"enum": ["/usr", "/lib", "/lib64", "/etc/fonts"]}
+            },
+            "writable": {
+              "type": "array",
+              "prefixItems": [{"const": "temporary"}, {"const": "staging"}],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "timeout_seconds",
+            "cpu_seconds",
+            "memory_bytes",
+            "max_processes",
+            "max_input_bytes",
+            "max_output_bytes",
+            "max_artifact_bytes"
+          ],
+          "properties": {
+            "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600},
+            "cpu_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
+            "memory_bytes": {"type": "integer", "minimum": 67108864, "maximum": 2147483648},
+            "max_processes": {"type": "integer", "minimum": 1, "maximum": 64},
+            "max_input_bytes": {"type": "integer", "minimum": 1024, "maximum": 10485760},
+            "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 1048576},
+            "max_artifact_bytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 104857600
+            }
+          }
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "permission", "executable", "argv", "output"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,62}$"},
+              "permission": {"type": "string", "pattern": "^[a-z][a-z0-9:*.-]{1,127}$"},
+              "executable": {"enum": ["python", "libreoffice"]},
+              "script_ref": {"$ref": "#/$defs/safeRef"},
+              "source_kind": {"type": "string", "minLength": 1},
+              "argv": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 32,
+                "items": {"type": "string", "minLength": 1, "maxLength": 256}
+              },
+              "output": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["filename", "kind", "media_type", "schema_version"],
+                "properties": {
+                  "filename": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+                  "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,62}$"},
+                  "media_type": {"type": "string", "pattern": "^[a-z0-9.+-]+/[a-zA-Z0-9.+-]+$"},
+                  "schema_version": {
+                    "type": "string",
+                    "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "safeRef": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    }
+  }
+}

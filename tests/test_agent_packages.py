@@ -26,6 +26,7 @@ from mmag.capabilities import (
     bind_langgraph_capability,
     build_builtin_bindings,
 )
+from mmag.execution import ExecutionProfileRegistry
 from mmag.governance import (
     ModelGateway,
     ModelPolicyRegistry,
@@ -42,6 +43,12 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 def _skill_registry() -> SkillPackageRegistry:
     registry = SkillPackageRegistry()
     registry.load_directory(REPOSITORY_ROOT / "skills")
+    return registry
+
+
+def _execution_profiles() -> ExecutionProfileRegistry:
+    registry = ExecutionProfileRegistry()
+    registry.load_directory(REPOSITORY_ROOT / "execution-profiles")
     return registry
 
 
@@ -87,6 +94,7 @@ def test_registry_loads_flat_packages_and_resolves_governance_hashes():
         policy_registry=policies,
         model_policy_registry=model_policies,
         skill_registry=_skill_registry(),
+        execution_profile_registry=_execution_profiles(),
     )
 
     loaded = registry.load_directory(REPOSITORY_ROOT / "agents")
@@ -94,7 +102,7 @@ def test_registry_loads_flat_packages_and_resolves_governance_hashes():
     assert {(item.manifest.metadata.name, item.manifest.metadata.version) for item in loaded} == {
         ("link", "1.2.0"),
         ("mmchat", "1.1.0"),
-        ("ppt", "1.0.0"),
+        ("ppt", "1.1.0"),
         ("project", "1.0.0"),
         ("report", "1.0.0"),
     }
@@ -121,6 +129,7 @@ async def test_mmchat_runtime_is_enforced_by_its_package():
         policy_registry=policies,
         model_policy_registry=model_policies,
         skill_registry=_skill_registry(),
+        execution_profile_registry=_execution_profiles(),
     )
     registry.load_directory(REPOSITORY_ROOT / "agents")
     package = registry.get("mmchat")
@@ -208,12 +217,22 @@ def test_factory_auto_constructs_every_declared_agent():
         policy_registry=policies,
         model_policy_registry=model_policies,
         skill_registry=_skill_registry(),
+        execution_profile_registry=_execution_profiles(),
     )
     packages.load_directory(REPOSITORY_ROOT / "agents")
     executor = CapabilityExecutor(RegistryPolicyAuthorizer(policies))
     capabilities = CapabilityRegistry()
     for binding in build_builtin_bindings(MagicMock(), MagicMock(), executor=executor):
         capabilities.register(binding)
+    for name in ("ppt.render", "ppt.export_pdf"):
+        capability = CapabilitySpec(
+            name=name,
+            description=name,
+            input_schema={"type": "object"},
+            handler=lambda: {},
+            permission="artifact:generate",
+        )
+        capabilities.register(bind_langgraph_capability(capability, executor=executor))
     gateway = ModelGateway({"default": SequenceRuntime(["unused"])})
     providers = AgentProviderRegistry()
     providers.register(LangGraphTextProvider(gateway, capabilities, model_policies))

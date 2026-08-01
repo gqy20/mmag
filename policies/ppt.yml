@@ -17,6 +17,12 @@ rules:
       channel_id: conversation_id
     reason: Presentation context is restricted to the originating channel knowledge scope.
 
+  - id: generate-presentation-artifact
+    effect: allow
+    actions: [ppt.render, ppt.export_pdf]
+    permissions: [artifact:generate]
+    reason: Local generation is constrained by the registered offline Execution Profile.
+
   - id: approve-deck-delivery
     effect: require_approval
     actions: [send_file]

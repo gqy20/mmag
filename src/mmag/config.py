@@ -3,6 +3,8 @@
 """
 
 import os
+import sys
+import tempfile
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -30,6 +32,13 @@ _SOURCE_MODEL_POLICIES = Path(__file__).resolve().parents[2] / "model-policies"
 _INSTALLED_MODEL_POLICIES = Path(__file__).resolve().parent / "model-policies"
 _DEFAULT_MODEL_POLICIES = (
     _SOURCE_MODEL_POLICIES if _SOURCE_MODEL_POLICIES.is_dir() else _INSTALLED_MODEL_POLICIES
+)
+_SOURCE_EXECUTION_PROFILES = Path(__file__).resolve().parents[2] / "execution-profiles"
+_INSTALLED_EXECUTION_PROFILES = Path(__file__).resolve().parent / "execution-profiles"
+_DEFAULT_EXECUTION_PROFILES = (
+    _SOURCE_EXECUTION_PROFILES
+    if _SOURCE_EXECUTION_PROFILES.is_dir()
+    else _INSTALLED_EXECUTION_PROFILES
 )
 if _ENV_PATH.exists():
     load_dotenv(_ENV_PATH, override=True)
@@ -71,6 +80,11 @@ _FIELD_TO_ENV: dict[str, str] = {
     "skill_packages_path": "SKILL_PACKAGES_PATH",
     "policies_path": "POLICIES_PATH",
     "model_policies_path": "MODEL_POLICIES_PATH",
+    "execution_profiles_path": "EXECUTION_PROFILES_PATH",
+    "execution_runtime_root": "EXECUTION_RUNTIME_ROOT",
+    "execution_workspace_path": "EXECUTION_WORKSPACE_PATH",
+    "execution_workspace_retention_seconds": "EXECUTION_WORKSPACE_RETENTION_SECONDS",
+    "artifact_store_path": "ARTIFACT_STORE_PATH",
 }
 # 敏感字段（日志只记录是否配置，不输出任何值片段）
 _SECRET_FIELD_NAMES: frozenset[str] = frozenset({"mm_token", "anthropic_api_key"})
@@ -162,6 +176,19 @@ class Config:
     skill_packages_path: str = os.getenv("SKILL_PACKAGES_PATH", str(_DEFAULT_SKILL_PACKAGES))
     policies_path: str = os.getenv("POLICIES_PATH", str(_DEFAULT_POLICIES))
     model_policies_path: str = os.getenv("MODEL_POLICIES_PATH", str(_DEFAULT_MODEL_POLICIES))
+    execution_profiles_path: str = os.getenv(
+        "EXECUTION_PROFILES_PATH",
+        str(_DEFAULT_EXECUTION_PROFILES),
+    )
+    execution_runtime_root: str = os.getenv("EXECUTION_RUNTIME_ROOT", sys.prefix)
+    execution_workspace_path: str = os.getenv(
+        "EXECUTION_WORKSPACE_PATH",
+        str(Path(tempfile.gettempdir()) / "mmag-execution"),
+    )
+    execution_workspace_retention_seconds: int = int(
+        os.getenv("EXECUTION_WORKSPACE_RETENTION_SECONDS", "3600")
+    )
+    artifact_store_path: str = os.getenv("ARTIFACT_STORE_PATH", "./artifacts")
 
     @property
     def ws_url(self) -> str:

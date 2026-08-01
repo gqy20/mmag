@@ -49,6 +49,7 @@ spec:
 
   required_capabilities: [analyze_link, load_skill_resource]
   optional_capabilities: [search_knowledge]
+  execution_profiles: []
 
   resources:
     templates: [templates/report.md]
@@ -64,7 +65,7 @@ spec:
 
 `required_capabilities` 必须全部属于 Agent 的 Capability allowlist，且部署时真实存在；缺少任意一项则拒绝选择。`optional_capabilities` 只在同时被 Agent 允许且已部署时加入本次能力集合。
 
-`templates/` 和 `references/` 是可披露的 UTF-8 文本资源；`scripts/` 在 v1 只是被校验和哈希的包资源，没有读取或执行入口。未来如需执行，必须新增可信执行 Provider，通过 Sandbox 和 CapabilityRegistry 暴露，不能由 `SKILL.md` 或任意路径直接启动进程。
+`templates/` 和 `references/` 是可披露的 UTF-8 文本资源；`scripts/` 会被校验和哈希，但永不进入资源目录或模型上下文。脚本只有同时绑定已注册 Execution Profile、窄口 Capability，并通过 Agent 与 Policy 后，才能由 `ScriptExecutor` 在 sandbox 中以固定 argv 执行；`SKILL.md`、脚本路径或 Manifest 都不能直接启动进程。
 
 ## 三级渐进式披露
 
@@ -126,6 +127,7 @@ Request
 Agent 已解析能力
 ∩ Skill required/available optional
 ∩ 当前请求的 Package Policy 决策
+∩ Execution Profile command
 ```
 
 运行时会同时收窄：
@@ -150,6 +152,7 @@ Skill 输入固定投影为 `intent`、`goal` 和 `parameters`，选择前执行
 - SKILL.md Hash；
 - Skill input/output Schema version；
 - Skill eval Hash。
+- Skill 绑定的精确 Execution Profile provenance Hash；真正执行时再追加 Profile、脚本、可执行文件和 argv Hash。
 - 实际加载资源数量、总字节、估算 token、聚合 Hash 和逐资源清单。
 
 这些字段与 Agent、Prompt、Policy、Model Policy 和 Schema 快照一起写入 `agent.run` AuditEvent。模型只能产生业务结果，不能填写 provenance。
@@ -160,16 +163,18 @@ Skill 输入固定投影为 `intent`、`goal` 和 `parameters`，选择前执行
 2. 定义输入/输出 JSON Schema，并声明 `x-version`；
 3. 添加至少一个 `evals/*.yml` 契约 case；
 4. 只声明完成流程真正需要的 Capability；
-5. 在一个或多个 Agent 的 `skills.allow` 中绑定精确版本；
-6. 提升相关 Agent 的 `metadata.version`；
-7. 通过 Package 加载和定向契约测试后发布。
+5. 需要受管脚本时，在 Skill 声明精确 `execution_profiles`，同时让 Agent 显式允许相同 Profile；
+6. 在一个或多个 Agent 的 `skills.allow` 中绑定精确版本；
+7. 提升相关 Agent 的 `metadata.version`；
+8. 通过 Package 加载和定向契约测试后发布。
 
 当前包：
 
 - `web-research@1.0.0`：默认会话中的轻量研究；
 - `link-read@1.0.0`：确定性链接解析契约；
 - `report@1.0.0`：证据账本式研报流程；
-- `slides@1.0.0`：受来源约束的演示叙事与页面结构；
+- `slides@1.1.0`：受来源约束的演示叙事，并通过 `ppt@1.0.0` 受控执行平面生成 PPTX/PDF Artifact；
 - `project@1.0.0`：项目计划和状态评估。
 
 绑定关系与实际权限见 [数字员工清单](WORKERS.md)。
+执行隔离和发布要求见 [受控执行平面](EXECUTION.md)。

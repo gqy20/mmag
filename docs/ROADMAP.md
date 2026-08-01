@@ -146,16 +146,18 @@
 
 优先级：P1，为 Presentation 等生成型 Agent 提供基础能力。
 
-- [ ] 定义版本化 `ExecutionProfile` YAML、Schema 与 Registry，将 runner、镜像摘要、固定可执行文件、环境变量、文件系统、网络和资源限制纳入 Hash/provenance；
-- [ ] 实现通用 `ProcessRunner` 和受管 `ScriptExecutor`，只使用固定 argv 启动已注册的可执行文件，禁止 `shell=True`、任意命令字符串和动态 `eval/exec`；
-- [ ] 执行前校验 Skill `resources.scripts` 声明、Package Hash 和脚本 SHA-256；Skill 脚本不可作为普通可披露资源；
-- [ ] 每个 Run 创建独立临时工作区，只读挂载已验证的 Skill 脚本/模板，仅允许写入 Run tmp 和 Artifact staging；
-- [ ] 强制超时、CPU、内存、进程数、输出大小和默认断网；秘密不继承，只能通过显式授权注入；
-- [ ] 将 Agent `capabilities.allow/deny`、Skill `required/optional_capabilities`、Package Policy 与 Execution Profile 计算为最终权限交集；Skill 和 Agent Manifest 只能缩小权限，不得自授权或放宽执行配置；
-- [ ] 优先注册 `ppt.render`、`ppt.export_pdf` 等窄口 Capability，不向模型暴露通用 `shell.exec` 或 `python.eval`；
-- [ ] 将命令摘要、执行配置版本、脚本 Hash、返回码、资源用量、超时/错误码和产物 Hash 写入结构化审计事件，日志不记录秘密和完整敏感输入；
-- [ ] 成功输出原子提交到 Artifact Repository，失败/取消/超时清理 staging，临时目录按 retention 统一回收；
-- [ ] 覆盖命令注入、路径穿越、符号链接逃逸、篡改脚本、超时、资源耗尽、未授权网络和越权 Artifact 等负向测试。
+- [x] 定义版本化 `ExecutionProfile` YAML、Schema 与 Registry，将 runner、运行时摘要、固定可执行文件、环境变量、文件系统、网络和资源限制纳入 Hash/provenance；
+- [x] 实现通用 `ProcessRunner` 和受管 `ScriptExecutor`，只使用固定 argv 启动已注册的可执行文件，禁止 `shell=True`、任意命令字符串和动态 `eval/exec`；
+- [x] 执行前校验 Skill `resources.scripts` 声明、Package provenance 和脚本 SHA-256；Skill 脚本不可作为普通可披露资源；
+- [x] 每个 Run 创建独立临时工作区，只读挂载已验证的 Skill 脚本/输入，仅允许写入 Run tmp 和 Artifact staging；
+- [x] 强制超时、CPU、内存、进程数、文件/输出大小和默认断网；父进程环境与秘密不继承；
+- [x] 将 Agent `capabilities.allow/deny` 与 `execution_profiles`、Skill `required/optional_capabilities` 与 Profile、Package Policy、Execution Profile command 计算为最终权限交集；Manifest 只能缩小权限；
+- [x] 注册 `ppt.render`、`ppt.export_pdf` 窄口 Capability，不向模型暴露通用 `shell.exec`、`python.eval` 或命令参数；
+- [x] 将命令摘要、Profile/脚本/可执行文件 Hash、返回码、观测字节/时长、限制、错误码和产物 Hash 写入结构化审计，日志不记录秘密和完整输入；
+- [x] 成功输出原子提交到 Artifact Repository，失败/取消/超时清理 staging，异常遗留临时目录按 retention 回收；
+- [x] 添加命令注入、非固定 runner、环境/网络放宽、符号链接、超限产物、篡改脚本、缺失 sandbox、Manifest 自授权和跨 scope Artifact 等负向测试。
+
+实现与部署前提见 [受控执行平面](EXECUTION.md)。当前开发容器不允许 Bubblewrap 创建所需 namespace；运行时因此按设计失败关闭，目标 Linux 环境仍需完成真实 PPTX/PDF smoke 与资源压力验收。
 
 退出标准：Agent 只能调用 Agent、Skill、Policy 和 Execution Profile 共同允许的固定执行能力；任意命令、未声明脚本、越界文件访问和未授权网络请求均在副作用前被拒绝，临时文件、Artifact 和审计记录可按 Run 追踪。
 
@@ -165,9 +167,9 @@
 
 - [ ] Presentation 只接受 `research-report` ref；
 - [ ] 输入 Artifact 在执行前校验版本和 scope；
-- [x] 定义 `slides@1.0.0` Skill、演示叙事模板和严格输出契约；
-- [x] 定义 `ppt` Agent Manifest 和默认拒绝 Policy，对外交付要求审批；
-- [ ] 在 Skill 中接入受管脚本以及 `ppt.render` / `ppt.export_pdf` 能力；
+- [x] 定义 `slides@1.1.0` Skill、演示叙事模板和严格输出契约；
+- [x] 定义 `ppt@1.1.0` Agent Manifest 和默认拒绝 Policy，对外交付要求审批；
+- [x] Presentation Package 绑定 `ppt@1.0.0` Execution Profile、受管脚本以及 `ppt.render` / `ppt.export_pdf`；
 - [ ] 通过受控执行平面输出 presentation outline/file/preview Artifact；
 - [ ] 交付同时生成 PPTX、可预览 PDF 和封面/关键页 PNG，由 Mattermost Presenter 组装摘要、预览与下载入口；
 - [ ] 文件交付仍经过审批和 Outbox；
@@ -198,12 +200,45 @@
 
 退出标准：告警可定位到 Run/Package/Capability，目标环境有可验证 RPO/RTO。
 
+## 下一步 10：可选 Deep Agents Runtime 与可替换 Sandbox
+
+优先级：P2，触发式实施；依赖受控执行平面、Artifact 交付、运行幂等和结构化审计。设计边界见
+[ADR-0007](adr/0007-deepagents-sandbox-runtime.md)。
+
+- [ ] 定义平台无关的 `SandboxBackend` 与版本化 `SandboxProfile`，覆盖 create、upload、execute、
+  download、destroy、scope、镜像、网络、文件系统、Secret 和资源限制；
+- [ ] 将现有 Bubblewrap 收口为 `governed` Backend，并增加 OCI Backend 选项；校验实际运行时
+  digest，不能只把声明值写入 provenance；
+- [ ] 实现 `DeepAgentRuntimeAdapter`，接入统一 `RunRequest`、`AgentResult`、稳定 thread ID、deadline、
+  usage、interrupt 和 Artifact 契约，不改变 LangGraph 默认路由；
+- [ ] 增加 `bind_deepagent_capability`，让 Deep Agents Tool 继续经过同一个 `CapabilityExecutor`、
+  Package Policy、审批、预算和审计；
+- [ ] 实现 MMAG Skill 到 Deep Agents 的单向投影：默认只披露 instruction/reference/template，
+  `resources.scripts` 保持隐藏，显式 `sandbox_editable` 资源除外；
+- [ ] 自主 Sandbox 默认按 thread 隔离，模型/API/Mattermost/MCP Secret 留在控制面，不挂载项目源码、
+  Artifact Repository 或其他 Run 工作区；
+- [ ] 输入只允许经过 scope/kind/Hash 校验的 Artifact upload，输出必须 download、校验并原子提交为
+  Artifact，禁止向用户返回 Sandbox 本地路径；
+- [ ] 为 Sandbox 创建、命令执行、Artifact 提交和销毁增加稳定 execution key、幂等恢复、资源配额、
+  取消、超时和异常回收；
+- [ ] 仅向专用 Coding/Analysis/Media Package 开放 `sandbox.execute`，高风险命令按 Policy 进入
+  LangGraph 审批；普通业务 Agent 和确定性 Presentation Agent 不获得通用 Shell；
+- [ ] 至少选择一个可用于生产验收的 Deep Agents 兼容 Provider，并覆盖 Provider 不可用、网络隔离、
+  越权文件、Secret 泄漏、超限输出、重复恢复和跨 thread 访问的负向测试；
+- [ ] 建立与现有 LangGraph Runtime 的质量、成本、冷启动、执行时长和失败恢复对比，达到明确收益后
+  才允许 Package 选择 `execution.kind=deepagent`。
+
+退出标准：自主编程任务可在 thread-scoped Sandbox 内创建和运行临时代码，只能消费和产出受管
+Artifact；LangGraph 仍是默认 Runtime，现有固定 Capability 不扩权，Sandbox 故障或 Provider 缺失
+不会回退到宿主机执行。
+
 ## 当前明确不做
 
 - 不恢复旧 Agent、Tool 或 Prompt 兼容入口；
 - 不为了“多 Agent”数量重新注册没有 Package 契约的占位 Agent；
 - 不用 Prompt 代替权限、审批、幂等和预算；
-- 不向模型暴露通用 Shell 或动态 Python 执行入口；
+- 不向普通业务 Agent 暴露宿主机通用 Shell 或动态 Python；自主执行入口只有在“下一步 10”全部
+  门禁完成后，才能向专用 Package 的独立 Sandbox 开放；
 - 不允许 Agent/Skill Manifest 自授权或放宽平台执行配置；
 - 不让 Agent Prompt 直接生成 Mattermost `props`、action callback 或平台专用协议；
 - 不把富卡片/按钮作为唯一交互路径，不支持时必须降级为 Markdown/文本命令；

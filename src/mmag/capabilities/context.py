@@ -22,6 +22,8 @@ class CapabilityContext:
     message: str
     scope: str = ""
     allowed_capabilities: frozenset[str] = frozenset()
+    run_id: str = ""
+    allowed_execution_profiles: frozenset[str] = frozenset()
 
 
 _CURRENT_CONTEXT: ContextVar[CapabilityContext | None] = ContextVar(

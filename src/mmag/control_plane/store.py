@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 from ..infrastructure.sqlite import SQLiteDatabase
 from .models import (
     ApprovalRequest,
+    Artifact,
+    AuditEvent,
     DeliveryRecord,
     EnterpriseContext,
     EntityType,
@@ -427,6 +429,90 @@ class SQLiteControlPlane:
             )
             self._connection.commit()
         return event_id
+
+    def create_artifact(self, artifact: Artifact) -> None:
+        with self._lock:
+            self._connection.execute(
+                """INSERT INTO artifacts
+                (id, run_id, scope_id, kind, content, metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    artifact.id,
+                    artifact.run_id,
+                    artifact.scope_id,
+                    artifact.kind,
+                    artifact.content,
+                    _json(dict(artifact.metadata)),
+                    time.time(),
+                ),
+            )
+            self._connection.commit()
+
+    def get_artifact(self, artifact_id: str) -> Artifact:
+        row = self._connection.execute(
+            "SELECT * FROM artifacts WHERE id=?",
+            (artifact_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(artifact_id)
+        return Artifact(
+            row["id"],
+            row["run_id"],
+            row["scope_id"],
+            row["kind"],
+            row["content"],
+            json.loads(row["metadata"]),
+        )
+
+    def list_artifacts(self) -> list[Artifact]:
+        rows = self._connection.execute("SELECT * FROM artifacts ORDER BY created_at").fetchall()
+        return [
+            Artifact(
+                row["id"],
+                row["run_id"],
+                row["scope_id"],
+                row["kind"],
+                row["content"],
+                json.loads(row["metadata"]),
+            )
+            for row in rows
+        ]
+
+    def list_audits(
+        self,
+        *,
+        event_type: str = "",
+        target: str = "",
+        limit: int = 100,
+    ) -> list[AuditEvent]:
+        if limit < 1:
+            raise ValueError("audit limit must be positive")
+        filters: list[str] = []
+        parameters: list[Any] = []
+        if event_type:
+            filters.append("event_type=?")
+            parameters.append(event_type)
+        if target:
+            filters.append("target=?")
+            parameters.append(target)
+        where = f" WHERE {' AND '.join(filters)}" if filters else ""
+        rows = self._connection.execute(
+            f"SELECT * FROM audit_events{where} ORDER BY created_at DESC LIMIT ?",
+            (*parameters, limit),
+        ).fetchall()
+        return [
+            AuditEvent(
+                row["id"],
+                row["event_type"],
+                row["actor_id"],
+                row["scope_id"],
+                row["target"],
+                row["decision"],
+                row["trace_id"],
+                json.loads(row["details"]),
+            )
+            for row in rows
+        ]
 
     def create_approval_request(self, request: ApprovalRequest) -> None:
         now = time.time()

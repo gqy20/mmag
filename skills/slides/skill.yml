@@ -3,7 +3,7 @@ kind: Skill
 
 metadata:
   name: slides
-  version: 1.0.0
+  version: 1.1.0
   description: Turn validated material into an audience-aware, editable presentation structure.
 
 spec:
@@ -18,16 +18,22 @@ spec:
 
   required_capabilities:
     - load_skill_resource
+    - ppt.render
   optional_capabilities:
     - search_knowledge
+    - ppt.export_pdf
     - send_file
+
+  execution_profiles:
+    - ppt@1.0.0
 
   resources:
     templates:
       - templates/deck.md
     references:
       - references/story.md
-    scripts: []
+    scripts:
+      - scripts/ppt.py
 
   disclosure:
     max_resources: 2

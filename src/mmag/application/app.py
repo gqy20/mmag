@@ -19,6 +19,7 @@ from ..capabilities import (
     CapabilityRegistry,
     build_builtin_bindings,
     build_sdk_bindings,
+    create_ppt_capabilities,
 )
 from ..client import MMClient
 from ..config import _log_config_loading, _secret_status, config
@@ -29,6 +30,13 @@ from ..control_plane import (
     MattermostApprovalAuthorizer,
     MessagePipeline,
     SQLiteControlPlane,
+)
+from ..execution import (
+    ArtifactRepository,
+    ExecutionProfileRegistry,
+    ProcessRunner,
+    ScriptExecutor,
+    WorkspaceManager,
 )
 from ..governance import (
     ModelGateway,
@@ -70,11 +78,43 @@ class Agent:
         self.capability_executor = CapabilityExecutor(
             RegistryPolicyAuthorizer(self.policy_registry)
         )
+
+        self.skill_package_registry = SkillPackageRegistry()
+        self.skill_package_registry.load_directory(Path(config.skill_packages_path))
+        self.execution_profile_registry = ExecutionProfileRegistry()
+        self.execution_profile_registry.load_directory(Path(config.execution_profiles_path))
+        self.execution_workspaces = WorkspaceManager(
+            Path(config.execution_workspace_path),
+            retention_seconds=config.execution_workspace_retention_seconds,
+        )
+        self.execution_workspaces.cleanup_stale()
+        self.artifact_repository = ArtifactRepository(
+            Path(config.artifact_store_path),
+            self.control_store,
+        )
+        incomplete, orphaned = self.artifact_repository.reconciliation
+        if incomplete or orphaned:
+            log.warning(
+                "Artifact Repository 已回收 incomplete=%d orphaned=%d",
+                incomplete,
+                orphaned,
+            )
+        self.process_runner = ProcessRunner(Path(config.execution_runtime_root))
+        self.script_executor = ScriptExecutor(
+            self.execution_profile_registry,
+            self.process_runner,
+            self.execution_workspaces,
+            self.artifact_repository,
+            self.control_store,
+        )
+        self.execution_capabilities = create_ppt_capabilities(self.script_executor)
+
         self.capability_registry = CapabilityRegistry()
         builtin_bindings = build_builtin_bindings(
             self.mm,
             self.memory,
             executor=self.capability_executor,
+            additional_specs=self.execution_capabilities,
         )
         for binding in builtin_bindings:
             self.capability_registry.register(binding)
@@ -88,13 +128,12 @@ class Agent:
             ledger=QuotaLedger(default_limit_usd=config.model_budget_usd),
         )
 
-        self.skill_package_registry = SkillPackageRegistry()
-        self.skill_package_registry.load_directory(Path(config.skill_packages_path))
         self.skill_resource_loader = SkillResourceLoader()
         self.agent_package_registry = AgentPackageRegistry(
             policy_registry=self.policy_registry,
             model_policy_registry=self.model_policy_registry,
             skill_registry=self.skill_package_registry,
+            execution_profile_registry=self.execution_profile_registry,
         )
         self.agent_package_registry.load_directory(Path(config.agent_packages_path))
         self.agent_provider_registry = AgentProviderRegistry()
@@ -243,6 +282,7 @@ class Agent:
                 self.memory,
                 context_provider=sdk_llm.get_capability_context,
                 executor=self.capability_executor,
+                additional_specs=self.execution_capabilities,
             )
             bindings.extend(self.mcp_bridge.get_sdk_bindings())
             await sdk_llm.start(tool_funcs=bindings)

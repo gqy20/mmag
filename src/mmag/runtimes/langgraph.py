@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
@@ -10,7 +11,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from ..capabilities import AuthorizationDecision
+from ..capabilities import AuthorizationDecision, get_capability_context
 from ..governance import get_governance_context
 from ..llm import LLMError
 from ..model_artifacts import strip_model_artifacts
@@ -124,6 +125,8 @@ class LangGraphRuntimeAdapter:
             "final_text": "",
             "thread_id": thread_id,
             "review_decisions": {},
+            "artifacts": [],
+            "capability_calls": [],
         }
         state_result = await graph.ainvoke(state, self._config(thread_id, request.max_rounds))
         result = self._to_result(state_result)
@@ -135,7 +138,12 @@ class LangGraphRuntimeAdapter:
                 result.text,
             )
             if recovered != result.text:
-                return AgentResult(text=recovered, runtime=self.runtime_name)
+                return AgentResult(
+                    text=recovered,
+                    runtime=self.runtime_name,
+                    artifacts=result.artifacts,
+                    capability_calls=result.capability_calls,
+                )
         return result
 
     async def resume(self, thread_id: str, decision: Mapping[str, Any]) -> AgentResult:
@@ -220,6 +228,7 @@ class LangGraphRuntimeAdapter:
             return {"review_decisions": {}}
 
         governance = get_governance_context()
+        capability_context = get_capability_context()
         skill_resources = get_skill_resource_session()
         response = interrupt(
             {
@@ -233,6 +242,11 @@ class LangGraphRuntimeAdapter:
                     ),
                     "roles": list(governance.roles if governance is not None else ()),
                 },
+                "execution_profiles": list(
+                    capability_context.allowed_execution_profiles
+                    if capability_context is not None
+                    else ()
+                ),
                 "skill_resource_state": (
                     skill_resources.to_state() if skill_resources is not None else {}
                 ),
@@ -249,6 +263,8 @@ class LangGraphRuntimeAdapter:
 
     async def _tools_node(self, state: LangGraphState) -> dict[str, Any]:
         new_messages: list[dict[str, Any]] = []
+        artifacts: list[dict[str, Any]] = []
+        capability_calls: list[dict[str, Any]] = []
         for call in last_tool_calls(state):
             authorization = self.capability_registry.authorization(call["name"], call["input"])
             requires_approval = bool(
@@ -267,13 +283,42 @@ class LangGraphRuntimeAdapter:
                 else:
                     result = '{"error":{"code":"rejected","message":"Rejected by reviewer"}}'
                     new_messages.append(tool_result(call["id"], result))
+                    capability_calls.append({"name": call["name"], "status": "rejected"})
                     continue
 
             result = await self.capability_registry.execute(
                 call["name"], arguments, approval_granted=approval_granted
             )
             new_messages.append(tool_result(call["id"], result))
-        return {"messages": new_messages, "review_decisions": {}}
+            payload = self._tool_payload(result)
+            artifacts.extend(self._tool_artifacts(payload))
+            capability_calls.append(
+                {
+                    "name": call["name"],
+                    "status": "error" if "error" in payload else "succeeded",
+                }
+            )
+        return {
+            "messages": new_messages,
+            "review_decisions": {},
+            "artifacts": artifacts,
+            "capability_calls": capability_calls,
+        }
+
+    @staticmethod
+    def _tool_payload(result: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _tool_artifacts(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        artifacts = payload.get("artifacts", ())
+        if not isinstance(artifacts, list):
+            return []
+        return [dict(item) for item in artifacts if isinstance(item, Mapping)]
 
     @staticmethod
     def _after_agent(state: LangGraphState) -> str:
@@ -300,10 +345,18 @@ class LangGraphRuntimeAdapter:
                 text="",
                 runtime=self.runtime_name,
                 status=RuntimeStatus.WAITING_APPROVAL,
+                artifacts=tuple(dict(item) for item in state.get("artifacts", ())),
+                capability_calls=tuple(dict(item) for item in state.get("capability_calls", ())),
                 interruptions=interruptions,
             )
         text = str(state.get("final_text", "")) or _EXHAUSTED_TEXT
         status = (
             RuntimeStatus.EXHAUSTED if text.startswith("⚠️ 处理超时") else RuntimeStatus.COMPLETED
         )
-        return AgentResult(text=text, runtime=self.runtime_name, status=status)
+        return AgentResult(
+            text=text,
+            runtime=self.runtime_name,
+            status=status,
+            artifacts=tuple(dict(item) for item in state.get("artifacts", ())),
+            capability_calls=tuple(dict(item) for item in state.get("capability_calls", ())),
+        )

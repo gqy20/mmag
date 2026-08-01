@@ -60,6 +60,7 @@ class SkillManifest:
     output_schema_ref: str
     activation: SkillActivation
     capabilities: SkillCapabilities
+    execution_profiles: tuple[str, ...]
     resources: SkillResources
     disclosure: SkillDisclosure
 

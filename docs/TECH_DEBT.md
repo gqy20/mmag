@@ -35,15 +35,15 @@ Loader 已拒绝无 eval、重复 case、非法字段和模糊期望，但启动
 ### TD-05 — Report → PPT Artifact handoff 尚未闭环
 
 `report`、`ppt` 和 `project` 已有真实 Agent/Skill Package、默认拒绝 Policy 和结构化结果契约；
-当前结果仍直接返回消息链，没有原子写入 Artifact Repository。`ppt` 也只有可编辑 deck source，
-尚无受管 PPTX/PDF 渲染 Capability。
+`ppt` 已通过受控执行平面将 PPTX/PDF 原子写入 Artifact Repository。当前 `report` 结果仍直接返回
+消息链，尚未形成只允许版本化 `research_report` ref 进入 PPT 的严格 handoff；预览与交付也未闭环。
 
 完成标准：Report 产生版本化 `research_report` Artifact；PPT 只消费通过 Schema、版本和 scope
-校验的 Artifact ref；受控执行平面生成文件/预览 Artifact；每一步失败、审批、重试和返工可恢复。
+校验的 Artifact ref；补齐 PNG 预览与 Mattermost Artifact Presenter；每一步失败、审批、重试和返工可恢复。
 
 ### TD-06 — Artifact Repository 未进入默认消息链
 
-控制面已有 Artifact 数据模型，Package 也声明 Artifact Schema，但默认对话输出还没有统一写入 Artifact Repository。
+控制面已有 Artifact 数据模型，受控执行产物已经落入文件型 Repository；普通结构化 Agent 输出尚未统一写入，Artifact ref 也尚未通过 Presenter/Outbox 交付。
 
 完成标准：Artifact 内容、Schema version、来源、Package provenance 和访问 scope 一起持久化；下游只接受 Artifact ref。
 

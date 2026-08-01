@@ -1,0 +1,68 @@
+api_version: mmag.ai/v1
+kind: ExecutionProfile
+
+metadata:
+  name: ppt
+  version: 1.0.0
+  description: Offline, fixed-argv rendering of governed presentation Artifacts.
+
+spec:
+  runner:
+    kind: bubblewrap
+    image_digest: sha256:7168268cf9af1e86383ad137fe3426185ef7d0add8b15c2bbad759191836b619
+
+  network:
+    mode: none
+
+  environment:
+    inherit: []
+    set:
+      LC_ALL: C.UTF-8
+      PYTHONHASHSEED: "0"
+      TZ: UTC
+
+  filesystem:
+    read_only: [/usr, /lib, /lib64, /etc/fonts]
+    writable: [temporary, staging]
+
+  resources:
+    timeout_seconds: 120
+    cpu_seconds: 90
+    memory_bytes: 536870912
+    max_processes: 16
+    max_input_bytes: 1048576
+    max_output_bytes: 65536
+    max_artifact_bytes: 52428800
+
+  commands:
+    - id: ppt.render
+      permission: artifact:generate
+      executable: python
+      script_ref: scripts/ppt.py
+      argv: ["-I", "-B", "{script}", "render", "--input", "{input}", "--output", "{output}"]
+      output:
+        filename: deck.pptx
+        kind: slide_deck
+        media_type: application/vnd.openxmlformats-officedocument.presentationml.presentation
+        schema_version: 1.1.0
+
+    - id: ppt.export_pdf
+      permission: artifact:generate
+      executable: libreoffice
+      source_kind: slide_deck
+      argv:
+        - --headless
+        - --nologo
+        - --nodefault
+        - --nolockcheck
+        - --norestore
+        - --convert-to
+        - pdf
+        - --outdir
+        - "{staging}"
+        - "{source}"
+      output:
+        filename: deck.pdf
+        kind: presentation_pdf
+        media_type: application/pdf
+        schema_version: 1.0.0

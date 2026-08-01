@@ -556,6 +556,7 @@ agents/                    # Agent Manifest、Prompt、Schema、eval
 skills/                    # Skill Manifest、SKILL.md、Schema、资源、eval
 policies/                  # 默认拒绝的资源级 Policy
 model-policies/            # 模型路由与生成预算
+execution-profiles/        # 固定 argv、隔离、资源与 Artifact 输出契约
 
 src/mmag/
 ├── application/           # composition root、消息编排、Context、Delivery
@@ -563,6 +564,7 @@ src/mmag/
 ├── agent_packages/        # Agent Loader、Factory、运行时契约
 ├── skill_packages/        # Skill Loader、Registry、Resolver、运行时契约
 ├── capabilities/          # 单一 Capability Catalog、bindings、Executor
+├── execution/             # Profile Registry、ProcessRunner、工作区与 Artifact Repository
 ├── runtimes/              # LangGraph 默认 Runtime、SDK Adapter
 ├── control_plane/         # Inbox/Outbox、Lifecycle、Approval、DLQ
 ├── governance/            # Policy、Model Policy、Quota、Secret、审计原语

@@ -281,6 +281,7 @@ class MessageHandler:
                     post,
                     result,
                     allowed_capabilities=capability_names,
+                    allowed_execution_profiles=self._effective_execution_profiles(selection.agent),
                 )
                 if result.status is RuntimeStatus.WAITING_APPROVAL
                 else result.text
@@ -318,6 +319,11 @@ class MessageHandler:
             return request.skill.capabilities
         return agent.descriptor.capabilities
 
+    @staticmethod
+    def _effective_execution_profiles(agent: ManagedAgent) -> tuple[str, ...]:
+        package = getattr(agent, "package", None)
+        return tuple(package.execution_profiles) if package is not None else ()
+
     def build_agent_request(self, post: dict, intent: str) -> AgentRequest:
         return AgentRequest(
             intent=intent,
@@ -335,7 +341,16 @@ class MessageHandler:
         runtime_result: AgentResult,
         *,
         allowed_capabilities: tuple[str, ...] = (),
+        allowed_execution_profiles: tuple[str, ...] = (),
     ) -> str:
+        if not allowed_execution_profiles and runtime_result.interruptions:
+            value = runtime_result.interruptions[0].get("value", {})
+            if isinstance(value, dict):
+                restored = value.get("execution_profiles", ())
+                if isinstance(restored, (list, tuple)):
+                    allowed_execution_profiles = tuple(
+                        str(ref) for ref in restored if isinstance(ref, str) and ref
+                    )
         scope = self.post_scope(post)
         approval = self.approval_coordinator.register(
             runtime_result,
@@ -349,6 +364,8 @@ class MessageHandler:
                 message=post.get("message", ""),
                 scope=scope,
                 allowed_capabilities=frozenset(allowed_capabilities),
+                run_id=f"mattermost:{post.get('id', trace.current)}",
+                allowed_execution_profiles=frozenset(allowed_execution_profiles),
             ),
         )
         return (
@@ -403,6 +420,7 @@ class MessageHandler:
         if not isinstance(runtime_request, RunRequest):
             raise TypeError("Mattermost execution requires a prepared RunRequest")
         allowed_capabilities = self._effective_capabilities(request, agent)
+        package = getattr(agent, "package", None)
         capability_context = CapabilityContext(
             trace_id=runtime_request.context.trace_id,
             actor_id=runtime_request.context.actor_id,
@@ -411,6 +429,10 @@ class MessageHandler:
             message=post.get("message", ""),
             scope=runtime_request.context.scope,
             allowed_capabilities=frozenset(allowed_capabilities),
+            run_id=runtime_request.context.run_id,
+            allowed_execution_profiles=frozenset(
+                package.execution_profiles if package is not None else ()
+            ),
         )
         with (
             bind_capability_context(capability_context),
@@ -425,7 +447,6 @@ class MessageHandler:
                 )
             ),
         ):
-            package = getattr(agent, "package", None)
             log.info(
                 "%s Agent route intent=%s agent=%s skill=%s package=%s",
                 trace.prefix(),

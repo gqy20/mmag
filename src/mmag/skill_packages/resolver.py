@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +39,27 @@ def validate_skill_contract(
         ) from error
 
 
+def build_skill_provenance(
+    package: AgentPackage,
+    skill: SkillPackage,
+) -> dict[str, str]:
+    provenance = skill.snapshot.to_dict()
+    if not skill.manifest.execution_profiles:
+        return provenance
+    profiles = {
+        ref: package.execution_profiles[ref].provenance()
+        for ref in skill.manifest.execution_profiles
+    }
+    encoded = json.dumps(profiles, sort_keys=True, separators=(",", ":"))
+    provenance.update(
+        {
+            "skill_execution_profiles": encoded,
+            "skill_execution_profile_hash": hashlib.sha256(encoded.encode()).hexdigest(),
+        }
+    )
+    return provenance
+
+
 class SkillResolver:
     """Select only Skills explicitly bound to the already-selected Agent."""
 
@@ -64,7 +87,7 @@ class SkillResolver:
             if not matches:
                 return None
             selected = max(matches, key=lambda skill: self._score(skill, request))
-        return self._invocation(selected, request, agent_capabilities)
+        return self._invocation(package, selected, request, agent_capabilities)
 
     @staticmethod
     def _requested(candidates: list[SkillPackage], requested: str) -> SkillPackage:
@@ -95,6 +118,7 @@ class SkillResolver:
 
     def _invocation(
         self,
+        package: AgentPackage,
         skill: SkillPackage,
         request: AgentRequest,
         agent_capabilities: tuple[str, ...],
@@ -129,5 +153,5 @@ class SkillResolver:
             instructions=load_skill_instructions(skill),
             resource_catalog=build_skill_resource_catalog(skill),
             capabilities=effective,
-            provenance=MappingProxyType(skill.snapshot.to_dict()),
+            provenance=MappingProxyType(build_skill_provenance(package, skill)),
         )

@@ -148,7 +148,9 @@ class SkillPackageLoader:
             try:
                 resolve_skill_ref(package_root, ref).read_text(encoding="utf-8")
             except UnicodeDecodeError as error:
-                raise SkillManifestError(f"disclosable Skill resource {ref!r} is not UTF-8") from error
+                raise SkillManifestError(
+                    f"disclosable Skill resource {ref!r} is not UTF-8"
+                ) from error
 
     def _load_manifest(self, path: Path) -> dict[str, Any]:
         if not path.is_file():
@@ -190,6 +192,7 @@ class SkillPackageLoader:
                 tuple(spec["required_capabilities"]),
                 tuple(spec["optional_capabilities"]),
             ),
+            tuple(spec.get("execution_profiles", ())),
             SkillResources(
                 tuple(resources["templates"]),
                 tuple(resources["references"]),

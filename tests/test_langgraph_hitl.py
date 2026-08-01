@@ -363,6 +363,7 @@ async def test_approval_resume_restores_original_capability_context(tmp_path: Pa
                         "allowed_capabilities": ["send_file"],
                         "roles": ["member"],
                     },
+                    "execution_profiles": ["ppt@1.0.0"],
                 },
             },
         ),
@@ -374,6 +375,9 @@ async def test_approval_resume_restores_original_capability_context(tmp_path: Pa
         "post-1",
         "请导出并发文件",
         "mattermost:team-1/channel-1",
+        frozenset({"send_file"}),
+        "run-1",
+        frozenset({"ppt@1.0.0"}),
     )
     approval = coordinator.register(
         paused,

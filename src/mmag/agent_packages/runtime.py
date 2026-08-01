@@ -15,6 +15,11 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from ..agent_system.core import AgentDescriptor, AgentOutput, AgentRequest
+from ..capabilities import (
+    CapabilityContext,
+    bind_capability_context,
+    get_capability_context,
+)
 from ..governance import GovernanceContext, bind_governance_context, get_governance_context
 from ..runtimes import RunContext, RunRequest, RuntimeStatus
 from ..skill_packages import (
@@ -22,6 +27,7 @@ from ..skill_packages import (
     SkillResourceLoader,
     SkillResourceSession,
     bind_skill_resource_session,
+    build_skill_provenance,
     build_skill_resource_catalog,
     validate_skill_contract,
 )
@@ -145,6 +151,39 @@ def _package_governance(
     )
 
 
+def _package_capability_context(
+    package: AgentPackage,
+    request: AgentRequest,
+    runtime_request: Any,
+    allowed_capabilities: tuple[str, ...],
+) -> CapabilityContext:
+    parent = get_capability_context()
+    runtime_context = runtime_request.context if isinstance(runtime_request, RunRequest) else None
+    return CapabilityContext(
+        trace_id=(
+            parent.trace_id
+            if parent is not None
+            else runtime_context.trace_id
+            if runtime_context is not None
+            else request.run_id
+        ),
+        actor_id=request.actor_id,
+        conversation_id=(
+            parent.conversation_id
+            if parent is not None
+            else runtime_context.conversation_id
+            if runtime_context is not None
+            else request.scope.rsplit("/", 1)[-1]
+        ),
+        message_id=parent.message_id if parent is not None else "",
+        message=parent.message if parent is not None else request.prompt,
+        scope=runtime_context.scope if runtime_context is not None else request.scope,
+        allowed_capabilities=frozenset(allowed_capabilities),
+        run_id=(runtime_context.run_id if runtime_context is not None else request.run_id),
+        allowed_execution_profiles=frozenset(package.execution_profiles),
+    )
+
+
 def _constrain_runtime_request(
     package: AgentPackage,
     runtime_request: Any,
@@ -161,9 +200,7 @@ def _constrain_runtime_request(
     if allowed_capabilities is not None:
         allowed = set(allowed_capabilities)
         capabilities = tuple(
-            capability
-            for capability in capabilities
-            if capability.get("name") in allowed
+            capability for capability in capabilities if capability.get("name") in allowed
         )
     return replace(
         runtime_request,
@@ -197,7 +234,7 @@ def _validate_skill_invocation(
     if (
         actual_hash != expected_hash
         or invocation.resource_catalog != expected_catalog
-        or invocation.provenance != skill.snapshot.to_dict()
+        or invocation.provenance != build_skill_provenance(package, skill)
     ):
         raise AgentPackageError(f"Skill {invocation.ref!r} provenance is invalid")
     declared = skill.manifest.capabilities
@@ -309,8 +346,24 @@ class ContractAgentDecorator:
             if resource_session is not None
             else nullcontext()
         )
-        with resource_context, bind_governance_context(
-            _package_governance(self.package, self.descriptor, constrained)
+        allowed_capabilities = (
+            constrained.skill.capabilities
+            if constrained.skill is not None
+            else self.descriptor.capabilities
+        )
+        with (
+            resource_context,
+            bind_capability_context(
+                _package_capability_context(
+                    self.package,
+                    constrained,
+                    constrained.runtime_request,
+                    allowed_capabilities,
+                )
+            ),
+            bind_governance_context(
+                _package_governance(self.package, self.descriptor, constrained)
+            ),
         ):
             result = await self.delegate.run(constrained)
         runtime_result = result.runtime_result
@@ -462,7 +515,20 @@ class PackageAgentRunner:
             if resource_session is not None
             else nullcontext()
         )
-        with resource_context, bind_governance_context(governance):
+        allowed_names = tuple(
+            str(capability.get("name")) for capability in capabilities if capability.get("name")
+        )
+        capability_context = _package_capability_context(
+            self.package,
+            request,
+            runtime_request,
+            allowed_names,
+        )
+        with (
+            resource_context,
+            bind_capability_context(capability_context),
+            bind_governance_context(governance),
+        ):
             runtime_result = await self.runtime.run(runtime_request)
         if runtime_result.status is RuntimeStatus.WAITING_APPROVAL:
             return AgentOutput(
@@ -508,7 +574,11 @@ class PackageAgentRunner:
                 if resource_session is not None
                 else nullcontext()
             )
-            with resource_context, bind_governance_context(governance):
+            with (
+                resource_context,
+                bind_capability_context(capability_context),
+                bind_governance_context(governance),
+            ):
                 repaired = await self.runtime.run(repair_request)
             model_calls += 1
             try:

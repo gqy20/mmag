@@ -13,6 +13,7 @@ Mattermost WebSocket
   → SkillResolver（Agent 白名单内）
   → LangGraph Runtime（默认）
   → CapabilityRegistry → Policy → Executor
+  → Execution Profile / isolated ProcessRunner（仅受管生成能力）
   → Outbox / Delivery
   → Mattermost REST
 ```
@@ -27,6 +28,7 @@ Mattermost WebSocket
 - LangGraph 是默认 Runtime，使用 SQLite checkpoint 和原生 interrupt/resume；
 - `CapabilityRegistry` 是内置能力与 MCP 能力的唯一运行时注册表；
 - 本次能力集合是 Agent 权限、Skill 能力声明和当前请求 Policy 的交集；
+- Python/CLI 生成能力还必须命中 Agent 与 Skill 绑定的精确 Execution Profile，只能执行固定 argv；
 - Prompt、输入/输出 Schema、eval、Skill、Policy 和 Model Policy 都进入版本化 Package 快照；
 - Delivery 与 Agent 执行状态独立，投递重试不会重复调用模型；
 - 全局 Policy 默认拒绝，文件外发和 MCP 副作用进入审批；
@@ -39,7 +41,7 @@ Mattermost WebSocket
 
 ## 快速开始
 
-要求 Python 3.12+、[uv](https://docs.astral.sh/uv/)、Mattermost Bot Token 和 Anthropic 兼容 API Key。
+基础服务要求 Python 3.12+、[uv](https://docs.astral.sh/uv/)、Mattermost Bot Token 和 Anthropic 兼容 API Key。启用受控文件生成时，目标 Linux 还必须安装 Bubblewrap 并允许服务账户创建 namespace；`ppt.export_pdf` 额外要求 LibreOffice。依赖缺失时失败关闭，不会回退为宿主机直接执行。
 
 创建 `.env`：
 
@@ -68,6 +70,11 @@ AGENT_PACKAGES_PATH=./agents
 SKILL_PACKAGES_PATH=./skills
 POLICIES_PATH=./policies
 MODEL_POLICIES_PATH=./model-policies
+EXECUTION_PROFILES_PATH=./execution-profiles
+EXECUTION_RUNTIME_ROOT=.venv
+EXECUTION_WORKSPACE_PATH=/tmp/mmag-execution
+EXECUTION_WORKSPACE_RETENTION_SECONDS=3600
+ARTIFACT_STORE_PATH=./artifacts
 ```
 
 安装和启动：
@@ -118,6 +125,7 @@ skills/
 
 policies/                  # 默认拒绝的 Policy-as-Code
 model-policies/            # 模型路由、输出预算和采样策略
+execution-profiles/        # 固定 argv、断网、挂载和资源限制
 
 src/mmag/
   application/             # Composition root、消息编排、上下文/附件、Delivery
@@ -125,6 +133,7 @@ src/mmag/
   agent_packages/          # Manifest、Provider Factory、契约加载与运行时强制
   skill_packages/          # Skill Manifest、Registry、Resolver 与契约校验
   capabilities/            # Capability Spec、Registry、bindings、Executor
+  execution/               # Profile Registry、sandbox runner、工作区与 Artifact staging
   runtimes/                # LangGraph 默认 Runtime、可选 Claude SDK Adapter
   control_plane/           # Inbox/Outbox、Lifecycle、Approval、DLQ/replay
   governance/              # Policy、Model Policy、Secret、Quota、运维原语
@@ -155,13 +164,14 @@ agents/<name>/evals/...
 2. 严格校验 Prompt 变量、JSON Schema 和 eval case；
 3. 解析并校验 `policy_ref`、`model_policy_ref`；
 4. 解析 `skills.allow` 精确版本，并校验 Skill Required Capability 不会扩权；
-5. 将 Prompt/Schema/eval/Skill/Policy/Model Policy Hash 写入 Package 快照；
-6. 根据 `execution.kind/provider` 选择可信 Provider 并构造 Agent；
-7. 校验唯一默认 Agent、路由冲突和 Capability allowlist 后原子注册。
+5. 解析 `execution_profiles.allow`，拒绝 Skill 申请 Agent 未允许的 Profile；
+6. 将 Prompt/Schema/eval/Skill/Execution Profile/Policy/Model Policy Hash 写入 Package 快照；
+7. 根据 `execution.kind/provider` 选择可信 Provider 并构造 Agent；
+8. 校验唯一默认 Agent、路由冲突和 Capability allowlist 后原子注册。
 
 版本保留在 `metadata.version`；源码历史交给 Git，发布历史交给制品仓库。CI 比较目标分支，Package 任意内容变化都必须提升 SemVer 并产生新的 Hash。
 
-Skill 同样使用扁平目录和 Manifest 内版本。`SKILL.md` 只描述工作方法，资源读取通过受预算约束的 `load_skill_resource` Capability；`scripts/` 在 v1 不可读取或执行。
+Skill 同样使用扁平目录和 Manifest 内版本。`SKILL.md` 只描述工作方法，资源读取通过受预算约束的 `load_skill_resource` Capability；`scripts/` 不向模型披露，只能由受信 `ScriptExecutor` 在 Profile sandbox 中按 Hash 和固定 argv 执行。
 
 ## 安全边界
 
@@ -171,12 +181,14 @@ Skill 同样使用扁平目录和 Manifest 内版本。`SKILL.md` 只描述工�
 - URL 分析禁用环境代理和自动重定向，每次跳转重新执行 DNS/IP SSRF 校验；
 - 频道、用户和文件目标使用可信请求 Context 做资源级匹配；
 - Secret 不得写入 Agent Manifest、Prompt、Policy 或日志；
+- 不注册通用 Shell、动态 Python、用户命令字符串或 Manifest 自授权入口；
 - 未知 Agent、未知 Capability、缺失 Scope 或未命中 Policy 均拒绝。
 
 ## 文档
 
 - [Agent Package](docs/AGENT_PACKAGES.md)
 - [Skill Package](docs/SKILL_PACKAGES.md)
+- [受控执行平面](docs/EXECUTION.md)
 - [数字员工清单](docs/WORKERS.md)
 - [AI Native 架构](docs/AI_NATIVE_REFACTORING.md)
 - [Roadmap](docs/ROADMAP.md)

@@ -21,6 +21,8 @@ class LangGraphState(TypedDict):
     final_text: str
     thread_id: str
     review_decisions: dict[str, dict[str, Any]]
+    artifacts: Annotated[list[dict[str, Any]], operator.add]
+    capability_calls: Annotated[list[dict[str, Any]], operator.add]
 
 
 def last_tool_calls(state: LangGraphState) -> list[dict[str, Any]]:

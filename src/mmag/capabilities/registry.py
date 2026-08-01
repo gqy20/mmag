@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import time
@@ -135,10 +136,19 @@ class CapabilityRegistry:
 
         t0 = time.monotonic()
         log.info(
-            "%s 调用工具: %s(%s)",
+            "%s 调用工具: %s keys=%s input_sha256=%s",
             trace.prefix(),
             name,
-            json.dumps(input_data, ensure_ascii=False)[:200],
+            sorted(input_data),
+            hashlib.sha256(
+                json.dumps(
+                    input_data,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode()
+            ).hexdigest()[:16],
         )
 
         try:

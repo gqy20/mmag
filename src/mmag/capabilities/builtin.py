@@ -29,6 +29,7 @@ def create_builtin_capabilities(
     memory,
     *,
     context_provider: Callable[[], CapabilityContext | None] = get_capability_context,
+    additional_specs: tuple[CapabilitySpec, ...] = (),
 ) -> list[CapabilitySpec]:
     """Create the ordered built-in catalog shared by every Runtime binding."""
     return [
@@ -41,6 +42,7 @@ def create_builtin_capabilities(
         create_analyze_link_capability(memory),
         create_load_skill_resource_capability(),
         create_send_file_capability(mm_client, context_provider=context_provider),
+        *additional_specs,
     ]
 
 
@@ -49,13 +51,18 @@ def build_builtin_bindings(
     memory,
     *,
     executor: CapabilityExecutor | None = None,
+    additional_specs: tuple[CapabilitySpec, ...] = (),
 ) -> list[CapabilityBinding]:
     """Project the canonical built-in catalog onto the default runtime surface."""
     from .bindings import bind_langgraph_capability
 
     return [
         bind_langgraph_capability(spec, executor=executor)
-        for spec in create_builtin_capabilities(mm_client, memory)
+        for spec in create_builtin_capabilities(
+            mm_client,
+            memory,
+            additional_specs=additional_specs,
+        )
     ]
 
 
@@ -65,6 +72,7 @@ def build_sdk_bindings(
     *,
     context_provider: Callable[[], CapabilityContext | None] = get_capability_context,
     executor: CapabilityExecutor | None = None,
+    additional_specs: tuple[CapabilitySpec, ...] = (),
 ) -> list:
     """Project the canonical built-in catalog onto Claude Agent SDK."""
     from .bindings import bind_sdk_capability
@@ -75,5 +83,6 @@ def build_sdk_bindings(
             mm_client,
             memory,
             context_provider=context_provider,
+            additional_specs=additional_specs,
         )
     ]

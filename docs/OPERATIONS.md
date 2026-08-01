@@ -8,11 +8,11 @@ Delivery worker 和 SQLite 控制面，不需要额外消息队列。
 ```text
 Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ── LLM provider
                                   │
-                                  └── persistent volume / agent_memory.db
+                                  └── persistent volume / agent_memory.db + artifacts/
 ```
 
 - 每个 SQLite 数据库只运行一个 mmag 写实例；横向扩展前必须先更换支持租约的存储。
-- 数据目录使用持久卷，数据库开启 WAL、foreign keys、busy timeout 和 NORMAL synchronous。
+- 数据目录与 `ARTIFACT_STORE_PATH` 使用同一故障域内的持久卷，数据库开启 WAL、foreign keys、busy timeout 和 NORMAL synchronous。
 - 出站网络只允许 Mattermost、配置的模型端点和显式授权的 MCP Server。
 - Secret 通过环境或部署平台 Secret 注入，不写入镜像、日志和数据库。
 
@@ -20,7 +20,7 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 
 - 启动时先加载 Skill Package，再解析 Agent 的 `skills.allow` 精确版本。未知 Skill、Hash 漂移或 Required Capability 超出 Agent allowlist 会阻止整批 Agent 注册。
 - 选中 Skill 后，模型 Tool Schema、CapabilityContext 和 Package Governance 同时收窄到该 Skill 的 required/available optional 集合。Skill 未声明的 Agent Capability 在本次请求不可执行。
-- `SKILL.md` 在选中后加载；模板和参考资料只能通过 `load_skill_resource` 按精确 ref 加载，并受数量、字节和估算 token 预算限制。`scripts/` 在 v1 没有读取或执行入口。
+- `SKILL.md` 在选中后加载；模板和参考资料只能通过 `load_skill_resource` 按精确 ref 加载，并受数量、字节和估算 token 预算限制。`scripts/` 不向模型披露，只能由 Agent、Skill、Policy 和 Execution Profile 共同允许的窄口 Capability 执行。
 - Skill 资源首次按需加载时重新校验发布 Hash，之后按 Hash 缓存。审批 interrupt 保存已披露 ref，resume 只恢复这些资源；实际加载清单进入运行 provenance。
 - 每次 Capability 调用根据当前 Agent Package 的 `policy_ref` 动态选择 Policy；`mmchat`、
   `link`、`report`、`ppt` 和 `project` 均使用各自版本化 Policy，默认效果为 `deny`。
@@ -29,12 +29,14 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 - 文件外发和所有外部 MCP 调用默认进入 LangGraph 审批。审批恢复会还原原始 CapabilityContext，副作用前的用户意图与频道目标不会被审批消息覆盖。
 - MCP stdio 子进程仅继承 `PATH`、语言、临时目录、Home 和 Windows 启动必需变量；其他值必须在 `.mcp.json` 的 Server `env` 中显式声明。环境隔离不是进程沙箱，高风险 Server 仍应放入容器并限制文件系统与网络。
 - URL 分析禁用自动重定向与环境代理；初始 URL 和最多五个重定向目标均重新做协议、DNS 和公网 IP 校验。出站防火墙仍是最终网络边界。
+- 受控 Python/CLI 要求 Linux、Bubblewrap namespace 权限和锁定的 `EXECUTION_RUNTIME_ROOT`；PDF 还要求 LibreOffice。启动时会协调 Run 工作区和 Artifact 中断提交，依赖或隔离不可用时能力失败关闭。完整门禁见 [受控执行平面](EXECUTION.md)。
 
 ## 容量与保护
 
 - `PIPELINE_MAX_CONCURRENCY` 控制跨会话执行并发，默认 8。
 - `PIPELINE_MAX_PENDING` 提供入口背压，默认 256。
 - `RUNTIME_DEADLINE_SECONDS` 是单次 Run deadline，默认 120 秒。
+- 每个 Execution Profile 独立限制输入、stdout/stderr、Artifact、wall time、CPU、地址空间、进程数和文件描述符；部署层仍应再使用 cgroup/systemd/container 限额保护整个服务。
 - `MODEL_BUDGET_USD` 是进程内每个 actor 的成本上限基线，生产环境应由外部配额源同步。
 - Delivery 最多尝试三次，失败记录保留在 Outbox，不会重新执行 Agent。
 - Runtime/网络类瞬时处理错误默认最多尝试三次，次数与下次重试时间持久化在 Inbox；非瞬时错误直接进入 `failed`。
@@ -66,7 +68,7 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 3. 恢复时停止旧实例，将备份恢复到新路径，再启动单个实例。
 4. 启动过程会运行 forward-only migration，并 reconciliation 遗留的
    `RUNNING`、`SENDING`、`PROCESSING/RETRYING` 和未投递记录。
-5. 恢复演练必须验证 Inbox 不重复执行、Outbox 可继续投递、审批仍可读取，并能用原 `thread_id` 从 LangGraph SQLite checkpoint 恢复。
+5. 恢复演练必须验证 Inbox 不重复执行、Outbox 可继续投递、审批仍可读取、Artifact 文件与 SQLite metadata 一致，并能用原 `thread_id` 从 LangGraph SQLite checkpoint 恢复。
 
 ## 升级与回滚
 
@@ -83,6 +85,7 @@ Policy 决策、配额和审计事件使用 actor/scope/trace 关联。部署层
 - Runtime timeout/rate-limit 连续发生；
 - 待审批数量或最老等待时间超阈值；
 - 配额耗尽、数据库磁盘空间不足、WebSocket 长时间重连；
+- `sandbox_unavailable`、执行超时/输出超限、Artifact reconciliation 或 scope/Hash 校验失败；
 - 备份失败或恢复演练超期。
 
 默认 CI 只做离线契约和并发测试。真实容量上限必须在目标 Mattermost、模型网关和

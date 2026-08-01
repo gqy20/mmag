@@ -29,6 +29,7 @@ def verify_wheel(wheel: Path) -> None:
         environment.pop("SKILL_PACKAGES_PATH", None)
         environment.pop("POLICIES_PATH", None)
         environment.pop("MODEL_POLICIES_PATH", None)
+        environment.pop("EXECUTION_PROFILES_PATH", None)
         subprocess.run(
             [
                 sys.executable,
@@ -41,13 +42,16 @@ def verify_wheel(wheel: Path) -> None:
                     "from mmag.skill_packages import SkillPackageRegistry; "
                     "from mmag.config import config; "
                     "from mmag.governance import ModelPolicyRegistry, PolicyRegistry; "
+                    "from mmag.execution import ExecutionProfileRegistry; "
                     "policies = PolicyRegistry(); "
                     "policies.load_directory(Path(config.policies_path)); "
                     "models = ModelPolicyRegistry(); "
                     "models.load_directory(Path(config.model_policies_path)); "
                     "skills = SkillPackageRegistry(); "
                     "skills.load_directory(Path(config.skill_packages_path)); "
-                    "agents = AgentPackageRegistry(policy_registry=policies, model_policy_registry=models, skill_registry=skills); "
+                    "profiles = ExecutionProfileRegistry(); "
+                    "profiles.load_directory(Path(config.execution_profiles_path)); "
+                    "agents = AgentPackageRegistry(policy_registry=policies, model_policy_registry=models, skill_registry=skills, execution_profile_registry=profiles); "
                     "agents.load_directory(Path(config.agent_packages_path)); "
                     "mmchat = agents.get('mmchat'); "
                     "link = agents.get('link'); "

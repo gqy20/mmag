@@ -201,4 +201,5 @@ class AuditEvent:
     scope_id: str
     target: str
     decision: str
+    trace_id: str = ""
     details: Mapping[str, Any] = field(default_factory=dict)

@@ -70,6 +70,12 @@ class SkillDeclaration:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionProfileDeclaration:
+    allow: tuple[str, ...]
+    deny: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ContextDeclaration:
     read_scopes: tuple[str, ...]
     write_scopes: tuple[str, ...]
@@ -102,6 +108,7 @@ class AgentManifest:
     runtime: RuntimeDeclaration
     capabilities: CapabilityDeclaration
     skills: SkillDeclaration
+    execution_profiles: ExecutionProfileDeclaration
     context: ContextDeclaration
     policy_ref: str
     model_policy_ref: str
@@ -149,6 +156,7 @@ class PackageVersionSnapshot:
     model_policy_hash: str = ""
     eval_hash: str = ""
     skill_set_hash: str = ""
+    execution_profile_set_hash: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -166,6 +174,7 @@ class PackageVersionSnapshot:
             "model_policy_hash": self.model_policy_hash,
             "eval_hash": self.eval_hash,
             "skill_set_hash": self.skill_set_hash,
+            "execution_profile_set_hash": self.execution_profile_set_hash,
         }
 
 
@@ -178,3 +187,4 @@ class AgentPackage:
     snapshot: PackageVersionSnapshot
     evals: Mapping[str, EvalAsset] = field(default_factory=lambda: MappingProxyType({}))
     skills: Mapping[str, SkillPackage] = field(default_factory=lambda: MappingProxyType({}))
+    execution_profiles: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))

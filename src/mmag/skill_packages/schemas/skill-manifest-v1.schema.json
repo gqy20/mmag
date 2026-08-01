@@ -45,6 +45,14 @@
         },
         "required_capabilities": {"$ref": "#/$defs/stringArray"},
         "optional_capabilities": {"$ref": "#/$defs/stringArray"},
+        "execution_profiles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,62}@[0-9]+\\.[0-9]+\\.[0-9]+$"
+          }
+        },
         "resources": {
           "type": "object",
           "additionalProperties": false,

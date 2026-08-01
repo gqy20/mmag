@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: ppt
-  version: 1.0.0
+  version: 1.1.0
   description: Design structured presentation decks and deliver editable slide source on request.
 
 spec:
@@ -46,12 +46,22 @@ spec:
       max_attempts: 2
 
   capabilities:
-    allow: [load_skill_resource, search_knowledge, send_file]
+    allow:
+      - load_skill_resource
+      - search_knowledge
+      - ppt.render
+      - ppt.export_pdf
+      - send_file
     deny: []
 
   skills:
     allow:
-      - slides@1.0.0
+      - slides@1.1.0
+    deny: []
+
+  execution_profiles:
+    allow:
+      - ppt@1.0.0
     deny: []
 
   context:
@@ -70,3 +80,5 @@ spec:
     produces:
       - kind: slide_deck
         schema_ref: schemas/artifact.schema.json
+      - kind: presentation_pdf
+        schema_ref: schemas/pdf.schema.json
