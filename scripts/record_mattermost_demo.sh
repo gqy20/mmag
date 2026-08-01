@@ -680,15 +680,31 @@ if ((SKIP_PPT == 0)); then
   stop_clip "final-evidence" 1 "preview.png 与 deck.pptx 交付证据"
 fi
 
-FONT_FILE="$(fc-match -f '%{file}\n' 'Noto Sans CJK SC' | head -1)"
-if [[ -z "$FONT_FILE" || ! -f "$FONT_FILE" ]]; then
-  FONT_FILE="$(fc-match -f '%{file}\n' sans-serif | head -1)"
-fi
+TITLE_FONT='Sarasa Gothic SC SemiBold'
+CAPTION_FONT='Sarasa UI SC SemiBold'
+
+require_font_face() {
+  local query="$1"
+  local expected_family="$2"
+  local expected_style="$3"
+  local match family style file
+  match="$(fc-match -f '%{family[0]}|%{style[0]}|%{file}\n' "$query" | head -1)"
+  IFS='|' read -r family style file <<<"$match"
+  if [[ "$family" != "$expected_family" || "$style" != "$expected_style" || ! -f "$file" ]]; then
+    printf 'Required video font is unavailable: %s (%s %s); resolved to: %s\n' \
+      "$query" "$expected_family" "$expected_style" "${match:-no match}" >&2
+    exit 1
+  fi
+  printf 'video_font=%s|%s|%s\n' "$family" "$style" "$file"
+}
+
+require_font_face "$TITLE_FONT" 'Sarasa Gothic SC' 'SemiBold'
+require_font_face "$CAPTION_FONT" 'Sarasa UI SC' 'SemiBold'
 
 TITLE_MP4="$EDIT_DIR/00-title.mp4"
 END_MP4="$EDIT_DIR/99-end.mp4"
 ffmpeg -y -v error -f lavfi -i color=c=0x111827:s=${VIDEO_WIDTH}x${VIDEO_HEIGHT}:d=5:r=25 \
-  -vf "drawtext=fontfile='$FONT_FILE':text='MMAG 企业智能体真实演示':fontcolor=white:fontsize=84:x=(w-text_w)/2:y=575,drawtext=fontfile='$FONT_FILE':text='Mattermost · Agent · Skill · Approval · PPT Artifact':fontcolor=0x93c5fd:fontsize=46:x=(w-text_w)/2:y=695" \
+  -vf "drawtext=font='$TITLE_FONT':text='MMAG 企业智能体真实演示':fontcolor=white:fontsize=84:x=(w-text_w)/2:y=575,drawtext=font='$CAPTION_FONT':text='Mattermost · Agent · Skill · Approval · PPT Artifact':fontcolor=0x93c5fd:fontsize=46:x=(w-text_w)/2:y=695" \
   -an -c:v libx264 -pix_fmt yuv420p "$TITLE_MP4"
 
 NORMALIZED=("$TITLE_MP4")
@@ -698,7 +714,7 @@ for index in "${!CLIP_PATHS[@]}"; do
   label="${CLIP_LABELS[$index]}"
   output="$EDIT_DIR/$(printf '%02d' "$((index + 1))").mp4"
   ffmpeg -y -v error -i "$input" \
-    -vf "setpts=PTS/$speed,fps=25,scale=${VIDEO_WIDTH}:${VIDEO_HEIGHT}:force_original_aspect_ratio=decrease,pad=${VIDEO_WIDTH}:${VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=0x111827,drawtext=fontfile='$FONT_FILE':text='$label':fontcolor=white:fontsize=42:box=1:boxcolor=black@0.65:boxborderw=22:x=48:y=48" \
+    -vf "setpts=PTS/$speed,fps=25,scale=${VIDEO_WIDTH}:${VIDEO_HEIGHT}:force_original_aspect_ratio=decrease,pad=${VIDEO_WIDTH}:${VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=0x111827,drawtext=font='$TITLE_FONT':text='$label':fontcolor=white:fontsize=42:box=1:boxcolor=black@0.65:boxborderw=22:x=48:y=48" \
     -an -c:v libx264 -preset medium -crf 22 -pix_fmt yuv420p "$output"
   NORMALIZED+=("$output")
 done
@@ -711,7 +727,7 @@ else
   FINAL_NAME='mmag-real-e2e-demo-2k.mp4'
 fi
 ffmpeg -y -v error -f lavfi -i color=c=0x111827:s=${VIDEO_WIDTH}x${VIDEO_HEIGHT}:d=5:r=25 \
-  -vf "drawtext=fontfile='$FONT_FILE':text='真实流程完成':fontcolor=white:fontsize=88:x=(w-text_w)/2:y=585,drawtext=fontfile='$FONT_FILE':text='$END_SUMMARY':fontcolor=0x86efac:fontsize=46:x=(w-text_w)/2:y=710" \
+  -vf "drawtext=font='$TITLE_FONT':text='真实流程完成':fontcolor=white:fontsize=88:x=(w-text_w)/2:y=585,drawtext=font='$CAPTION_FONT':text='$END_SUMMARY':fontcolor=0x86efac:fontsize=46:x=(w-text_w)/2:y=710" \
   -an -c:v libx264 -pix_fmt yuv420p "$END_MP4"
 NORMALIZED+=("$END_MP4")
 
