@@ -3,7 +3,7 @@ kind: Skill
 
 metadata:
   name: slides
-  version: 2.3.0
+  version: 3.0.0
   description: Compose governed Markdown into editable PPTX, source, and direct image preview Artifacts.
 
 spec:
@@ -17,7 +17,6 @@ spec:
     priority: 70
 
   required_capabilities:
-    - load_skill_resource
     - ppt.build
   optional_capabilities:
     - search_knowledge

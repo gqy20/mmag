@@ -1,11 +1,9 @@
 # mmag AI Native 协同架构重构方案
 
-> 状态：Active / 分阶段实施中
+> 状态：Archived baseline；当前实现以 [Deep Agents 原生化方案](DEEP_AGENTS_REFACTORING.md) 与 [Roadmap](ROADMAP.md) 为准
 > 基线日期：2026-07-31  
 > 适用版本：mmag 0.1.x（当前 `main`）  
-> 输入依据：当前代码、现有 Roadmap/Tech Debt、`ai_native.png` 架构图
-
-![企业 AI Native 协同架构](../ai_native.png)
+> 输入依据：2026-07-31 当时的代码与 Roadmap；文中的已删除模块只用于解释迁移历史
 
 ### 实施进度
 
@@ -168,13 +166,8 @@ flowchart LR
 
 #### B. Runtime 与工具系统双轨（已解决）
 
-- [`llm.py`](../src/mmag/llm.py) 只封装模型调用，[`runtimes/langgraph.py`](../src/mmag/runtimes/langgraph.py) 统一图编排；
-- [`sdk_llm.py`](../src/mmag/sdk_llm.py) 使用 Claude Agent SDK，但不再模拟旧手写 Agent loop 参数；
-- 内置能力由 `capabilities/` 的唯一 Spec 创建，LangGraph 与 SDK 只负责投影 binding；
-- 参数上限、结果格式化、授权和来源增强由 Capability 层统一；
-- MCP 先进入 Capability Catalog，再生成 Runtime binding；SDK 仅作为可选后端。
-
-LangGraph 是默认 Runtime；SDK 是显式可选后端，不再形成第二套业务契约。
+旧自定义模型客户端、手写 LangGraph loop、Claude Agent SDK 路径和双 Runtime binding 已删除。当前由
+Deep Agents/LangGraph 执行唯一模型主链，内置能力与 MCP 统一进入 Capability Registry。
 
 #### C. WebSocket 被业务执行阻塞（已解决）
 

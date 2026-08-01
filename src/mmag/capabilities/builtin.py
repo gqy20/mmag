@@ -15,7 +15,6 @@ from .catalog import (
 from .context import CapabilityContext, get_capability_context
 from .file import create_send_file_capability
 from .link import create_analyze_link_capability
-from .skill_resource import create_load_skill_resource_capability
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,7 +41,6 @@ def create_builtin_capabilities(
         create_save_knowledge_capability(memory),
         create_get_user_profile_capability(mm_client, memory),
         create_analyze_link_capability(memory),
-        create_load_skill_resource_capability(),
         create_send_file_capability(artifacts, context_provider=context_provider),
         *additional_specs,
     ]
@@ -65,30 +63,6 @@ def build_builtin_bindings(
             mm_client,
             memory,
             artifacts=artifacts,
-            additional_specs=additional_specs,
-        )
-    ]
-
-
-def build_sdk_bindings(
-    mm_client,
-    memory,
-    *,
-    artifacts: ArtifactRepository | None = None,
-    context_provider: Callable[[], CapabilityContext | None] = get_capability_context,
-    executor: CapabilityExecutor | None = None,
-    additional_specs: tuple[CapabilitySpec, ...] = (),
-) -> list:
-    """Project the canonical built-in catalog onto Claude Agent SDK."""
-    from .bindings import bind_sdk_capability
-
-    return [
-        bind_sdk_capability(spec, executor=executor)
-        for spec in create_builtin_capabilities(
-            mm_client,
-            memory,
-            artifacts=artifacts,
-            context_provider=context_provider,
             additional_specs=additional_specs,
         )
     ]

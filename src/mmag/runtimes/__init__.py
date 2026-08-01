@@ -1,6 +1,5 @@
 """Unified runtime contract and adapters."""
 
-from .adapters import ClaudeSDKRuntimeAdapter
 from .base import (
     AgentResult,
     AgentRuntime,
@@ -19,14 +18,14 @@ from .base import (
     TokenUsage,
     translate_runtime_error,
 )
-from .langgraph import LangGraphRuntimeAdapter
+from .deepagents import DeepAgentRuntime, ManagedChatModelFactory
 
 __all__ = [
     "AgentResult",
     "AgentRuntime",
     "AgentRuntimeError",
-    "ClaudeSDKRuntimeAdapter",
-    "LangGraphRuntimeAdapter",
+    "DeepAgentRuntime",
+    "ManagedChatModelFactory",
     "RunContext",
     "RunEvent",
     "RunEventKind",

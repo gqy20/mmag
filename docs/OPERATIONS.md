@@ -24,7 +24,7 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 
 - 启动时先加载 Skill Package，再解析 Agent 的 `skills.allow` 精确版本。未知 Skill、Hash 漂移或 Required Capability 超出 Agent allowlist 会阻止整批 Agent 注册。
 - 选中 Skill 后，模型 Tool Schema、CapabilityContext 和 Package Governance 同时收窄到该 Skill 的 required/available optional 集合。Skill 未声明的 Agent Capability 在本次请求不可执行。
-- `SKILL.md` 在选中后加载；独立模板和参考资料只能通过 `load_skill_resource` 按精确 ref 加载，并受数量、字节和估算 token 预算限制。平台 Renderer 只能由 Agent、Skill、Policy 和 Execution Profile 共同允许的窄口 Capability 执行。
+- 选中 Skill 只投影到当前 Deep Agents StateBackend；`SKILL.md`、模板和参考资料由原生 SkillsMiddleware 按需读取，并在投影前校验路径、Hash 与声明预算。平台 Renderer 只能由 Agent、Skill、Policy 和 Execution Profile 共同允许的窄口 Capability 执行。
 - Skill 资源首次按需加载时重新校验发布 Hash，之后按 Hash 缓存。审批 interrupt 保存已披露 ref，resume 只恢复这些资源；实际加载清单进入运行 provenance。
 - 每次 Capability 调用根据当前 Agent Package 的 `policy_ref` 动态选择 Policy；`mmchat`、
   `link`、`report`、`ppt` 和 `project` 均使用各自版本化 Policy，默认效果为 `deny`。
@@ -45,8 +45,8 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 - Delivery 最多尝试三次，失败记录保留在 Outbox，不会重新执行 Agent。
 - Runtime/网络类瞬时处理错误默认最多尝试三次，次数与下次重试时间持久化在 Inbox；非瞬时错误直接进入 `failed`。
 - Outbox 为每个 Run/响应分段生成稳定幂等键，并作为 Mattermost `pending_post_id`；进程内和重启后的重试复用同一键。
-- 所有通过入口验收和幂等去重的用户消息都会立即回复默认状态 `get`；`MM_ACK_MESSAGE` 只能用非空值覆盖文案，空值不会关闭基础确认。所有响应继承原消息 Thread root。LangGraph 默认对 `text-v1` Agent 流式更新状态 Post；结构化 Agent 不流式暴露 JSON。可通过 `MM_STREAM_*` 调整流式展示。
-- 流式 Post 是可丢失的展示投影，更新失败不会中断 Agent；只有最终 ResponseView 进入持久 Outbox，不持久化每个 token。SDK 备选 Runtime 仍只交付最终结果。
+- 所有通过入口验收和幂等去重的用户消息都会立即回复默认状态 `get`；`MM_ACK_MESSAGE` 只能用非空值覆盖文案，空值不会关闭基础确认。所有响应继承原消息 Thread root。Deep Agents 模型运行流式更新状态 Post；结构化控制结果不作为 JSON 直接展示。可通过 `MM_STREAM_*` 调整流式展示。
+- 流式 Post 是可丢失的展示投影，更新失败不会中断 Agent；只有最终 ResponseView 进入持久 Outbox，不持久化每个 token。
 - Outbox 同时保存消息种类、Scope、Artifact refs、已上传 file IDs、action 和 update target。Artifact 上传成功后立即保存 file IDs，发帖重试不会重新执行 Agent。
 
 Task 与 AgentRun 的终态语义不同：AgentRun 在模型执行成功后结束；存在出站消息时，Task 必须等全部 Delivery 成功后才进入 `succeeded`，任何最终 Delivery 失败都会把 Task 标为 `failed`。

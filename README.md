@@ -66,7 +66,6 @@ PIPELINE_MAX_PENDING=256
 RUNTIME_DEADLINE_SECONDS=120
 MODEL_BUDGET_USD=100
 
-USE_SDK_LLM=false
 MCP_ALLOWED_TOOLS=
 AGENT_PACKAGES_PATH=./agents
 SKILL_PACKAGES_PATH=./skills
@@ -185,7 +184,7 @@ agents/<name>/evals.yml             # 只有真实质量 case 时才需要
 
 版本保留在 `metadata.version`；源码历史交给 Git，发布历史交给制品仓库。CI 比较目标分支，Package 任意内容变化都必须提升 SemVer 并产生新的 Hash。
 
-Skill 同样使用扁平目录和 Manifest 内版本。`SKILL.md` 描述工作方法，独立模板通过受预算约束的 `load_skill_resource` Capability 按需读取；可执行 Renderer 属于平台代码，不属于 Skill 资源。
+Skill 同样使用扁平目录和 Manifest 内版本。选中 Skill 会投影到 Deep Agents StateBackend，由原生 SkillsMiddleware 渐进读取 `SKILL.md` 和模板；可执行 Renderer 属于平台代码，不属于 Skill 资源。
 
 ## 安全边界
 

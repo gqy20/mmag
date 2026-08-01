@@ -3,7 +3,7 @@ kind: Skill
 
 metadata:
   name: report
-  version: 1.1.0
+  version: 1.2.0
   description: Build a structured research report with an explicit evidence ledger.
 
 spec:
@@ -17,7 +17,6 @@ spec:
     priority: 80
 
   required_capabilities:
-    - load_skill_resource
     - search_knowledge
   optional_capabilities:
     - search_messages

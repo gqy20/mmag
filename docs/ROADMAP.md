@@ -2,9 +2,9 @@
 
 > 状态：Active
 >
-> 更新时间：2026-08-01
+> 更新时间：2026-08-02
 >
-> 当前阶段：硬迁移完成，进入企业闭环与专业 Agent 阶段
+> 当前阶段：Deep Agents 原生主链完成，进入 Workspace/Sandbox 与企业闭环阶段
 
 本文档只维护当前基线、未完成步骤和验收标准。设计理由见 [AI_NATIVE_REFACTORING.md](AI_NATIVE_REFACTORING.md)，具体风险见 [TECH_DEBT.md](TECH_DEBT.md)。
 
@@ -21,15 +21,15 @@
 ### Runtime 与人在回路
 
 - [x] 不可变 `RunRequest` / `AgentResult` 和统一错误语义；
-- [x] LangGraph 作为默认 Runtime；
+- [x] LangGraph 作为唯一 checkpoint/HITL Runtime，Deep Agents 作为唯一模型 Harness；
 - [x] SQLite checkpoint、稳定 thread ID、原生 interrupt/resume；
-- [x] 审批 approve/edit/reject、资格校验、过期与重复恢复保护；
-- [x] Claude Agent SDK 仅作为显式可选 Runtime，不再携带旧手写 Agent loop 参数。
+- [x] Deep Agents 原生 approve/reject、资格校验、过期、重复恢复与跨进程 graph 重建；
+- [x] 删除 Claude Agent SDK、自定义 Anthropic client、手写 LangGraph loop 和运行时双轨。
 
 ### Capability 与安全
 
 - [x] 八个内置能力只有一份 `CapabilitySpec`；
-- [x] `CapabilityRegistry` 统一 LangGraph 与 MCP 的运行时 binding；
+- [x] `CapabilityRegistry` 统一内置、MCP 与 Deep Agents Tool 投影；
 - [x] Policy 默认拒绝，执行前检查 actor/scope/permission/resource；
 - [x] 文件外发和 MCP 副作用进入审批；
 - [x] MCP 精确 allowlist、最小 stdio 环境；
@@ -42,27 +42,25 @@
 - [x] 默认消息主链强制经过 `AgentRouter`；
 - [x] 删除 research/project/presentation 的硬编码假 Agent；
 - [x] Agent Package 采用扁平 `agents/<name>/agent.yml`，版本只保留在 Manifest；
-- [x] `execution/routing`、可信 Provider Registry、AgentFactory 和原子自动注册；
-- [x] `mmchat` 和 `link` 成为真实 Package，Link 使用通用 Capability Provider；
+- [x] `runtime.mode=agent/direct`、AgentFactory 和原子自动注册；旧 Provider Registry 已删除；
+- [x] `mmchat` 和 `link` 成为真实 Package，Link 使用确定性 `direct` 模式；
 - [x] Capability 根据当前 Package Policy 动态授权，不再绑定全局 Bot Policy；
 - [x] Prompt/Schema/eval/Policy/Model Policy 进入 Package Hash 和 provenance；
 - [x] Agent Manifest 绑定 Skill 精确版本，Skill Set Hash 进入 Agent 快照；
 - [x] 运行时能力收窄为 Agent、Skill 与 Policy 的交集；
-- [x] `web-research@1.0.0` 作为首个可复用 Skill，由 `mmchat@1.2.0` 激活；
-- [x] Skill 三级渐进式披露、Resource Hash 缓存、运行预算和审批 resume 恢复；
+- [x] `web-research@1.1.0` 作为可复用 Skill，由 `mmchat@2.0.0` 激活；
+- [x] 选中 Skill 投影到 StateBackend，由 Deep Agents SkillsMiddleware 原生渐进披露并随 checkpoint 恢复；
 - [x] strict Prompt render、输入/输出/Artifact Schema 和预算强制；
 - [x] Model Policy Registry 严格加载并校验 route。
 
 ### 结构化输出基线
 
 - [x] Capability 以 JSON Schema 投影为模型工具，Anthropic `tool_use` 参数保持结构化；
-- [x] LangGraph 使用类型化 State 累积消息、Artifact、Capability 调用和审批状态；
-- [x] `ppt`、`project`、`report` 通过 `langgraph/json-v1` 产出业务结果，运行后执行 JSON 解析、
-  Skill/Artifact Schema 校验、平台 Envelope 组装和 Draft 2020-12 终局校验；
-- [x] 无效结果最多触发一次禁用 Capability 的结构修复，二次失败以稳定错误结束；
+- [x] Deep Agents/LangGraph State 累积 messages、files、结构化结果和审批状态；
+- [x] `RunRequest.response_schema` 通过 ToolStrategy 生成结构化业务结果，再执行 Skill/Artifact/Agent Schema 与平台 Envelope 校验；
+- [x] 删除独立 JSON Provider 和二次 repair loop，结构约束由 Deep Agents response format 统一完成；
 - [x] `AgentOutput` 已区分 `text`、`structured_result`、`envelope`、`artifacts` 和 Runtime 结果；
-- [x] 已确认当前边界：输出 Schema 尚未进入 `RunRequest` 和模型 API，LangGraph 最终状态仍是
-  `final_text`；现有能力属于提示词生成 JSON 后的校验与修复，不是 Provider/LangGraph 模型端强约束。
+- [x] `AgentResult.output` 保存结构化对象，展示层不再从 JSON 文本推断控制状态。
 
 ### Mattermost 交付基线
 
@@ -121,19 +119,15 @@
 
 优先级：P0，为专业 Agent、严格 handoff 和展示层提供稳定输入。
 
-- [ ] 在 Provider-neutral `RunRequest` 中增加可选的结构化输出声明，至少包含业务结果 Schema、
+- [x] 在 Provider-neutral `RunRequest` 中增加可选的结构化输出声明，包含业务结果 Schema，
   Schema ID/version 和响应策略；在 `AgentResult` 中增加结构化结果，原始文本只用于兼容、诊断和审计；
-- [ ] 明确区分“模型负责的业务 `result` Schema”和“平台负责的 Envelope Schema”；模型不得生成
+- [x] 明确区分“模型负责的业务 `result` Schema”和“平台负责的 Envelope Schema”；模型不得生成
   `status`、`usage`、`provenance` 等平台字段，避免把完整 Envelope 误传给模型；
-- [ ] 在 LangGraph State 中增加 `structured_result`、`validation_errors` 和 `repair_count`，将现有
-  Agent/Capability 循环的最终出口路由到无副作用的 `finalize` 节点，不再以 `final_text` 作为 JSON
-  Agent 的唯一结果；
-- [ ] 扩展模型 Backend：Provider 支持时使用原生 Schema-constrained output；不支持时使用强制的
-  final-output Tool Strategy；仅在两者不可用时降级到当前文本 JSON parse/validate/repair；
-- [ ] 保留 MMAG 的 Draft 2020-12 终局校验作为安全边界，不能因 Provider 声称支持结构化输出而跳过
+- [x] 使用 Deep Agents `structured_response` 作为唯一结构化出口，不再以 `final_text` 或 JSON 文本作为控制结果；
+- [x] 通过 Deep Agents ToolStrategy 约束业务结果，删除文本 JSON parse/repair 分叉；
+- [x] 保留 MMAG 的 Draft 2020-12 终局校验作为安全边界，不能因 Provider 声称支持结构化输出而跳过
   Skill、Artifact、Package 和 Envelope 契约校验；
-- [ ] repair 使用相同的结构化输出约束且最多一次，只修复业务结果，不重新开放 Capability 或重放
-  外部副作用；保留首次运行的 Artifact、Capability 调用、审批、token、cost 和 provenance；
+- [x] 格式修复由同一个 Deep Agents graph/ToolStrategy 完成，不创建第二次开放或关闭 Capability 的旁路运行；
 - [ ] 统一内部 Capability 结果类型，避免在 Registry 与 LangGraph 之间反复执行对象 → JSON 字符串 →
   对象转换；只在模型 Provider、MCP 和交付边界序列化；
 - [ ] 让多轮 LangGraph、结构修复和 Provider fallback 的实际模型调用、token、cost 与错误进入统一
@@ -168,7 +162,7 @@
 - [x] 扩展 `OutboundMessage` 和 SQLite Outbox，持久化 `root_id`、`message_kind`、`artifact_refs/file_ids`、`props`、`actions`、`update_post_id` 及稳定幂等键；
 - [x] 统一 Thread 策略：ack、进度、审批、附件、错误和最终结果均继承原始 `root_id`，避免在频道中散落；
 - [x] 将 `get` ack 替换为可配置的简短确认；短任务仅使用 typing，长任务创建单个状态 Post 并原地更新，阶段必须来自真实 Lifecycle Event，不伪造进度百分比或 ETA；
-- [x] 接通 LangGraph/Anthropic 文本增量事件，对 `text-v1` Agent 节流更新单一 Post，最终结果仍经 ResponseView + Outbox 覆盖交付；
+- [x] 接通 Deep Agents/LangChain 文本增量事件，对模型 Agent 节流更新单一 Post，最终结果仍经 ResponseView + Outbox 覆盖交付；
 - [x] 实现 Markdown-aware 长消息分段，保留标题、链接、代码围栏和序号；详细报告默认“Thread 摘要 + Artifact 附件”；
 - [x] 将 `send_file` 的直接上传/发帖副作用收口到 Delivery/Outbox：执行层只产出 Artifact ref，交付层在审批后上传、绑定 `file_ids` 并重试；
 - [x] 为 Link/Research 结果提供稳定 Presenter，在 Thread 中展示结论、关键字段、来源和警告，完整 JSON 仅作为可下载 Artifact 或审计数据；
@@ -318,45 +312,41 @@
 普通 telemetry 不包含 Secret、消息正文或未脱敏工具参数；关键失败有指标和告警；审计可按 scope 查询并满足
 保留策略；目标环境有可验证 RPO/RTO。
 
-## 下一步 11：可选 Deep Agents Runtime 与可替换 Sandbox
+## 下一步 11：Deep Agents 原生化与可替换执行 Backend
 
-优先级：P2，触发式实施；依赖受控执行平面、Artifact 交付、运行幂等和结构化审计。设计边界见
-[ADR-0007](adr/0007-deepagents-sandbox-runtime.md)。
+优先级：P1；完整方案见 [Deep Agents 原生化重构方案](DEEP_AGENTS_REFACTORING.md)，决策边界见
+[ADR-0007](adr/0007-deepagents-sandbox-runtime.md)。核心 Harness 已完成，剩余工作集中在通用 Workspace/Sandbox。
 
-- [ ] 定义平台无关的 `SandboxBackend` 与版本化 `SandboxProfile`，覆盖 create、upload、execute、
-  download、destroy、scope、镜像、网络、文件系统、Secret 和资源限制；
-- [ ] 将现有 Bubblewrap 收口为 `governed` Backend，并增加 OCI Backend 选项；校验实际运行时
-  digest，不能只把声明值写入 provenance；
-- [ ] 实现 `DeepAgentRuntimeAdapter`，接入统一 `RunRequest`、`AgentResult`、稳定 thread ID、deadline、
-  usage、interrupt 和 Artifact 契约，不改变 LangGraph 默认路由；
-- [ ] 增加 `bind_deepagent_capability`，让 Deep Agents Tool 继续经过同一个 `CapabilityExecutor`、
-  Package Policy、审批、预算和审计；
-- [ ] 实现 MMAG Skill 到 Deep Agents 的单向投影：默认只披露 instruction/reference/template，
-  `resources.scripts` 保持隐藏，显式 `sandbox_editable` 资源除外；
-- [ ] 自主 Sandbox 默认按 thread 隔离，模型/API/Mattermost/MCP Secret 留在控制面，不挂载项目源码、
-  Artifact Repository 或其他 Run 工作区；
-- [ ] 输入只允许经过 scope/kind/Hash 校验的 Artifact upload，输出必须 download、校验并原子提交为
-  Artifact，禁止向用户返回 Sandbox 本地路径；
-- [ ] 为 Sandbox 创建、命令执行、Artifact 提交和销毁增加稳定 execution key、幂等恢复、资源配额、
-  取消、超时和异常回收；
-- [ ] 仅向专用 Coding/Analysis/Media Package 开放 `sandbox.execute`，高风险命令按 Policy 进入
-  LangGraph 审批；普通业务 Agent 和确定性 Presentation Agent 不获得通用 Shell；
-- [ ] 至少选择一个可用于生产验收的 Deep Agents 兼容 Provider，并覆盖 Provider 不可用、网络隔离、
-  越权文件、Secret 泄漏、超限输出、重复恢复和跨 thread 访问的负向测试；
-- [ ] 建立与现有 LangGraph Runtime 的质量、成本、冷启动、执行时长和失败恢复对比，达到明确收益后
-  才允许 Package 选择 `execution.kind=deepagent`。
+- [x] Agent Manifest 删除 `text-v1/json-v1/single-v1` Provider，运行方式收敛为默认 `agent` 与显式
+  `direct`；
+- [x] 实现 `DeepAgentRuntime`，复用统一 `RunRequest`、`AgentResult`、SQLite checkpointer、稳定
+  thread ID、deadline、usage、response format 和 interrupt；
+- [x] 用受 Model Policy 管理的 `BaseChatModel` 替换自定义 Anthropic Agent loop；
+- [x] 将 `CapabilitySpec` 投影成 LangChain Tool，继续经过同一个 `CapabilityExecutor`、动态 Policy、
+  审批、预算和审计；
+- [x] 实现可信单 Skill 投影，接入 SkillsMiddleware，禁用默认通用 Subagent；
+- [ ] 实现 `GovernedWorkspaceBackend` 与 `workspace.read/write/execute` canonical Capability；
+- [ ] 先接入显式危险的 `LocalExecutionBackend`，复用 Run Workspace、超时、最小环境、输出限制、
+  Artifact staging、审计与回收；关闭危险开关时失败关闭；
+- [ ] 让 PPT Agent 在真实 Workspace 中完成源文件、构建、Artifact 和 Mattermost 交付，并删除
+  `ppt.shell`；
+- [x] 把 Deep Agents messages/interrupt 映射为 Mattermost 文本流与审批事件；Tool/Artifact 细粒度展示继续归入可观测性阶段；
+- [x] 全部 Agent 迁移后删除手写 LangGraph loop、旧 Provider、Claude SDK 并行路径、旧 Skill 资源
+  加载和相关兼容配置；
+- [ ] 有生产预算后新增一个 `RemoteSandboxBackend`，不修改 Agent/Skill Manifest 即可替换本地执行；
+- [ ] 完成越权文件、Secret 泄漏、重复恢复、超限输出、跨 Run 访问和异常回收的生产门禁。
 
-退出标准：自主编程任务可在 thread-scoped Sandbox 内创建和运行临时代码，只能消费和产出受管
-Artifact；LangGraph 仍是默认 Runtime，现有固定 Capability 不扩权，Sandbox 故障或 Provider 缺失
-不会回退到宿主机执行。
+退出标准：Deep Agents 是模型驱动 Agent 的唯一 Harness，LangGraph 是唯一 checkpoint/HITL Runtime；
+确定性 Agent 使用 `direct`；PPT 可通过真实 Workspace 形成闭环；本地完整 Shell 被明确标记为非
+Sandbox；切换远程 Sandbox 只替换 Execution Backend。
 
 ## 当前明确不做
 
 - 不恢复旧 Agent、Tool 或 Prompt 兼容入口；
 - 不为了“多 Agent”数量重新注册没有 Package 契约的占位 Agent；
 - 不用 Prompt 代替权限、审批、幂等和预算；
-- 不向普通业务 Agent 暴露宿主机通用 Shell 或动态 Python；自主执行入口只有在“下一步 11”全部
-  门禁完成后，才能向专用 Package 的独立 Sandbox 开放；
+- 不向普通业务 Agent 暴露宿主机通用 Shell 或动态 Python；Demo 本地完整 Shell 只对显式授权的
+  专用 Package、可信用户和危险开关开放，禁止进入公网或多租户生产环境；
 - 不允许 Agent/Skill Manifest 自授权或放宽平台执行配置；
 - 不让 Agent Prompt 直接生成 Mattermost `props`、action callback 或平台专用协议；
 - 不把富卡片/按钮作为唯一交互路径，不支持时必须降级为 Markdown/文本命令；

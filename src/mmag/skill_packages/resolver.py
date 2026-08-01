@@ -12,8 +12,6 @@ from jsonschema.exceptions import ValidationError
 
 from ..agent_system import SkillInvocation
 from .errors import SkillContractError, SkillResolutionError
-from .loader import load_skill_instructions
-from .resources import build_skill_resource_catalog
 
 if TYPE_CHECKING:
     from ..agent_packages import AgentPackage
@@ -150,8 +148,6 @@ class SkillResolver:
         )
         return SkillInvocation(
             ref=skill.manifest.metadata.ref,
-            instructions=load_skill_instructions(skill),
-            resource_catalog=build_skill_resource_catalog(skill),
             capabilities=effective,
             provenance=MappingProxyType(build_skill_provenance(package, skill)),
         )

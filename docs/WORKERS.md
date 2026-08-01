@@ -39,8 +39,8 @@ Agent Manifest allowlist
 ## 渐进式披露
 
 `report`、`slides` 和 `project` 各自只在激活后注入 `SKILL.md` 和资源目录。模板和参考资料只有在
-模型调用 `load_skill_resource(ref)` 后才进入上下文，并受单资源、累计字节、资源数量和估算 token
-预算限制。PPT Renderer 是平台代码，只能由 `ScriptExecutor` 校验 Hash 后在绑定的 Execution
+模型通过 Deep Agents 原生 `read_file` 按需读取后才进入上下文；Package Loader 预先校验资源路径、
+Hash 和声明预算。PPT Renderer 是平台代码，只能由 `ScriptExecutor` 校验 Hash 后在绑定的 Execution
 Profile 中运行。
 
 ## 当前交付边界

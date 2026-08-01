@@ -1,50 +1,9 @@
-"""Focused contracts for Runtime-to-Mattermost text streaming."""
-
 from unittest.mock import AsyncMock
 
 import pytest
 
 from mmag.application import MattermostStream
-from mmag.capabilities import CapabilityRegistry
-from mmag.runtimes import (
-    LangGraphRuntimeAdapter,
-    RunContext,
-    RunEvent,
-    RunEventKind,
-    RunRequest,
-)
-
-
-class _StreamingBackend:
-    async def chat_stream(self, messages, *, system, max_tokens, on_text):
-        assert messages == [{"role": "user", "content": "hello"}]
-        await on_text("Hel")
-        await on_text("lo")
-        return "Hello"
-
-
-@pytest.mark.asyncio
-async def test_langgraph_text_turn_emits_deltas_and_keeps_final_result():
-    events: list[RunEvent] = []
-
-    async def collect(event: RunEvent) -> None:
-        events.append(event)
-
-    runtime = LangGraphRuntimeAdapter(
-        _StreamingBackend(),  # type: ignore[arg-type]
-        capability_registry=CapabilityRegistry(),
-    )
-    request = RunRequest(
-        context=RunContext("trace-1", "user-1", "channel-1", "scope-1"),
-        messages=({"role": "user", "content": "hello"},),
-        event_sink=collect,
-    )
-
-    result = await runtime.run(request)
-
-    assert result.text == "Hello"
-    assert [event.text for event in events] == ["Hel", "lo"]
-    assert all(event.kind is RunEventKind.TEXT_DELTA for event in events)
+from mmag.runtimes import RunEvent, RunEventKind
 
 
 @pytest.mark.asyncio

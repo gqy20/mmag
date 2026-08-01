@@ -33,16 +33,8 @@ class SkillInvocation:
     """One resolved Skill carried through the trusted runtime boundary."""
 
     ref: str
-    instructions: str
-    resource_catalog: str
     capabilities: tuple[str, ...]
     provenance: Mapping[str, str]
-
-    @property
-    def prompt_context(self) -> str:
-        return "\n\n".join(
-            part for part in (self.instructions, self.resource_catalog) if part
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +267,7 @@ class RuntimeAgent:
             result.text,
             self.descriptor.name,
             tuple(dict(artifact) for artifact in result.artifacts),
+            dict(result.output) if result.output is not None else None,
             runtime_result=result,
         )
 

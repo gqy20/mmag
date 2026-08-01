@@ -1,11 +1,8 @@
-"""Adapters from capability specs to the LangGraph and SDK tool surfaces."""
+"""Adapter from canonical capability specs to the governed runtime registry."""
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
-
-from claude_agent_sdk import tool
 
 from .base import CapabilityExecutor, CapabilitySpec
 
@@ -35,26 +32,3 @@ def bind_langgraph_capability(
         capability=spec,
         executor=runner,
     )
-
-
-def bind_sdk_capability(
-    spec: CapabilitySpec,
-    *,
-    executor: CapabilityExecutor | None = None,
-):
-    """Expose a capability through Claude Agent SDK's ``@tool`` contract."""
-    runner = executor or CapabilityExecutor()
-
-    @tool(spec.name, spec.description, dict(spec.input_schema))
-    async def sdk_handler(arguments: dict[str, Any]):
-        result = await runner.execute(spec, arguments)
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": json.dumps(result.to_payload(), ensure_ascii=False, default=str),
-                }
-            ]
-        }
-
-    return sdk_handler

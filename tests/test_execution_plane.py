@@ -29,10 +29,10 @@ from mmag.execution import (
     WorkspaceManager,
 )
 from mmag.skill_packages import (
+    SkillContext,
     SkillPackageLoader,
     SkillPackageRegistry,
-    SkillResourceLoader,
-    bind_skill_resource_session,
+    bind_skill_context,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -284,10 +284,10 @@ async def test_script_executor_commits_artifact_and_redacted_audit(tmp_path):
     runner = WritingRunner()
     executor, store, workspaces, artifacts = _executor(tmp_path, runner)
     skill = _slides()
-    session = SkillResourceLoader().create_session(skill)
+    session = SkillContext(skill)
     marker = "SECRET_MARKER_NOT_FOR_AUDIT"
 
-    with bind_capability_context(_context()), bind_skill_resource_session(session):
+    with bind_capability_context(_context()), bind_skill_context(session):
         result = await executor.execute(
             profile_ref="ppt@2.1.0",
             capability="ppt.build",
@@ -324,12 +324,12 @@ async def test_script_executor_commits_artifact_and_redacted_audit(tmp_path):
 async def test_script_executor_denies_missing_agent_profile_before_process(tmp_path):
     runner = WritingRunner()
     executor, store, _, _ = _executor(tmp_path, runner)
-    session = SkillResourceLoader().create_session(_slides())
+    session = SkillContext(_slides())
     context = replace(_context(), allowed_execution_profiles=frozenset())
 
     with (
         bind_capability_context(context),
-        bind_skill_resource_session(session),
+        bind_skill_context(session),
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
@@ -352,11 +352,11 @@ async def test_script_executor_denies_missing_agent_profile_before_process(tmp_p
 )
 async def test_script_executor_rejects_symlink_and_oversized_artifacts(tmp_path, runner):
     executor, store, _, _ = _executor(tmp_path, runner)
-    session = SkillResourceLoader().create_session(_slides())
+    session = SkillContext(_slides())
 
     with (
         bind_capability_context(_context()),
-        bind_skill_resource_session(session),
+        bind_skill_context(session),
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
@@ -374,11 +374,11 @@ async def test_script_executor_rejects_symlink_and_oversized_artifacts(tmp_path,
 @pytest.mark.asyncio
 async def test_script_executor_audits_content_free_process_failure_details(tmp_path):
     executor, store, _, _ = _executor(tmp_path, FailingRunner())
-    session = SkillResourceLoader().create_session(_slides())
+    session = SkillContext(_slides())
 
     with (
         bind_capability_context(_context()),
-        bind_skill_resource_session(session),
+        bind_skill_context(session),
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(

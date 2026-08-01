@@ -1,53 +1,48 @@
-# ADR-0007：可选 Deep Agents Runtime 与双通道 Sandbox
+# ADR-0007：Deep Agents 默认 Harness 与可替换执行 Backend
 
-- 状态：Proposed
-- 日期：2026-08-01
+- 状态：Accepted（2026-08-02；Sandbox 后端部分仍待实现）
+- 日期：2026-08-02
 
 ## 背景
 
-当前默认 Runtime 是 LangGraph，受控执行平面由 MMAG 自己实现。LangGraph 负责状态、调度、
-checkpoint 和人工审批；`ProcessRunner` 使用 Bubblewrap 执行已注册 Skill 中经过 Hash 校验的
-脚本和固定 argv。Bubblewrap 不是 LangGraph 原生 Sandbox，当前通道也有意不向模型暴露通用
-Shell、动态 Python、宿主机路径或父进程环境。
+当前 LangGraph Runtime 手写 `agent → review_tools → tools` 循环，并通过 `text-v1`、`json-v1` 和
+`single-v1` Provider 区分执行方式。该结构已经具备 checkpoint 和原生审批恢复，但与 Deep Agents
+提供的 Agent loop、filesystem、Skills、summarization、subagent 和 HITL Harness 重复。
 
-Presentation、PDF 转换等确定性生产任务适合该模式。未来的 Coding、数据分析、复杂媒体生成等
-任务可能需要 Agent 在隔离文件系统中创建、修改和运行临时代码。Deep Agents 在 LangGraph 上层
-提供文件系统、Skills、子智能体与可插拔 Sandbox Backend，但直接替换现有 Runtime 会扩大权限面，
-并绕开 MMAG 已有的 Agent Package、Capability、Policy、Artifact 和审批契约。
+项目同时需要类似 Pi/Claude Code 的真实工作区体验。当前 `ppt.shell` 可以在宿主机执行完整 Shell，
+适合内部 Demo，但 `cwd` 和临时目录不是安全边界；远程 Sandbox 目前又会增加部署成本。需要先把
+Agent Harness 和执行位置解耦，再逐步替换执行 Backend。
 
 ## 决策
 
-1. 保留 LangGraph 作为默认 Runtime，保留当前受控执行通道用于可信、版本化 Skill 脚本和固定
-   Capability；不因引入 Deep Agents 而向普通业务 Agent 暴露 `execute(command)`。
-2. Deep Agents 只作为显式可选的自主执行 Runtime，通过新的 `DeepAgentRuntimeAdapter` 接入统一
-   `RunRequest -> AgentResult` 契约，不替换 Agent Router、Model Gateway 或 control plane。
-3. 执行平面形成两个权限不相交的通道：
-   - `governed`：固定 Capability、固定 argv、可信脚本，可由本地 Bubblewrap 或未来 OCI Backend
-     执行；
-   - `autonomous`：允许 Agent 在一次性 Sandbox 中读写文件和运行临时代码，只对专用 Package
-     开放。
-4. Deep Agents Tool 必须由现有 `CapabilitySpec` 投影，授权、审批、预算和审计仍进入
-   `CapabilityExecutor`；Sandbox 的 `execute`、上传、下载和销毁也必须注册为受 Policy 控制的
-   Capability，不能成为隐式旁路。
-5. MMAG Skill 是源事实。投影到 Deep Agents 时默认只披露 instruction、允许的 reference/template；
-   `resources.scripts` 继续隐藏。只有 Manifest 显式标记为 sandbox 可编辑的资源才能复制进自主
-   Sandbox。
-6. 自主 Sandbox 默认按 LangGraph thread 隔离和回收。模型/API/Mattermost/MCP Secret 留在宿主
-   控制面；Sandbox 只接收经过 scope、kind、Hash 校验的输入 Artifact，只能通过下载、校验和
-   `ArtifactRepository.commit` 输出结果。
-7. Sandbox Provider 只能由平台注册表选择，Manifest 只能引用版本化 `SandboxProfile`，不能填写
-   Python import、endpoint、credential、宿主挂载或放宽网络。候选 Backend 包括 Deep Agents
-   兼容的 LangSmith、Daytona、Modal、Runloop 以及平台自定义实现。
-8. 不在 Runtime 之间自动回退或重试。自主执行使用稳定 execution key，Sandbox 创建、命令执行、
-   Artifact 提交和销毁均需幂等审计；崩溃恢复不能重复产生外部副作用。
+1. LangGraph 继续作为唯一图 Runtime；Deep Agents 成为所有模型驱动 Agent 的默认 Harness，不新增
+   `execution.kind=deepagent`。
+2. Agent 运行方式只保留 `agent` 和 `direct`。`agent` 为默认值，`direct` 用于确定性单 Capability；
+   删除所有带 `-v1` 的 Runtime Provider 名称且不保留兼容别名。
+3. Deep Agents 通过现有 `RunRequest -> AgentResult` 契约接入，不替换 Agent Router、Package Registry、
+   control plane、Artifact 或 Delivery。
+4. Deep Agents Tool 必须由 `CapabilitySpec` 投影或由 `GovernedWorkspaceBackend` 映射回 canonical
+   Capability；授权、审批、预算和审计继续进入 `CapabilityExecutor`。
+5. MMAG Skill Registry 是源事实。Deep Agents SkillsMiddleware 只消费可信投影；脚本不进入投影，
+   同名冲突直接失败，实际披露资源记录 Hash、字节和 provenance。
+6. 默认通用 Subagent 关闭。Subagent 只能从受信 Agent Registry 生成，权限为父 Agent、子 Agent 和
+   当前 Policy 的交集。
+7. 文件和进程统一通过 `GovernedWorkspaceBackend`；底层 `ExecutionBackend` 首期为显式不安全的本地
+   完整 Shell，后续可替换为远程 Sandbox。Agent/Skill Manifest 不感知具体 Provider。
+8. 本地执行必须由危险开关启用，使用独立 Run Workspace、最小环境、超时、资源/输出限制、审计、
+   Artifact staging 和回收，并明确声明不是生产 Sandbox。
+9. 模型、Mattermost、MCP 和数据库 Secret 留在控制面；Artifact 只能经过 scope/kind/Hash 校验进入
+   或离开 Workspace。
+10. 不在 Runtime 或执行 Backend 之间自动回退。Tool、命令、Artifact 提交和销毁使用稳定 execution
+    key，LangGraph 恢复不得重复外部副作用。
 
 ## 结果与边界
 
-- 确定性 PPT/PDF 等任务继续使用现有受控执行平面，保持最小权限、固定输入输出和可重复性。
-- 需要自主编程的专业 Agent 可以获得 Deep Agents 的文件系统和执行循环，但自由度被限制在独立
-  Sandbox 内，不能影响 MMAG 宿主或其他 thread。
-- Deep Agents 集成是新增 Provider、Runtime Adapter 和投影层，不是第二套 Agent/Skill/Policy
-  注册系统。
-- 在 `SandboxProfile`、Artifact 边界、审批、幂等、资源配额和目标环境验收完成前，本 ADR 不视为
-  Accepted，也不得为现有 Package 开放自主 Shell。
-
+- 手写 LangGraph Agent loop、text/json Provider、Claude SDK 并行 Agent 路径和专用 `ppt.shell`
+  在迁移完成后删除。
+- Demo 可以在专用可信环境中快速获得真实工作区与完整 Shell，但风险必须通过配置、日志和 provenance
+  显式暴露，不能伪装为 Sandbox。
+- 远程 Sandbox 只替换 `ExecutionBackend`，不要求修改 Agent/Skill Package 或 DeepAgentRuntime。
+- 完整设计、迁移批次和验收标准见 [Deep Agents 原生化重构方案](../DEEP_AGENTS_REFACTORING.md)。
+- 在 Capability 映射、动态审批、Workspace、Artifact、Secret 和幂等边界完成前，本 ADR 保持
+  Proposed，不得把本地高权限执行部署到公网或多租户生产环境。

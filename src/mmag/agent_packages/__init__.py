@@ -2,40 +2,29 @@
 
 from .errors import (
     AgentPackageError,
-    InvalidAgentOutputError,
     ManifestValidationError,
     PackageReferenceError,
     PromptContractError,
     SchemaContractError,
 )
-from .factory import (
-    AgentFactory,
-    AgentProviderRegistry,
-    LangGraphJSONProvider,
-    LangGraphTextProvider,
-    SingleCapabilityProvider,
-)
+from .factory import AgentFactory, DeepAgentProvider, DirectAgentProvider
 from .loader import AgentPackageLoader
 from .models import AgentPackage, PackageVersionSnapshot
 from .registry import AgentPackageRegistry
-from .runtime import ContractAgentDecorator, PackageAgentRunner
+from .runtime import ContractAgentDecorator
 
 __all__ = [
+    "AgentFactory",
     "AgentPackage",
     "AgentPackageError",
     "AgentPackageLoader",
     "AgentPackageRegistry",
-    "AgentFactory",
-    "AgentProviderRegistry",
     "ContractAgentDecorator",
-    "InvalidAgentOutputError",
-    "LangGraphJSONProvider",
-    "LangGraphTextProvider",
+    "DeepAgentProvider",
+    "DirectAgentProvider",
     "ManifestValidationError",
     "PackageReferenceError",
     "PackageVersionSnapshot",
     "PromptContractError",
-    "PackageAgentRunner",
     "SchemaContractError",
-    "SingleCapabilityProvider",
 ]

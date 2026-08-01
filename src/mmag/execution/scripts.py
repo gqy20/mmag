@@ -12,7 +12,7 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from ..capabilities import get_capability_context
-from ..skill_packages import get_skill_resource_session
+from ..skill_packages import get_skill_context
 from .models import ProcessRequest
 
 if TYPE_CHECKING:
@@ -63,10 +63,10 @@ class ScriptExecutor:
         provenance: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         context = get_capability_context()
-        session = get_skill_resource_session()
-        if context is None or session is None:
+        skill_context = get_skill_context()
+        if context is None or skill_context is None:
             raise ScriptExecutionError("managed execution requires Agent and Skill context")
-        skill = session.package
+        skill = skill_context.package
         profile = self.profiles.get(profile_ref)
         input_hash = self._input_hash(payload)
         try:

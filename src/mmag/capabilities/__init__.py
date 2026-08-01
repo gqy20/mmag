@@ -12,8 +12,8 @@ from .base import (
     DeclaredPermissionAuthorizer,
     SourcePolicy,
 )
-from .bindings import bind_langgraph_capability, bind_sdk_capability
-from .builtin import build_builtin_bindings, build_sdk_bindings, create_builtin_capabilities
+from .bindings import bind_langgraph_capability
+from .builtin import build_builtin_bindings, create_builtin_capabilities
 from .catalog import (
     create_get_channel_info_capability,
     create_get_posts_capability,
@@ -32,7 +32,6 @@ from .link import create_analyze_link_capability
 from .mcp import create_mcp_capability
 from .ppt import create_ppt_capabilities
 from .registry import CapabilityBinding, CapabilityRegistry
-from .skill_resource import create_load_skill_resource_capability
 
 __all__ = [
     "AuthorizationDecision",
@@ -49,17 +48,14 @@ __all__ = [
     "DeclaredPermissionAuthorizer",
     "SourcePolicy",
     "bind_langgraph_capability",
-    "bind_sdk_capability",
     "bind_capability_context",
     "build_builtin_bindings",
-    "build_sdk_bindings",
     "create_analyze_link_capability",
     "create_builtin_capabilities",
     "create_get_channel_info_capability",
     "create_get_posts_capability",
     "create_get_user_profile_capability",
     "create_mcp_capability",
-    "create_load_skill_resource_capability",
     "create_ppt_capabilities",
     "create_search_knowledge_capability",
     "create_search_messages_capability",

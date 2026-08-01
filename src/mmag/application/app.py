@@ -11,17 +11,14 @@ from urllib.parse import urlsplit
 from ..agent_packages import (
     AgentFactory,
     AgentPackageRegistry,
-    AgentProviderRegistry,
-    LangGraphJSONProvider,
-    LangGraphTextProvider,
-    SingleCapabilityProvider,
+    DeepAgentProvider,
+    DirectAgentProvider,
 )
 from ..agent_system import AgentRegistry, AgentRouter
 from ..capabilities import (
     CapabilityExecutor,
     CapabilityRegistry,
     build_builtin_bindings,
-    build_sdk_bindings,
     create_ppt_capabilities,
 )
 from ..client import MMClient
@@ -48,14 +45,12 @@ from ..governance import (
     QuotaLedger,
     RegistryPolicyAuthorizer,
 )
-from ..llm import LLM
 from ..logger import get_logger
 from ..mcp_bridge import MCPClientBridge
 from ..memory import Memory
 from ..memory_compactor import MemoryCompactor
-from ..runtimes import ClaudeSDKRuntimeAdapter, LangGraphRuntimeAdapter
-from ..sdk_llm import SDKLLM
-from ..skill_packages import SkillPackageRegistry, SkillResolver, SkillResourceLoader
+from ..runtimes import DeepAgentRuntime
+from ..skill_packages import SkillPackageRegistry, SkillResolver
 from ..ws_client import WebSocketClient
 from .actions import ActionCallbackServer, ActionTokenService
 from .context import AttachmentProcessor, BotIdentity, ContextBuilder
@@ -130,17 +125,15 @@ class Agent:
         )
         for binding in builtin_bindings:
             self.capability_registry.register(binding)
-        self.langgraph_runtime = LangGraphRuntimeAdapter(
-            LLM(),
+        self.deep_agent_runtime = DeepAgentRuntime(
             capability_registry=self.capability_registry,
             checkpoint_path=config.checkpoint_db_path,
         )
         self.runtime = ModelGateway(
-            {"default": self.langgraph_runtime},
+            {"default": self.deep_agent_runtime},
             ledger=QuotaLedger(default_limit_usd=config.model_budget_usd),
         )
 
-        self.skill_resource_loader = SkillResourceLoader()
         self.agent_package_registry = AgentPackageRegistry(
             policy_registry=self.policy_registry,
             model_policy_registry=self.model_policy_registry,
@@ -148,31 +141,18 @@ class Agent:
             execution_profile_registry=self.execution_profile_registry,
         )
         self.agent_package_registry.load_directory(Path(config.agent_packages_path))
-        self.agent_provider_registry = AgentProviderRegistry()
-        self.agent_provider_registry.register(
-            LangGraphTextProvider(
+        self.agent_factory = AgentFactory(
+            DeepAgentProvider(
                 self.runtime,
                 self.capability_registry,
                 self.model_policy_registry,
                 additional_capabilities=config.mcp_allowed_tools,
-                skill_resources=self.skill_resource_loader,
-            )
-        )
-        self.agent_provider_registry.register(
-            LangGraphJSONProvider(
-                self.runtime,
-                self.capability_registry,
-                self.skill_resource_loader,
-            )
-        )
-        self.agent_provider_registry.register(
-            SingleCapabilityProvider(
+            ),
+            DirectAgentProvider(
                 self.capability_registry,
                 self.capability_executor,
-                self.skill_resource_loader,
-            )
+            ),
         )
-        self.agent_factory = AgentFactory(self.agent_provider_registry)
         self.agent_registry = AgentRegistry(
             self.agent_factory.create_all(self.agent_package_registry.list())
         )
@@ -196,7 +176,6 @@ class Agent:
             self.runtime,
             authorizer=MattermostApprovalAuthorizer(self.mm),
             skill_registry=self.skill_package_registry,
-            skill_resources=self.skill_resource_loader,
         )
         self.start_time = time.time()
         self.stats = {"messages": 0, "responses": 0, "dropped_messages": 0}
@@ -256,7 +235,6 @@ class Agent:
                 self.message_handler.handle_action_callback,
                 path=callback_path,
             )
-        self.sdk_llm: SDKLLM | None = None
         self.ws: WebSocketClient | None = None
         self.pipeline: MessagePipeline | None = None
         self.running = False
@@ -276,9 +254,8 @@ class Agent:
         if not config.anthropic_api_key:
             log.error("ANTHROPIC_API_KEY 未设置")
             return
-        await self.langgraph_runtime.start()
+        await self.deep_agent_runtime.start()
         await self._connect_mcp()
-        await self._configure_optional_sdk()
         self._preload_channels()
 
         self.pipeline = MessagePipeline(
@@ -304,7 +281,7 @@ class Agent:
             on_response=self.on_ws_response,
         )
         self.running = True
-        log.info("Agent 就绪，默认 Runtime=LangGraph，等待消息")
+        log.info("Agent 就绪，默认 Runtime=Deep Agents/LangGraph，等待消息")
         await self.ws.run()
 
     async def _connect_mcp(self) -> None:
@@ -330,28 +307,6 @@ class Agent:
             capabilities.files_enabled,
             capabilities.interactive_messages_enabled,
         )
-
-    async def _configure_optional_sdk(self) -> None:
-        if not config.use_sdk_llm:
-            return
-        sdk_llm = SDKLLM()
-        try:
-            bindings = build_sdk_bindings(
-                self.mm,
-                self.memory,
-                artifacts=self.artifact_repository,
-                context_provider=sdk_llm.get_capability_context,
-                executor=self.capability_executor,
-                additional_specs=self.execution_capabilities,
-            )
-            bindings.extend(self.mcp_bridge.get_sdk_bindings())
-            await sdk_llm.start(tool_funcs=bindings)
-            self.runtime.runtimes["default"] = ClaudeSDKRuntimeAdapter(sdk_llm)
-            self.compactor.runtime = self.runtime
-            self.sdk_llm = sdk_llm
-        except Exception as error:
-            log.error("SDK Runtime 初始化失败，继续使用 LangGraph: %s", error)
-            await sdk_llm.stop()
 
     def _preload_channels(self) -> None:
         try:
@@ -433,8 +388,7 @@ class Agent:
             ),
             ("action_tasks", self.message_handler.close_actions),
             ("pipeline", self.pipeline.close if self.pipeline is not None else None),
-            ("sdk_llm", self.sdk_llm.stop if self.sdk_llm is not None else None),
-            ("langgraph_runtime", self.langgraph_runtime.close),
+            ("deep_agent_runtime", self.deep_agent_runtime.close),
             ("mcp_bridge", self.mcp_bridge.close_all),
         ):
             if close is None:

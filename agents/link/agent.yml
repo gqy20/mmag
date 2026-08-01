@@ -3,16 +3,10 @@ kind: ManagedAgent
 
 metadata:
   name: link
-  version: 1.3.0
+  version: 2.0.0
   description: Analyze one URL and return a source-preserving structured artifact.
 
 spec:
-  execution:
-    kind: capability
-    provider: single-v1
-    capability: analyze_link
-    source_argument: url
-
   routing:
     default: false
     priority: 100
@@ -25,6 +19,9 @@ spec:
   result_schema_ref: output.schema.json
 
   runtime:
+    mode: direct
+    capability: analyze_link
+    source_argument: url
     route: default
     max_turns: 4
     timeout_seconds: 120

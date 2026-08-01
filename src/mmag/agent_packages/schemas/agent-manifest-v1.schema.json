@@ -22,36 +22,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "execution", "routing", "accepted_intents", "input_schema_ref", "result_schema_ref",
+        "routing", "accepted_intents", "input_schema_ref", "result_schema_ref",
         "runtime", "capabilities", "skills", "context", "policy_ref", "model_policy_ref",
         "budget", "artifacts"
       ],
       "properties": {
-        "execution": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "provider"],
-          "properties": {
-            "kind": {"enum": ["langgraph", "capability"]},
-            "provider": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
-            "capability": {"type": "string", "minLength": 1},
-            "source_argument": {"type": "string", "minLength": 1}
-          },
-          "allOf": [
-            {
-              "if": {"properties": {"kind": {"const": "capability"}}},
-              "then": {"required": ["capability"]},
-              "else": {
-                "not": {
-                  "anyOf": [
-                    {"required": ["capability"]},
-                    {"required": ["source_argument"]}
-                  ]
-                }
-              }
-            }
-          ]
-        },
         "routing": {
           "type": "object",
           "additionalProperties": false,
@@ -81,6 +56,9 @@
           "additionalProperties": false,
           "required": ["route", "max_turns", "timeout_seconds", "retry"],
           "properties": {
+            "mode": {"enum": ["agent", "direct"], "default": "agent"},
+            "capability": {"type": "string", "minLength": 1},
+            "source_argument": {"type": "string", "minLength": 1},
             "route": {"type": "string", "minLength": 1},
             "max_turns": {"type": "integer", "minimum": 1, "maximum": 100},
             "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
@@ -90,7 +68,21 @@
               "required": ["max_attempts"],
               "properties": {"max_attempts": {"type": "integer", "minimum": 1, "maximum": 3}}
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"mode": {"const": "direct"}}, "required": ["mode"]},
+              "then": {"required": ["capability"]},
+              "else": {
+                "not": {
+                  "anyOf": [
+                    {"required": ["capability"]},
+                    {"required": ["source_argument"]}
+                  ]
+                }
+              }
+            }
+          ]
         },
         "capabilities": {
           "type": "object",
@@ -171,10 +163,10 @@
       "allOf": [
         {
           "if": {
-            "properties": {"execution": {"properties": {"kind": {"const": "langgraph"}}}}
+            "properties": {"runtime": {"properties": {"mode": {"const": "direct"}}, "required": ["mode"]}}
           },
-          "then": {"required": ["prompt"]},
-          "else": {"not": {"required": ["prompt"]}}
+          "then": {"not": {"required": ["prompt"]}},
+          "else": {"required": ["prompt"]}
         }
       ]
     }

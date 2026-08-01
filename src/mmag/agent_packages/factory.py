@@ -1,85 +1,54 @@
-"""Trusted execution providers and atomic Agent construction from YAML Packages."""
+"""Construct governed Agents from behavior-oriented YAML manifests."""
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any
 
-from ..agent_system import AgentDescriptor, CapabilityAgent, ManagedAgent, RuntimeAgent
+from ..agent_system import AgentDescriptor, CapabilityAgent, RuntimeAgent
 from ..capabilities import CapabilityEffect
 from ..runtimes import RunContext, RunRequest
+from ..skill_packages import project_skill_files
 from .assets import render_prompt
 from .errors import AgentPackageError
 from .runtime import (
     ContractAgentDecorator,
-    PackageAgentRunner,
     build_agent_descriptor,
     build_task_message,
+    expected_result_schema,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-    from typing import Any
-
-    from ..agent_system import AgentRequest
+    from ..agent_system import AgentRequest, ManagedAgent
     from ..capabilities import CapabilityExecutor, CapabilityRegistry
     from ..governance import ModelGateway, ModelPolicyRegistry
-    from ..skill_packages import SkillResourceLoader
     from .models import AgentPackage
 
 
-class AgentProvider(Protocol):
-    kind: str
-    name: str
-
-    def create(self, package: AgentPackage) -> ManagedAgent: ...
-
-
-class AgentProviderRegistry:
-    def __init__(self) -> None:
-        self._providers: dict[tuple[str, str], AgentProvider] = {}
-
-    def register(self, provider: AgentProvider) -> None:
-        key = (provider.kind, provider.name)
-        if key in self._providers:
-            raise ValueError(f"Agent provider {key!r} is already registered")
-        self._providers[key] = provider
-
-    def get(self, kind: str, name: str) -> AgentProvider:
-        try:
-            return self._providers[(kind, name)]
-        except KeyError as error:
-            raise AgentPackageError(f"unknown Agent execution provider {kind}/{name}") from error
-
-
 class AgentFactory:
-    def __init__(self, providers: AgentProviderRegistry) -> None:
-        self.providers = providers
+    """Select one of the two stable execution behaviors: agent or direct."""
+
+    def __init__(self, agent_provider: DeepAgentProvider, direct_provider: DirectAgentProvider):
+        self.agent_provider = agent_provider
+        self.direct_provider = direct_provider
 
     def create(self, package: AgentPackage) -> ManagedAgent:
-        execution = package.manifest.execution
-        if package.manifest.routing.default and execution.kind != "langgraph":
-            raise AgentPackageError("the default Agent must use a LangGraph provider")
-        return self.providers.get(execution.kind, execution.provider).create(package)
+        mode = package.manifest.runtime.mode
+        if package.manifest.routing.default and mode != "agent":
+            raise AgentPackageError("the default Agent must use agent mode")
+        if mode == "agent":
+            return self.agent_provider.create(package)
+        if mode == "direct":
+            return self.direct_provider.create(package)
+        raise AgentPackageError(f"unknown Agent runtime mode {mode!r}")
 
     def create_all(self, packages: tuple[AgentPackage, ...]) -> tuple[ManagedAgent, ...]:
         return tuple(self.create(package) for package in packages)
 
 
-@dataclass(slots=True)
-class RoutedModelRuntime:
-    gateway: ModelGateway
-    route: str
-
-    async def run(self, request: RunRequest):
-        return await self.gateway.run(request, route=self.route)
-
-
-class LangGraphTextProvider:
-    kind = "langgraph"
-    name = "text-v1"
+class DeepAgentProvider:
+    """Prepare Package-specific inputs for the shared Deep Agents Runtime."""
 
     def __init__(
         self,
@@ -88,16 +57,18 @@ class LangGraphTextProvider:
         model_policies: ModelPolicyRegistry,
         *,
         additional_capabilities: tuple[str, ...] = (),
-        skill_resources: SkillResourceLoader | None = None,
     ) -> None:
         self.gateway = gateway
         self.capabilities = capabilities
         self.model_policies = model_policies
         self.additional_capabilities = additional_capabilities
-        self.skill_resources = skill_resources
 
     def create(self, package: AgentPackage) -> ManagedAgent:
-        names = self._capability_names(package)
+        names = self.capabilities.resolve_names(
+            package.manifest.capabilities.allow,
+            package.manifest.capabilities.deny,
+            additional_names=self.additional_capabilities,
+        )
         descriptor = build_agent_descriptor(
             package,
             AgentDescriptor(
@@ -107,22 +78,13 @@ class LangGraphTextProvider:
                 scopes=package.manifest.routing.scopes,
             ),
         )
-        runtime = RoutedModelRuntime(self.gateway, package.manifest.runtime.route)
         delegate = RuntimeAgent(
             descriptor,
-            runtime,
+            self.gateway,
             request_factory=self._request_factory(package, names),
-            use_prepared_request=package.manifest.routing.default,
+            use_prepared_request=False,
         )
-        return ContractAgentDecorator(package, delegate, self.skill_resources)
-
-    def _capability_names(self, package: AgentPackage) -> tuple[str, ...]:
-        declaration = package.manifest.capabilities
-        return self.capabilities.resolve_names(
-            declaration.allow,
-            declaration.deny,
-            additional_names=self.additional_capabilities,
-        )
+        return ContractAgentDecorator(package, delegate)
 
     def _request_factory(self, package: AgentPackage, names: tuple[str, ...]):
         model_policy = self.model_policies.get(package.manifest.model_policy_ref)
@@ -131,129 +93,97 @@ class LangGraphTextProvider:
             del descriptor
             now = datetime.now(UTC)
             prepared = request.runtime_request
+            if prepared is not None and not isinstance(prepared, RunRequest):
+                raise AgentPackageError("prepared runtime request has an invalid type")
             conversation_id = (
                 prepared.context.conversation_id
-                if isinstance(prepared, RunRequest)
+                if prepared is not None
                 else request.scope.rsplit("/", 1)[-1]
             )
+            prompt = package.manifest.prompt
+            if prompt.system_ref is None:
+                raise AgentPackageError("model-backed Agent requires a system prompt")
             variables: dict[str, Any] = {
                 "current_time": now.isoformat(),
                 "actor_name": request.actor_id,
                 "project_context": request.scope,
                 "conversation_id": conversation_id,
-                "task_goal": request.prompt,
-                "parameters_json": json.dumps(
-                    request.parameters,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    default=str,
-                ),
-                "context_refs_json": json.dumps(
-                    request.context_refs,
-                    ensure_ascii=False,
-                ),
-                "artifact_refs_json": json.dumps(
-                    request.artifact_refs,
-                    ensure_ascii=False,
-                ),
-                "artifacts_json": json.dumps(
-                    request.artifacts,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    default=str,
-                ),
                 **request.parameters,
             }
-            prompt = package.manifest.prompt
-            if prompt.system_ref is None:
-                raise AgentPackageError("model-backed Agent requires a system prompt")
+            system_prompt = (
+                prepared.system_prompt
+                if prepared is not None and prepared.system_prompt
+                else render_prompt(package.prompts[prompt.system_ref], variables)
+            )
             selected_names = request.skill.capabilities if request.skill is not None else names
-            system_prompt = render_prompt(package.prompts[prompt.system_ref], variables)
-            if request.skill is not None:
-                system_prompt = (
-                    f"{system_prompt}\n\n## Active Skill\n{request.skill.prompt_context}"
+            capabilities = tuple(self.capabilities.get_schema_list(selected_names))
+            if prepared is not None:
+                return replace(
+                    prepared,
+                    system_prompt=system_prompt,
+                    capabilities=capabilities,
+                    max_rounds=min(
+                        prepared.max_rounds,
+                        package.manifest.runtime.max_turns,
+                        package.manifest.budget.max_model_calls,
+                    ),
+                    max_tokens=model_policy.max_output_tokens,
+                    temperature=model_policy.temperature,
+                    response_schema=expected_result_schema(package, request),
+                    skill_files=project_skill_files(package, request),
                 )
             return RunRequest(
                 context=RunContext(
                     trace_id=(request.run_id or request.task_id)[:12],
                     actor_id=request.actor_id,
-                    conversation_id=request.scope,
+                    conversation_id=conversation_id,
                     scope=request.scope,
                     deadline=now + timedelta(seconds=package.manifest.runtime.timeout_seconds),
                     run_id=request.run_id,
                 ),
-                messages=(
-                    {
-                        "role": "user",
-                        "content": build_task_message(request),
-                    },
-                ),
+                messages=({"role": "user", "content": build_task_message(request)},),
                 system_prompt=system_prompt,
-                capabilities=tuple(self.capabilities.get_schema_list(selected_names)),
+                capabilities=capabilities,
                 max_rounds=min(
                     package.manifest.runtime.max_turns,
                     package.manifest.budget.max_model_calls,
                 ),
                 max_tokens=model_policy.max_output_tokens,
+                temperature=model_policy.temperature,
+                response_schema=expected_result_schema(package, request),
+                skill_files=project_skill_files(package, request),
             )
 
         return build
 
 
-class LangGraphJSONProvider:
-    kind = "langgraph"
-    name = "json-v1"
-
-    def __init__(
-        self,
-        gateway: ModelGateway,
-        capabilities: CapabilityRegistry,
-        skill_resources: SkillResourceLoader | None = None,
-    ) -> None:
-        self.gateway = gateway
-        self.capabilities = capabilities
-        self.skill_resources = skill_resources
-
-    def create(self, package: AgentPackage) -> ManagedAgent:
-        declaration = package.manifest.capabilities
-        names = self.capabilities.resolve_names(declaration.allow, declaration.deny)
-        catalog: Mapping[str, Mapping[str, Any]] = {
-            name: self.capabilities.get_schema_list((name,))[0] for name in names
-        }
-        runtime = RoutedModelRuntime(self.gateway, package.manifest.runtime.route)
-        return PackageAgentRunner(package, runtime, catalog, self.skill_resources)
-
-
-class SingleCapabilityProvider:
-    kind = "capability"
-    name = "single-v1"
+class DirectAgentProvider:
+    """Execute one deterministic read Capability without a model loop."""
 
     def __init__(
         self,
         capabilities: CapabilityRegistry,
         executor: CapabilityExecutor,
-        skill_resources: SkillResourceLoader | None = None,
     ) -> None:
         self.capabilities = capabilities
         self.executor = executor
-        self.skill_resources = skill_resources
 
     def create(self, package: AgentPackage) -> ManagedAgent:
-        execution = package.manifest.execution
-        capability_name = execution.capability
+        runtime = package.manifest.runtime
+        capability_name = runtime.capability
         if capability_name is None:
-            raise AgentPackageError("single capability provider requires a capability")
+            raise AgentPackageError("direct mode requires a capability")
         names = self.capabilities.resolve_names(
             package.manifest.capabilities.allow,
             package.manifest.capabilities.deny,
         )
         if names != (capability_name,):
-            raise AgentPackageError("single capability provider must expose exactly its capability")
+            raise AgentPackageError("direct mode must expose exactly its capability")
         binding = self.capabilities.get(capability_name)
         if binding.capability is None:
             raise AgentPackageError(f"capability {capability_name!r} has no canonical spec")
         if binding.capability.effect is not CapabilityEffect.READ:
-            raise AgentPackageError("single capability provider only supports read effects")
+            raise AgentPackageError("direct mode only supports read effects")
         self._validate_source_argument(package, binding.capability.input_schema)
         descriptor = build_agent_descriptor(
             package,
@@ -266,23 +196,22 @@ class SingleCapabilityProvider:
         )
         artifact_kind = package.manifest.artifacts[0].kind if package.manifest.artifacts else None
         if len(package.manifest.artifacts) > 1:
-            raise AgentPackageError("single capability provider supports at most one artifact")
+            raise AgentPackageError("direct mode supports at most one artifact")
         delegate = CapabilityAgent(
             descriptor,
             binding.capability,
             self.executor,
-            source_argument=execution.source_argument,
+            source_argument=runtime.source_argument,
             artifact_kind=artifact_kind,
         )
-        return ContractAgentDecorator(package, delegate, self.skill_resources)
+        return ContractAgentDecorator(package, delegate)
 
     @staticmethod
     def _validate_source_argument(package: AgentPackage, input_schema) -> None:
-        source_argument = package.manifest.execution.source_argument
+        source_argument = package.manifest.runtime.source_argument
         if source_argument is None:
             return
-        properties = input_schema.get("properties", {})
-        if source_argument not in properties:
+        if source_argument not in input_schema.get("properties", {}):
             raise AgentPackageError(
                 f"source argument {source_argument!r} is not accepted by the capability"
             )

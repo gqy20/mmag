@@ -3,14 +3,10 @@ kind: ManagedAgent
 
 metadata:
   name: project
-  version: 1.1.0
+  version: 2.0.0
   description: Turn scoped team context into actionable project plans and status briefs.
 
 spec:
-  execution:
-    kind: langgraph
-    provider: json-v1
-
   routing:
     default: false
     priority: 60
@@ -39,7 +35,6 @@ spec:
 
   capabilities:
     allow:
-      - load_skill_resource
       - get_channel_info
       - get_posts
       - search_messages
@@ -49,7 +44,7 @@ spec:
 
   skills:
     allow:
-      - project@1.1.0
+      - project@1.2.0
     deny: []
 
   context:

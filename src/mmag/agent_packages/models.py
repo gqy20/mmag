@@ -25,14 +25,6 @@ class PackageMetadata:
 
 
 @dataclass(frozen=True, slots=True)
-class ExecutionDeclaration:
-    kind: str
-    provider: str
-    capability: str | None = None
-    source_argument: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class RoutingDeclaration:
     default: bool
     priority: int
@@ -49,6 +41,9 @@ class PromptDeclaration:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeDeclaration:
+    mode: str
+    capability: str | None
+    source_argument: str | None
     route: str
     max_turns: int
     timeout_seconds: int
@@ -97,7 +92,6 @@ class AgentManifest:
     api_version: str
     kind: str
     metadata: PackageMetadata
-    execution: ExecutionDeclaration
     routing: RoutingDeclaration
     accepted_intents: tuple[str, ...]
     prompt: PromptDeclaration

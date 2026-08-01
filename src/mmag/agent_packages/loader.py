@@ -22,7 +22,6 @@ from .models import (
     CapabilityDeclaration,
     ContextDeclaration,
     EvalAsset,
-    ExecutionDeclaration,
     ExecutionProfileDeclaration,
     PackageMetadata,
     PackageVersionSnapshot,
@@ -179,7 +178,6 @@ class AgentPackageLoader:
     def _parse(raw: dict) -> AgentManifest:
         metadata = raw["metadata"]
         spec = raw["spec"]
-        execution = spec["execution"]
         routing = spec["routing"]
         prompt = spec.get("prompt", {})
         runtime = spec["runtime"]
@@ -190,12 +188,6 @@ class AgentPackageLoader:
             raw["api_version"],
             raw["kind"],
             PackageMetadata(metadata["name"], metadata["version"], metadata["description"]),
-            ExecutionDeclaration(
-                execution["kind"],
-                execution["provider"],
-                execution.get("capability"),
-                execution.get("source_argument"),
-            ),
             RoutingDeclaration(
                 routing["default"],
                 routing["priority"],
@@ -211,6 +203,9 @@ class AgentPackageLoader:
             spec["input_schema_ref"],
             spec["result_schema_ref"],
             RuntimeDeclaration(
+                runtime.get("mode", "agent"),
+                runtime.get("capability"),
+                runtime.get("source_argument"),
                 runtime["route"],
                 runtime["max_turns"],
                 runtime["timeout_seconds"],

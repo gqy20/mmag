@@ -25,7 +25,6 @@ from .capabilities import (
     CapabilityExecutor,
     CapabilitySpec,
     bind_langgraph_capability,
-    bind_sdk_capability,
     create_mcp_capability,
 )
 from .logger import get_logger
@@ -210,13 +209,6 @@ class MCPClientBridge:
     def get_capabilities(self) -> tuple[CapabilitySpec, ...]:
         """Return the allowlisted external capabilities in discovery order."""
         return tuple(self._capabilities.values())
-
-    def get_sdk_bindings(self) -> list:
-        """Generate SDK bindings from the same specs and executor as LangGraph."""
-        return [
-            bind_sdk_capability(spec, executor=self.executor)
-            for spec in self._capabilities.values()
-        ]
 
     async def load_and_connect(self) -> int:
         """读取 .mcp.json 并连接所有配置的 Server

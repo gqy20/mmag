@@ -257,14 +257,11 @@ class MessageHandler:
         *,
         capabilities: tuple[dict, ...],
         max_rounds: int,
-        skill_context: str = "",
         event_sink: RunEventSink | None = None,
     ) -> RunRequest:
         channel_id = post["channel_id"]
         team_id = self.mm.get_channel(channel_id).get("team_id") or "-"
         system_prompt = prompt_context["system"]
-        if skill_context:
-            system_prompt = f"{system_prompt}\n\n## Active Skill\n{skill_context}"
         return RunRequest(
             context=RunContext(
                 trace_id=trace.current,
@@ -317,7 +314,6 @@ class MessageHandler:
                 context,
                 capabilities=tuple(self.capability_registry.get_schema_list(capability_names)),
                 max_rounds=rounds,
-                skill_context=request.skill.prompt_context if request.skill is not None else "",
                 event_sink=stream,
             )
             output = await self.run_request(
@@ -396,7 +392,7 @@ class MessageHandler:
         package = getattr(agent, "package", None)
         if package is None:
             return True
-        return package.manifest.execution.provider == "text-v1"
+        return package.manifest.runtime.mode == "agent"
 
     def build_agent_request(self, post: dict, intent: str) -> AgentRequest:
         return AgentRequest(
@@ -697,7 +693,7 @@ class MessageHandler:
                     "skill_ref": request.skill.ref if request.skill is not None else "",
                     "capabilities": list(allowed_capabilities),
                     "provenance": dict(provenance),
-                    "skill_resource_state": self._interrupted_resource_state(output),
+                    "skill_context": self._interrupted_skill_context(output),
                 },
             )
             log.info(
@@ -757,12 +753,12 @@ class MessageHandler:
         return provenance
 
     @staticmethod
-    def _interrupted_resource_state(output) -> dict:
+    def _interrupted_skill_context(output) -> dict:
         runtime_result = output.runtime_result
         if runtime_result is None or not runtime_result.interruptions:
             return {}
         value = runtime_result.interruptions[0].get("value", {})
         if not isinstance(value, dict):
             return {}
-        state = value.get("skill_resource_state", {})
+        state = value.get("skill_context", {})
         return dict(state) if isinstance(state, dict) else {}

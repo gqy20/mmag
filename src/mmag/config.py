@@ -81,7 +81,6 @@ _FIELD_TO_ENV: dict[str, str] = {
     "max_image_bytes": "MAX_IMAGE_BYTES",
     "max_text_attachment_chars": "MAX_TEXT_ATTACHMENT_CHARS",
     "max_tool_rounds": "MAX_TOOL_ROUNDS",
-    "use_sdk_llm": "USE_SDK_LLM",
     "mcp_allowed_tools": "MCP_ALLOWED_TOOLS",
     "pipeline_max_concurrency": "PIPELINE_MAX_CONCURRENCY",
     "pipeline_max_pending": "PIPELINE_MAX_PENDING",
@@ -196,10 +195,7 @@ class Config:
     # 调高 → 复杂任务可拆更多步,但单次请求耗时和 token 都线性增加;
     # 调低 → 快速失败,长任务会被强制收尾(返回最后一轮文本)。
     max_tool_rounds: int = int(os.getenv("MAX_TOOL_ROUNDS", "10"))  # 默认 10
-    # ── SDK LLM ──
-    # LangGraph 是默认运行时；Claude Agent SDK 仅在显式开启时替代默认路由。
-    use_sdk_llm: bool = os.getenv("USE_SDK_LLM", "false").lower() in ("true", "1", "yes")
-    # LangGraph Runtime 的外部 MCP 工具白名单，名称格式为 mcp_<server>_<tool>
+    # Deep Agents Runtime 的外部 MCP 工具白名单，名称格式为 mcp_<server>_<tool>
     mcp_allowed_tools: tuple[str, ...] = tuple(
         dict.fromkeys(
             name.strip() for name in os.getenv("MCP_ALLOWED_TOOLS", "").split(",") if name.strip()

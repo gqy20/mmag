@@ -9,15 +9,13 @@ from .errors import (
 )
 from .loader import SkillPackageLoader, load_skill_instructions
 from .models import SkillPackage, SkillVersionSnapshot
+from .projection import project_skill_files
 from .registry import SkillPackageRegistry
 from .resolver import SkillResolver, build_skill_provenance, validate_skill_contract
 from .resources import (
-    SkillResourceLoader,
-    SkillResourceSession,
-    bind_skill_resource_session,
-    build_skill_resource_catalog,
-    get_skill_resource_session,
-    load_active_skill_resource,
+    SkillContext,
+    bind_skill_context,
+    get_skill_context,
 )
 
 __all__ = [
@@ -28,16 +26,14 @@ __all__ = [
     "SkillPackageLoader",
     "SkillPackageRegistry",
     "SkillReferenceError",
-    "SkillResourceLoader",
-    "SkillResourceSession",
+    "SkillContext",
     "SkillResolutionError",
     "SkillResolver",
     "SkillVersionSnapshot",
     "load_skill_instructions",
-    "bind_skill_resource_session",
+    "project_skill_files",
+    "bind_skill_context",
     "build_skill_provenance",
-    "build_skill_resource_catalog",
-    "get_skill_resource_session",
-    "load_active_skill_resource",
+    "get_skill_context",
     "validate_skill_contract",
 ]

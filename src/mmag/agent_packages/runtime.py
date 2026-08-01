@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import uuid
 from collections.abc import Mapping
@@ -22,27 +21,21 @@ from ..capabilities import (
     get_capability_context,
 )
 from ..governance import GovernanceContext, bind_governance_context, get_governance_context
-from ..runtimes import RunContext, RunRequest, RuntimeStatus
-from ..runtimes.base import thaw
+from ..runtimes import RunRequest, RuntimeStatus
 from ..skill_packages import (
-    SkillContractError,
-    SkillResourceLoader,
-    SkillResourceSession,
-    bind_skill_resource_session,
+    SkillContext,
+    bind_skill_context,
     build_skill_provenance,
-    build_skill_resource_catalog,
     validate_skill_contract,
 )
 from .errors import (
     AgentPackageError,
-    InvalidAgentOutputError,
     PromptContractError,
     SchemaContractError,
 )
 
 if TYPE_CHECKING:
     from ..agent_system import ManagedAgent
-    from ..runtimes import AgentRuntime
     from .models import AgentPackage, PromptAsset, SchemaAsset
 
 
@@ -86,15 +79,6 @@ def build_task_message(request: AgentRequest) -> str:
     return "\n\n".join(sections)
 
 
-def _repair_message(invalid_output: str, error: Exception, schema: Mapping[str, Any]) -> str:
-    return (
-        "Repair the invalid output into exactly one JSON object matching the schema. "
-        "Preserve supported facts, do not invent values, and return no commentary.\n\n"
-        f"Validation error:\n{error}\n\nInvalid output:\n{invalid_output}\n\n"
-        f"Required JSON Schema:\n{_schema_json(schema)}"
-    )
-
-
 def build_agent_descriptor(
     package: AgentPackage, base: AgentDescriptor | None = None
 ) -> AgentDescriptor:
@@ -136,7 +120,6 @@ def _output_envelope(
     artifacts: tuple[Mapping[str, Any], ...],
     *,
     request: AgentRequest,
-    resource_provenance: Mapping[str, str] | None = None,
     model_calls: int,
     tool_calls: int,
     cost_usd: float,
@@ -144,8 +127,6 @@ def _output_envelope(
     provenance = package.snapshot.to_dict()
     if request.skill is not None:
         provenance.update(request.skill.provenance)
-    if resource_provenance is not None:
-        provenance.update(resource_provenance)
     return {
         "status": "succeeded",
         "agent": package.manifest.metadata.name,
@@ -254,14 +235,7 @@ def _validate_skill_invocation(
         raise AgentPackageError(
             f"Skill {invocation.ref!r} is not bound to Agent {descriptor.name!r}"
         ) from error
-    expected_hash = skill.snapshot.instruction_hash
-    actual_hash = hashlib.sha256(invocation.instructions.encode()).hexdigest()
-    expected_catalog = build_skill_resource_catalog(skill)
-    if (
-        actual_hash != expected_hash
-        or invocation.resource_catalog != expected_catalog
-        or invocation.provenance != build_skill_provenance(package, skill)
-    ):
+    if invocation.provenance != build_skill_provenance(package, skill):
         raise AgentPackageError(f"Skill {invocation.ref!r} provenance is invalid")
     declared = skill.manifest.capabilities
     required = set(declared.required)
@@ -293,7 +267,7 @@ def _validate_skill_output(package: AgentPackage, request: AgentRequest, result:
     )
 
 
-def _expected_result_schema(package: AgentPackage, request: AgentRequest) -> Mapping[str, Any]:
+def expected_result_schema(package: AgentPackage, request: AgentRequest) -> Mapping[str, Any]:
     if request.skill is not None:
         skill = package.skills[request.skill.ref]
         return skill.schemas[skill.manifest.output_schema_ref].schema
@@ -309,39 +283,13 @@ def _expected_result_schema(package: AgentPackage, request: AgentRequest) -> Map
     return result_schema if isinstance(result_schema, Mapping) else envelope_schema
 
 
-def _schema_json(schema: Mapping[str, Any]) -> str:
-    return json.dumps(
-        thaw(schema),
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-
-
-def _bind_conversation_resource(
-    capabilities: tuple[Mapping[str, Any], ...], conversation_id: str
-) -> tuple[Mapping[str, Any], ...]:
-    """Narrow model-visible channel arguments without changing authorization policy."""
-    projected: list[Mapping[str, Any]] = []
-    for capability in capabilities:
-        narrowed = thaw(capability)
-        schema = narrowed.get("input_schema")
-        properties = schema.get("properties") if isinstance(schema, dict) else None
-        channel = properties.get("channel_id") if isinstance(properties, dict) else None
-        if isinstance(channel, dict):
-            channel["const"] = conversation_id
-            channel["description"] = "Trusted originating conversation ID; use this exact value."
-        projected.append(narrowed)
-    return tuple(projected)
-
-
-def _create_resource_session(
+def _create_skill_context(
     package: AgentPackage,
     request: AgentRequest,
-    loader: SkillResourceLoader,
-) -> SkillResourceSession | None:
+) -> SkillContext | None:
     if request.skill is None:
         return None
-    return loader.create_session(package.skills[request.skill.ref])
+    return SkillContext(package.skills[request.skill.ref])
 
 
 def _validate_artifacts(package: AgentPackage, artifacts: tuple[Mapping[str, Any], ...]) -> None:
@@ -365,7 +313,6 @@ class ContractAgentDecorator:
         self,
         package: AgentPackage,
         delegate: ManagedAgent,
-        skill_resources: SkillResourceLoader | None = None,
     ):
         allowed = package.manifest.capabilities.allow
         denied_patterns = package.manifest.capabilities.deny
@@ -384,7 +331,6 @@ class ContractAgentDecorator:
             raise AgentPackageError(f"delegate exposes capabilities outside its manifest: {names}")
         self.package = package
         self.delegate = delegate
-        self.skill_resources = skill_resources or SkillResourceLoader()
         self.descriptor = build_agent_descriptor(package, delegate.descriptor)
 
     async def run(self, request: AgentRequest) -> AgentOutput:
@@ -403,14 +349,13 @@ class ContractAgentDecorator:
                 request.skill.capabilities if request.skill is not None else None,
             ),
         )
-        resource_session = _create_resource_session(
+        skill_context = _create_skill_context(
             self.package,
             constrained,
-            self.skill_resources,
         )
-        resource_context = (
-            bind_skill_resource_session(resource_session)
-            if resource_session is not None
+        skill_scope = (
+            bind_skill_context(skill_context)
+            if skill_context is not None
             else nullcontext()
         )
         allowed_capabilities = (
@@ -419,7 +364,7 @@ class ContractAgentDecorator:
             else self.descriptor.capabilities
         )
         with (
-            resource_context,
+            skill_scope,
             bind_capability_context(
                 _package_capability_context(
                     self.package,
@@ -436,7 +381,8 @@ class ContractAgentDecorator:
         runtime_result = result.runtime_result
         if runtime_result is not None and runtime_result.status is RuntimeStatus.WAITING_APPROVAL:
             return replace(result, agent_name=self.descriptor.name)
-        structured = result.structured_result or {"text": result.text}
+        runtime_output = result.runtime_result.output if result.runtime_result is not None else None
+        structured = result.structured_result or runtime_output or {"text": result.text}
         _validate_skill_output(self.package, request, structured)
         artifacts = tuple(result.artifacts)
         _validate_artifacts(self.package, artifacts)
@@ -450,9 +396,6 @@ class ContractAgentDecorator:
             structured,
             artifacts,
             request=request,
-            resource_provenance=(
-                resource_session.provenance() if resource_session is not None else None
-            ),
             model_calls=1 if runtime_result is not None else 0,
             tool_calls=tool_calls,
             cost_usd=cost_usd,
@@ -463,249 +406,3 @@ class ContractAgentDecorator:
             direction="output",
         )
         return replace(result, agent_name=self.descriptor.name, envelope=envelope)
-
-
-class PackageAgentRunner:
-    """Render, execute and validate a model-backed Agent Package.
-
-    The model returns only the package-specific ``result`` object. MMAG owns the
-    surrounding envelope and allows at most one structure-repair invocation.
-    """
-
-    def __init__(
-        self,
-        package: AgentPackage,
-        runtime: AgentRuntime,
-        capability_catalog: Mapping[str, Mapping[str, Any]] | None = None,
-        skill_resources: SkillResourceLoader | None = None,
-    ):
-        self.package = package
-        self.runtime = runtime
-        self.skill_resources = skill_resources or SkillResourceLoader()
-        catalog = capability_catalog or {}
-        self._capability_catalog = dict(catalog)
-        self.descriptor = build_agent_descriptor(
-            package,
-            AgentDescriptor(
-                package.manifest.metadata.name,
-                package.manifest.metadata.description,
-                capabilities=tuple(catalog),
-                scopes=package.manifest.routing.scopes,
-            ),
-        )
-        missing = set(package.manifest.capabilities.allow) - catalog.keys()
-        if missing:
-            raise AgentPackageError(f"unknown allowed capabilities: {', '.join(sorted(missing))}")
-        self._capabilities = tuple(catalog[name] for name in package.manifest.capabilities.allow)
-
-    async def run(self, request: AgentRequest) -> AgentOutput:
-        _validate_skill_invocation(self.package, self.descriptor, request)
-        envelope = _input_envelope(request)
-        _validate(
-            self.package.schemas[self.package.manifest.input_schema_ref],
-            envelope,
-            direction="input",
-        )
-        now = datetime.now(UTC)
-        prepared = request.runtime_request
-        conversation_id = (
-            prepared.context.conversation_id
-            if isinstance(prepared, RunRequest)
-            else request.scope.rsplit("/", 1)[-1]
-        )
-        variables = {
-            "current_time": now.isoformat(),
-            "actor_name": request.actor_id,
-            "project_context": request.scope,
-            "conversation_id": conversation_id,
-            "task_goal": request.prompt,
-            "parameters_json": json.dumps(
-                request.parameters,
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-            ),
-            "context_refs_json": json.dumps(
-                request.context_refs,
-                ensure_ascii=False,
-            ),
-            "artifact_refs_json": json.dumps(
-                request.artifact_refs,
-                ensure_ascii=False,
-            ),
-            "artifacts_json": json.dumps(
-                request.artifacts,
-                ensure_ascii=False,
-                sort_keys=True,
-                default=str,
-            ),
-        }
-        prompt = self.package.manifest.prompt
-        if prompt.system_ref is None:
-            raise AgentPackageError("model-backed Agent requires a system prompt")
-        capabilities = self._capabilities
-        if request.skill is not None:
-            capabilities = tuple(
-                self._capability_catalog[name] for name in request.skill.capabilities
-            )
-        capabilities = _bind_conversation_resource(capabilities, conversation_id)
-        system_prompt = _render(self.package.prompts[prompt.system_ref], variables)
-        if request.skill is not None:
-            system_prompt = f"{system_prompt}\n\n## Active Skill\n{request.skill.prompt_context}"
-        runtime_request = RunRequest(
-            context=RunContext(
-                trace_id=envelope["run_id"][:12],
-                actor_id=request.actor_id,
-                conversation_id=conversation_id,
-                scope=request.scope,
-                deadline=now + timedelta(seconds=self.package.manifest.runtime.timeout_seconds),
-                run_id=envelope["run_id"],
-            ),
-            messages=(
-                {
-                    "role": "user",
-                    "content": build_task_message(request),
-                },
-            ),
-            system_prompt=system_prompt,
-            capabilities=capabilities,
-            max_rounds=min(
-                self.package.manifest.runtime.max_turns,
-                self.package.manifest.budget.max_model_calls,
-            ),
-        )
-        governance = _package_governance(self.package, self.descriptor, request)
-        resource_session = _create_resource_session(
-            self.package,
-            request,
-            self.skill_resources,
-        )
-        resource_context = (
-            bind_skill_resource_session(resource_session)
-            if resource_session is not None
-            else nullcontext()
-        )
-        allowed_names = tuple(
-            str(capability.get("name")) for capability in capabilities if capability.get("name")
-        )
-        capability_context = _package_capability_context(
-            self.package,
-            request,
-            runtime_request,
-            allowed_names,
-        )
-        with (
-            resource_context,
-            bind_capability_context(capability_context),
-            bind_governance_context(governance),
-        ):
-            runtime_result = await self.runtime.run(runtime_request)
-        if runtime_result.status is RuntimeStatus.WAITING_APPROVAL:
-            return AgentOutput(
-                "",
-                self.descriptor.name,
-                runtime_result=runtime_result,
-            )
-        model_calls = 1
-        try:
-            structured, output = self._normalize(
-                runtime_result,
-                model_calls,
-                request,
-                resource_session,
-            )
-        except (
-            json.JSONDecodeError,
-            SchemaContractError,
-            SkillContractError,
-            TypeError,
-        ) as first_error:
-            repair_content = _repair_message(
-                runtime_result.text,
-                first_error,
-                _expected_result_schema(self.package, request),
-            )
-            repair_request = replace(
-                runtime_request,
-                messages=(
-                    {
-                        "role": "user",
-                        "content": repair_content,
-                    },
-                ),
-                capabilities=(),
-                max_rounds=1,
-            )
-            resource_context = (
-                bind_skill_resource_session(resource_session)
-                if resource_session is not None
-                else nullcontext()
-            )
-            with (
-                resource_context,
-                bind_capability_context(capability_context),
-                bind_governance_context(governance),
-            ):
-                repaired = await self.runtime.run(repair_request)
-            model_calls += 1
-            try:
-                structured, output = self._normalize(
-                    repaired,
-                    model_calls,
-                    request,
-                    resource_session,
-                )
-                runtime_result = repaired
-            except (
-                json.JSONDecodeError,
-                SchemaContractError,
-                SkillContractError,
-                TypeError,
-            ) as repair_error:
-                raise InvalidAgentOutputError(
-                    str(repair_error), direction="output"
-                ) from repair_error
-        return AgentOutput(
-            json.dumps(structured, ensure_ascii=False),
-            self.descriptor.name,
-            tuple(dict(artifact) for artifact in runtime_result.artifacts),
-            dict(structured),
-            output,
-        )
-
-    def _normalize(
-        self,
-        runtime_result,
-        model_calls: int,
-        request: AgentRequest,
-        resource_session: SkillResourceSession | None,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        structured = json.loads(runtime_result.text)
-        if not isinstance(structured, dict):
-            raise TypeError("model result must be a JSON object")
-        _validate_skill_output(self.package, request, structured)
-        artifacts = tuple(runtime_result.artifacts)
-        _validate_artifacts(self.package, artifacts)
-        tool_calls = len(runtime_result.capability_calls)
-        usage = runtime_result.usage
-        budget = self.package.manifest.budget
-        if tool_calls > budget.max_tool_calls or usage.cost_usd > budget.max_cost_usd:
-            raise AgentPackageError("Agent Package runtime budget exceeded")
-        output = _output_envelope(
-            self.package,
-            structured,
-            artifacts,
-            request=request,
-            resource_provenance=(
-                resource_session.provenance() if resource_session is not None else None
-            ),
-            model_calls=model_calls,
-            tool_calls=tool_calls,
-            cost_usd=usage.cost_usd,
-        )
-        _validate(
-            self.package.schemas[self.package.manifest.result_schema_ref],
-            output,
-            direction="output",
-        )
-        return structured, output

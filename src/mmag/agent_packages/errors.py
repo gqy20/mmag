@@ -25,9 +25,3 @@ class SchemaContractError(AgentPackageError):
     def __init__(self, message: str, *, direction: str):
         super().__init__(message)
         self.direction = direction
-
-
-class InvalidAgentOutputError(SchemaContractError):
-    """The model output remained invalid after the bounded repair attempt."""
-
-    code = "INVALID_OUTPUT"

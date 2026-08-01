@@ -36,30 +36,6 @@ def remaining_seconds(request: RunRequest) -> float | None:
     return (deadline - now).total_seconds()
 
 
-async def recover_exhausted(
-    backend: Any,
-    request: RunRequest,
-    messages: list[dict[str, Any]],
-    text: str,
-    *,
-    exhausted_prefix: str = "⚠️ 处理超时",
-) -> str:
-    """Attempt one text-only recovery without masking the exhausted result."""
-    if not text.startswith(exhausted_prefix):
-        return text
-    try:
-        recovered = await backend.chat(
-            messages=messages,
-            system=request.system_prompt,
-            max_tokens=request.fallback_max_tokens,
-        )
-    except Exception:
-        return text
-    if recovered and not recovered.startswith("(模型返回为空)"):
-        return recovered
-    return text
-
-
 @dataclass(frozen=True, slots=True)
 class RunContext:
     """Stable identity and scheduling context for one Agent run."""
@@ -74,6 +50,11 @@ class RunContext:
 
 class RunEventKind(StrEnum):
     TEXT_DELTA = "text_delta"
+    TOOL_STARTED = "tool_started"
+    TOOL_COMPLETED = "tool_completed"
+    APPROVAL_REQUIRED = "approval_required"
+    ARTIFACT_CREATED = "artifact_created"
+    RUN_STATUS = "run_status"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +62,8 @@ class RunEvent:
     kind: RunEventKind
     text: str = ""
     round: int = 0
+    name: str = ""
+    data: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @runtime_checkable
@@ -103,6 +86,11 @@ class RunRequest:
     max_rounds: int = 5
     max_tokens: int = 4096
     fallback_max_tokens: int = 1024
+    temperature: float = 0.0
+    response_schema: Mapping[str, Any] | None = None
+    skill_files: Mapping[str, Mapping[str, str]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     event_sink: RunEventSink | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -112,12 +100,17 @@ class RunRequest:
             raise ValueError("max_tokens must be at least 1")
         if self.fallback_max_tokens < 1:
             raise ValueError("fallback_max_tokens must be at least 1")
+        if not 0 <= self.temperature <= 2:
+            raise ValueError("temperature must be between 0 and 2")
         object.__setattr__(self, "messages", tuple(_freeze(message) for message in self.messages))
         object.__setattr__(
             self,
             "capabilities",
             tuple(_freeze(capability) for capability in self.capabilities),
         )
+        if self.response_schema is not None:
+            object.__setattr__(self, "response_schema", _freeze(self.response_schema))
+        object.__setattr__(self, "skill_files", _freeze(self.skill_files))
 
 
 class RuntimeStatus(StrEnum):
@@ -143,6 +136,7 @@ class AgentResult:
     capability_calls: tuple[Mapping[str, Any], ...] = ()
     interruptions: tuple[Mapping[str, Any], ...] = ()
     usage: TokenUsage = field(default_factory=TokenUsage)
+    output: Mapping[str, Any] | None = None
 
 
 @runtime_checkable

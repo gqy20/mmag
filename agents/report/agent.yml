@@ -3,14 +3,10 @@ kind: ManagedAgent
 
 metadata:
   name: report
-  version: 1.1.0
+  version: 2.0.0
   description: Produce evidence-aware, structured research reports within the active scope.
 
 spec:
-  execution:
-    kind: langgraph
-    provider: json-v1
-
   routing:
     default: false
     priority: 80
@@ -38,12 +34,12 @@ spec:
       max_attempts: 2
 
   capabilities:
-    allow: [load_skill_resource, search_knowledge, search_messages, analyze_link]
+    allow: [search_knowledge, search_messages, analyze_link]
     deny: []
 
   skills:
     allow:
-      - report@1.1.0
+      - report@1.2.0
     deny: []
 
   context:

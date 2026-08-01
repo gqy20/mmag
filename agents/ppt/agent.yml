@@ -3,14 +3,10 @@ kind: ManagedAgent
 
 metadata:
   name: ppt
-  version: 2.3.0
+  version: 3.0.0
   description: Build governed Markdown into editable presentation bundles and deliver on approval.
 
 spec:
-  execution:
-    kind: langgraph
-    provider: json-v1
-
   routing:
     default: false
     priority: 70
@@ -39,7 +35,6 @@ spec:
 
   capabilities:
     allow:
-      - load_skill_resource
       - search_knowledge
       - ppt.build
       - ppt.shell
@@ -48,7 +43,7 @@ spec:
 
   skills:
     allow:
-      - slides@2.3.0
+      - slides@3.0.0
     deny: []
 
   execution_profiles:

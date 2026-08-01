@@ -88,7 +88,7 @@ async def test_empty_allowlist_skips_external_mcp_connections():
 
 
 @pytest.mark.asyncio
-async def test_discovered_mcp_tool_uses_one_spec_for_both_runtime_bindings():
+async def test_discovered_mcp_tool_uses_one_governed_capability_binding():
     registry = CapabilityRegistry()
     authorizer = MagicMock()
     authorizer.authorize.return_value = CapabilityAuthorization.allow()
@@ -107,24 +107,20 @@ async def test_discovered_mcp_tool_uses_one_spec_for_both_runtime_bindings():
 
     registered = bridge._register_discovered_tools("docs", session, [_mcp_tool("search")])
     spec = bridge.get_capabilities()[0]
-    sdk_tool = bridge.get_sdk_bindings()[0]
-    langgraph_result = await registry.execute(spec.name, {"query": "architecture"})
-    sdk_result = await sdk_tool.handler({"query": "architecture"})
+    result = await registry.execute(spec.name, {"query": "architecture"})
 
     assert registered == 1
-    assert spec.name == sdk_tool.name == "mcp_docs_search"
+    assert spec.name == "mcp_docs_search"
     assert spec.effect is CapabilityEffect.READ
     assert spec.permission == "mcp:docs:search:invoke"
     assert spec.source_policy is SourcePolicy.AUTO
-    assert sdk_tool.input_schema == dict(spec.input_schema)
-    assert '"_sources"' in langgraph_result
-    assert '"_sources"' in sdk_result["content"][0]["text"]
-    assert session.call_tool.await_count == 2
-    assert authorizer.authorize.call_count == 2
+    assert '"_sources"' in result
+    session.call_tool.assert_awaited_once()
+    authorizer.authorize.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_mcp_policy_denial_is_identical_and_stops_both_bindings():
+async def test_mcp_policy_denial_stops_the_canonical_binding():
     registry = CapabilityRegistry()
     authorizer = MagicMock()
     authorizer.authorize.return_value = CapabilityAuthorization.deny("disabled")
@@ -137,16 +133,14 @@ async def test_mcp_policy_denial_is_identical_and_stops_both_bindings():
 
     bridge._register_discovered_tools("ops", session, [_mcp_tool("deploy", read_only=None)])
     spec = bridge.get_capabilities()[0]
-    langgraph_result = await registry.execute(spec.name, {"query": "release"})
-    sdk_result = await bridge.get_sdk_bindings()[0].handler({"query": "release"})
+    result = await registry.execute(spec.name, {"query": "release"})
 
     assert spec.effect is CapabilityEffect.WRITE
-    assert f'"code": "{CapabilityStatus.FORBIDDEN}"' in langgraph_result
-    assert f'"code": "{CapabilityStatus.FORBIDDEN}"' in sdk_result["content"][0]["text"]
+    assert f'"code": "{CapabilityStatus.FORBIDDEN}"' in result
     session.call_tool.assert_not_awaited()
 
 
-def test_only_allowlisted_discovered_tools_are_visible_to_both_runtimes():
+def test_only_allowlisted_discovered_tools_are_visible():
     registry = CapabilityRegistry()
     bridge = MCPClientBridge(
         registry,
@@ -161,4 +155,3 @@ def test_only_allowlisted_discovered_tools_are_visible_to_both_runtimes():
 
     assert registered == 1
     assert [tool.name for tool in registry.get_all()] == ["mcp_docs_search"]
-    assert [tool.name for tool in bridge.get_sdk_bindings()] == ["mcp_docs_search"]

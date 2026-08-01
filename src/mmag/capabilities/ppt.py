@@ -7,7 +7,7 @@ import json
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
 
-from ..skill_packages import get_skill_resource_session
+from ..skill_packages import get_skill_context
 from .base import CapabilityEffect, CapabilitySpec, SourcePolicy
 from .context import get_capability_context
 
@@ -21,7 +21,7 @@ THEMES = {"corp@1.0.0": "ppt/themes/corp.json"}
 
 
 def _load_theme(theme_ref: str) -> tuple[dict[str, Any], str]:
-    if get_skill_resource_session() is None:
+    if get_skill_context() is None:
         raise RuntimeError("presentation build requires an active Skill")
     try:
         resource_ref = THEMES[theme_ref]
