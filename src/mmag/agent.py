@@ -37,8 +37,6 @@ from .governance import (
     GovernanceContext,
     ModelGateway,
     PolicyCapabilityAuthorizer,
-    PolicyEffect,
-    PolicyEngine,
     PolicyRegistry,
     QuotaLedger,
     bind_governance_context,
@@ -190,9 +188,9 @@ class Agent:
         self.control_store = SQLiteControlPlane(config.memory_db_path)
         lifecycle = LifecycleService(self.control_store)
         approvals = ApprovalService(self.control_store, lifecycle)
-        # Transitional compatibility for the global Bot. Agent Packages are
-        # fail-closed and must carry an explicit policy before execution.
-        self.policy_engine = PolicyEngine(default_effect=PolicyEffect.ALLOW)
+        self.policy_registry = PolicyRegistry()
+        self.policy_registry.load_directory(Path(config.policies_path))
+        self.policy_engine = self.policy_registry.get("global-bot@1.0.0")
         self.capability_executor = CapabilityExecutor(
             PolicyCapabilityAuthorizer(self.policy_engine)
         )
@@ -207,8 +205,6 @@ class Agent:
         self.agent_registry = AgentRegistry()
         self.agent_package_registry = AgentPackageRegistry()
         self.agent_package_registry.load_directory(Path(config.agent_packages_path))
-        self.policy_registry = PolicyRegistry()
-        self.policy_registry.load_directory(Path(config.policies_path))
         link_package = self.agent_package_registry.get("link")
         link_policy = self.policy_registry.get(link_package.manifest.policy_ref)
         link_executor = CapabilityExecutor(PolicyCapabilityAuthorizer(link_policy))
@@ -263,6 +259,7 @@ class Agent:
         self.mcp_bridge = MCPClientBridge(
             self.tool_registry,
             allowed_tools=config.mcp_allowed_tools,
+            executor=self.capability_executor,
         )
 
         # 运行状态
@@ -870,10 +867,19 @@ class Agent:
 
     def _register_approval_interrupt(self, post: dict, runtime_result) -> str:
         """Persist one native LangGraph interrupt as an auditable approval request."""
+        scope = self._post_scope(post)
         approval = self.approval_coordinator.register(
             runtime_result,
             requested_by=post.get("user_id", ""),
-            scope_id=self._post_scope(post),
+            scope_id=scope,
+            capability_context=CapabilityContext(
+                trace_id=trace.current,
+                actor_id=post.get("user_id", ""),
+                conversation_id=post.get("channel_id", ""),
+                message_id=post.get("id", ""),
+                message=post.get("message", ""),
+                scope=scope,
+            ),
         )
         return (
             f"⏸️ 操作等待人工审批：`{approval.capability_name}`\n"
@@ -947,7 +953,16 @@ class Agent:
         )
         with (
             bind_capability_context(context),
-            bind_governance_context(GovernanceContext(context.actor_id, context.scope)),
+            bind_governance_context(
+                GovernanceContext(
+                    context.actor_id,
+                    context.scope,
+                    resources={
+                        "actor_id": context.actor_id,
+                        "conversation_id": context.conversation_id,
+                    },
+                )
+            ),
         ):
             return await self.runtime.run(request)
 

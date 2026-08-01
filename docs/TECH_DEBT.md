@@ -9,8 +9,10 @@
 > 触发条件: 网络抖动 / Token 过期 / LLM 限流时可能导致消息丢失、Agent 失能、用户体验下降
 
 ### 0. 企业闭环剩余 P0
-- 已完成：审批过期/重复/token 守卫、Mattermost 审批资格、Delivery 幂等键、Inbox 有界持久重试、Task/Delivery 终态聚合和基础审计写入
-- 剩余：全局 Bot 仍显式 ALLOW；Policy 尚未校验 Capability 动态资源参数；失败 Inbox 缺 DLQ/replay；持久预算、Artifact/provenance、Router 主链和交付验收仍未闭环
+- 已完成：审批过期/重复/token 守卫、Mattermost 审批资格、Delivery 幂等键、Inbox 有界持久重试与 DLQ/replay、Task/Delivery 终态聚合和基础审计写入
+- 已完成：删除全局 Bot ALLOW；内置与 MCP 共用默认拒绝 Policy；频道/用户 Capability 参数进入请求资源级匹配
+- 已完成：MCP stdio 子进程采用最小环境白名单；URL 禁用自动重定向并对每一跳重新做 SSRF 校验
+- 剩余：持久预算、Artifact/provenance、Router 主链、交付验收，以及 DLQ 的认证管理端点/告警后端仍未闭环
 - 审批当前允许请求人自批；高风险 Capability 仍需组织级职责分离与双人审批策略
 
 ### 1. MMClient 读取与文件调用仍无统一重试
@@ -50,10 +52,10 @@
 
 ## P2 — 架构债 (建议下季度修复)
 
-> 触发条件: 单文件超过 500 行 / 职责超过 4 个 / 修改一处需联动多处的设计
+> 触发条件: 单文件超过项目约定的 800 行 / 职责超过 4 个 / 修改一处需联动多处的设计
 
 ### 6. agent.py — Facade God Object (7 个职责)
-- 位置: `src/mmag/agent.py` (629 行)
+- 位置: `src/mmag/agent.py`（约 1600 行，已超过拆分阈值）
 - 职责:
   1. 编排启动流程 (`start`, line 68-188)
   2. WebSocket 事件分发 (`_on_ws_event` / `_on_posted`, line 190-278)
@@ -63,7 +65,7 @@
   6. Typing 模拟 (`typing_indicator`, line 571-577)
   7. 消息回写 + 生命周期 (`reply` / `stop`, line 579-628)
 - 特别严重: `_on_posted` 单函数 125 行,5 个提前 return
-- 方案参考: 拆 `MessageRouter` / `ContextBuilder` / `TriggerJudge` / `ResponseSender`
+- 方案参考: 下一轮结构重构拆 `MessageRouter` / `ContextBuilder` / `TriggerJudge` / `ResponseSender`，保持 `Agent` 只做生命周期装配
 
 ### 7. memory.py — 多 Repository 强耦合 (5 个职责)
 - 位置: `src/mmag/memory.py`
@@ -224,7 +226,7 @@
 ### 30. Agent Package 生产发布链尚未闭环
 - 已完成：Manifest/Prompt/Schema/Package Registry、版本 Hash、默认拒绝 Policy、Link Agent 纵向切片
 - 剩余：provenance 尚未持久化到 AgentRun/Audit，Model Policy 尚未驱动 ModelGateway，eval gate/发布人/原子回滚尚未实现
-- 兼容风险：全局 Bot 在装配处显式使用 ALLOW Policy；删除条件是内置 Capability 全部绑定请求级 Package Policy
+- 已完成：全局 Bot 使用版本化 `global-bot@1.0.0` Policy，动态参数与请求资源绑定；后续仍需将全局 Bot 本身迁移为 Agent Package
 
 ### 31. `time.time()` 与 `time.monotonic()` 混用
 - 测耗时用 `monotonic` (好),取时间戳用 `time.time()` (好);但部分 magic conversion (ms ↔ s) 散落多处,容易算错

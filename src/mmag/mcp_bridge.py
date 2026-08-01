@@ -37,6 +37,22 @@ log = get_logger(__name__)
 
 # 项目根目录（src/mmag 上两级）
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_MCP_RUNTIME_ENVIRONMENT = frozenset(
+    {
+        "COMSPEC",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "WINDIR",
+    }
+)
 
 
 @dataclass
@@ -75,6 +91,25 @@ def _resolve_env_vars(value: Any, env: dict[str, str] | None = None) -> Any:
     elif isinstance(value, dict):
         return {k: _resolve_env_vars(v, env) for k, v in value.items()}
     return value
+
+
+def _stdio_environment(configured: Any) -> dict[str, str]:
+    """Build a minimal child environment plus values explicitly granted by config."""
+    inherited = {
+        name: value
+        for name, value in os.environ.items()
+        if name in _MCP_RUNTIME_ENVIRONMENT
+    }
+    if not isinstance(configured, dict):
+        return inherited
+    inherited.update(
+        {
+            name: value
+            for name, value in configured.items()
+            if isinstance(name, str) and isinstance(value, str)
+        }
+    )
+    return inherited
 
 
 def read_mcp_config(config_path: str | Path | None = None) -> list[McpConfigItem]:
@@ -143,7 +178,7 @@ def read_mcp_config(config_path: str | Path | None = None) -> list[McpConfigItem
         len(items),
     )
     for item in items:
-        log.debug("  - [%s] type=%s endpoint=%s", item.name, item.type, item.endpoint[:80])
+        log.debug("  - [%s] type=%s", item.name, item.type)
     return items
 
 
@@ -249,14 +284,7 @@ class MCPClientBridge:
                 params = StdioServerParameters(
                     command=cfg.get("command", ""),
                     args=[str(a) for a in cfg.get("args", []) if isinstance(a, str)],
-                    env={
-                        **os.environ,
-                        **{
-                            k: v
-                            for k, v in cfg.get("env", {}).items()
-                            if isinstance(k, str) and isinstance(v, str)
-                        },
-                    },
+                    env=_stdio_environment(cfg.get("env", {})),
                 )
                 transport = stdio_client(params)
                 streams = await transport.__aenter__()

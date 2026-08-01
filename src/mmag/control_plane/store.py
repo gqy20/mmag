@@ -85,6 +85,30 @@ class SQLiteControlPlane:
         ).fetchall()
         return [self._inbox_record(row) for row in rows]
 
+    def list_dead_letters(
+        self,
+        *,
+        limit: int = 100,
+        conversation_id: str | None = None,
+    ) -> list[InboxRecord]:
+        """Return terminal processing failures without mutating their evidence."""
+        if limit < 1:
+            raise ValueError("dead-letter limit must be positive")
+        if conversation_id is None:
+            rows = self._connection.execute(
+                """SELECT * FROM inbox_events WHERE status='failed'
+                ORDER BY updated_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        else:
+            rows = self._connection.execute(
+                """SELECT * FROM inbox_events
+                WHERE status='failed' AND conversation_id=?
+                ORDER BY updated_at DESC LIMIT ?""",
+                (conversation_id, limit),
+            ).fetchall()
+        return [self._inbox_record(row) for row in rows]
+
     def mark_inbox_processing(self, event_id: str) -> None:
         with self._lock:
             self._connection.execute(

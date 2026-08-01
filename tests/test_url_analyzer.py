@@ -185,6 +185,10 @@ class TestSsrfProtection:
         safe, _ = _is_safe_url("http://169.254.169.254/")  # AWS metadata
         assert safe is False
 
+    def test_unspecified_address_blocked(self):
+        safe, _ = _is_safe_url("http://0.0.0.0/")
+        assert safe is False
+
     def test_unsupported_scheme_blocked(self):
         safe, _ = _is_safe_url("ftp://example.com/")
         assert safe is False
@@ -624,6 +628,55 @@ class TestAnalyzeWebpage:
             info = await analyze_url("https://example.com/slow")
         assert info["status"] == "error"
         assert "网络" in info["error"]
+
+    @pytest.mark.asyncio
+    async def test_redirect_to_private_address_is_rejected_before_second_request(
+        self, mock_response
+    ):
+        redirect = mock_response(
+            status_code=302,
+            headers={"location": "http://169.254.169.254/latest/meta-data"},
+            url="https://example.com/start",
+        )
+        get = AsyncMock(return_value=redirect)
+
+        with patch("mmag.url_analyzer._get_client") as mock_client:
+            mock_client.return_value.get = get
+            info = await analyze_url("https://example.com/start")
+
+        assert info["status"] == "error"
+        assert "重定向" in info["error"]
+        get.assert_awaited_once_with("https://example.com/start")
+
+    @pytest.mark.asyncio
+    async def test_relative_public_redirect_is_followed_after_each_hop_is_validated(
+        self, mock_response
+    ):
+        redirect = mock_response(
+            status_code=302,
+            headers={"location": "/final"},
+            url="https://example.com/start",
+        )
+        final = mock_response(
+            status_code=200,
+            text=(
+                "<html><head><title>Final</title>"
+                '<meta property="og:description" content="safe"></head></html>'
+            ),
+            url="https://example.com/final",
+        )
+        get = AsyncMock(side_effect=[redirect, final])
+
+        with patch("mmag.url_analyzer._get_client") as mock_client:
+            mock_client.return_value.get = get
+            info = await analyze_url("https://example.com/start")
+
+        assert info["status"] == "ok"
+        assert info["metadata"]["final_url"] == "https://example.com/final"
+        assert [call.args[0] for call in get.await_args_list] == [
+            "https://example.com/start",
+            "https://example.com/final",
+        ]
 
 
 # ============================================================

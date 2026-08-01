@@ -291,8 +291,8 @@ Managed Agent 与 Router
 - [x] Inbox 瞬时处理错误使用持久 attempts 做有界重试；
 - [x] AgentRun 与 Task 终态解耦，Task 等待 Delivery 终态；
 - [x] 审批、Inbox 失败/重试、Delivery 终态写入基础 AuditEvent；
-- [ ] 建立失败 Inbox 的 DLQ 查询与人工 replay；
-- [ ] 删除全局 Bot ALLOW，接入资源参数级 Policy；
+- [x] 建立失败 Inbox 的 DLQ 查询与人工 replay；原失败证据保留，replay 使用新幂等事件 ID；
+- [x] 删除全局 Bot ALLOW，接入频道/用户参数与请求上下文的资源级 Policy；
 - [ ] 将 ScopeResolver、AgentRouter、Package Runner、Artifact Repository 串入消息主链；
 - [ ] 持久化 usage/provenance 并实现原子预算预留；
 - [ ] 建立交付接受、驳回、返工和反馈闭环。

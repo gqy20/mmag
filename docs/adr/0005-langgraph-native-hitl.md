@@ -24,5 +24,6 @@ flowchart LR
 - `RunContext.run_id` 是稳定 `thread_id`，Mattermost 事件使用 `mattermost:<post_id>`。
 - `langgraph-checkpoint-sqlite` 与业务数据库共用文件，但使用独立的官方 checkpoint 表。
 - `AgentResult.status=waiting_approval` 携带结构化 interruptions。
+- 业务审批单同时持久化原始 CapabilityContext；恢复时还原原消息、频道和 actor，避免审批命令覆盖副作用前置条件。
 - 审批恢复后，原 Task/AgentRun 从 `waiting_approval` 回到 `running`，完成后才进入 `succeeded`。
 - 测试覆盖暂停前无副作用、批准、修改、拒绝，以及关闭并重建 Runtime 后从 SQLite 恢复。

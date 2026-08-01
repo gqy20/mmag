@@ -1,0 +1,50 @@
+id: global-bot
+version: 1.0.0
+default_effect: deny
+
+rules:
+  - id: read-current-channel
+    effect: allow
+    actions: [get_channel_info, get_posts, search_messages, search_knowledge]
+    permissions:
+      - mattermost:channel:read
+      - mattermost:post:read
+      - memory:messages:read
+      - memory:knowledge:read
+    resource_arguments:
+      channel_id: conversation_id
+    reason: The global Bot may only read the originating Mattermost channel.
+
+  - id: read-own-profile
+    effect: allow
+    actions: [get_user_profile]
+    permissions: [memory:user_profile:read]
+    resource_arguments:
+      user_id: actor_id
+    reason: User profile access is restricted to the requesting actor.
+
+  - id: analyze-public-link
+    effect: allow
+    actions: [analyze_link]
+    permissions: [web:read]
+    reason: Public link analysis is allowed behind URL network controls.
+
+  - id: write-current-channel-knowledge
+    effect: allow
+    actions: [save_knowledge]
+    permissions: [memory:knowledge:write]
+    resource_arguments:
+      channel_id: conversation_id
+    reason: Knowledge writes are restricted to the originating channel.
+
+  - id: approve-file-delivery
+    effect: require_approval
+    actions: [send_file]
+    permissions: [mattermost:file:write]
+    reason: File delivery is an external side effect and requires approval.
+
+  - id: approve-allowlisted-mcp
+    effect: require_approval
+    actions: [mcp_*]
+    permissions: [mcp:*:invoke]
+    reason: MCP resource semantics are server-defined, so every invocation requires approval.

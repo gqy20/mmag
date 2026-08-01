@@ -48,25 +48,74 @@ def test_policy_is_fail_closed_when_no_rule_matches():
     assert decision.effect is PolicyEffect.DENY
 
 
-def test_versioned_policy_registry_allows_only_the_declared_action():
+def test_policy_matches_dynamic_arguments_to_request_resources():
+    engine = PolicyEngine(
+        (
+            PolicyRule(
+                "read-current-channel",
+                PolicyEffect.ALLOW,
+                actions=("get_posts",),
+                resource_arguments={"channel_id": "conversation_id"},
+            ),
+        )
+    )
+    spec = CapabilitySpec(
+        "get_posts",
+        "read",
+        {"type": "object"},
+        lambda: None,
+        permission="mattermost:post:read",
+    )
+    context = GovernanceContext(
+        "u1",
+        "mattermost:team-1/channel-1",
+        resources={"conversation_id": "channel-1"},
+    )
+
+    allowed = engine.evaluate(spec, {"channel_id": "channel-1"}, context)
+    cross_channel = engine.evaluate(spec, {"channel_id": "channel-2"}, context)
+    missing_target = engine.evaluate(spec, {}, context)
+
+    assert allowed.effect is PolicyEffect.ALLOW
+    assert cross_channel.effect is PolicyEffect.DENY
+    assert missing_target.effect is PolicyEffect.DENY
+
+
+def test_versioned_policy_registry_enforces_global_bot_resources_and_writes():
     from pathlib import Path
 
     registry = PolicyRegistry()
     registry.load_directory(Path(__file__).resolve().parents[1] / "policies")
-    engine = registry.get("link-readonly@1.0.0")
-    link = CapabilitySpec(
-        "analyze_link",
-        "analyze",
+    engine = registry.get("global-bot@1.0.0")
+    get_posts = CapabilitySpec(
+        "get_posts",
+        "read",
         {"type": "object"},
         lambda: None,
-        permission="web:read",
+        permission="mattermost:post:read",
+    )
+    external_mcp = CapabilitySpec(
+        "mcp_docs_search",
+        "search",
+        {"type": "object"},
+        lambda: None,
+        permission="mcp:docs:search:invoke",
+    )
+    context = GovernanceContext(
+        "u1",
+        "mattermost:team-1/channel-1",
+        resources={"conversation_id": "channel-1", "actor_id": "u1"},
     )
 
-    allowed = engine.evaluate(link, {}, GovernanceContext("u1", "project:p1"))
-    denied = engine.evaluate(_write_spec(), {}, GovernanceContext("u1", "project:p1"))
+    allowed = engine.evaluate(get_posts, {"channel_id": "channel-1"}, context)
+    denied = engine.evaluate(get_posts, {"channel_id": "channel-2"}, context)
+    approval = engine.evaluate(_write_spec(), {"filename": "report.md"}, context)
+    mcp_approval = engine.evaluate(external_mcp, {"query": "policy"}, context)
 
     assert allowed.effect is PolicyEffect.ALLOW
     assert denied.effect is PolicyEffect.DENY
+    assert approval.effect is PolicyEffect.REQUIRE_APPROVAL
+    assert mcp_approval.effect is PolicyEffect.REQUIRE_APPROVAL
 
 
 def test_redaction_and_secret_provider_do_not_expose_secret(monkeypatch):

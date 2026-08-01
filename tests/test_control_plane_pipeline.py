@@ -159,6 +159,48 @@ async def test_pipeline_retries_transient_processing_failure_with_persisted_atte
 
 
 @pytest.mark.asyncio
+async def test_failed_inbox_is_queryable_and_replayed_as_a_new_idempotent_event(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+
+    async def process(event: InboundEvent) -> tuple[OutboundMessage, ...]:
+        if event.event_id == "dead-letter":
+            raise ValueError("invalid source payload")
+        return ()
+
+    async def deliver(message: OutboundMessage) -> str:
+        return "unused"
+
+    pipeline = MessagePipeline(store, process, deliver)
+    await pipeline.start()
+    await pipeline.accept(_event("dead-letter", "channel"))
+    await pipeline.join()
+
+    dead_letters = store.list_dead_letters(limit=10, conversation_id="channel")
+    replayed = await pipeline.replay_dead_letter(
+        "dead-letter",
+        replay_id="dead-letter:replay:operator-command-1",
+        actor_id="operator-1",
+    )
+    duplicate = await pipeline.replay_dead_letter(
+        "dead-letter",
+        replay_id="dead-letter:replay:operator-command-1",
+        actor_id="operator-1",
+    )
+    await pipeline.join()
+    await pipeline.close()
+
+    replay = store.get_inbox("dead-letter:replay:operator-command-1")
+    assert [record.event.event_id for record in dead_letters] == ["dead-letter"]
+    assert replayed is True
+    assert duplicate is False
+    assert store.get_inbox("dead-letter").status == "failed"
+    assert replay.status == "completed"
+    assert replay.event.payload["_mmag_replay"]["source_event_id"] == "dead-letter"
+    assert replay.event.payload["_mmag_replay"]["requested_by"] == "operator-1"
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_pipeline_preserves_waiting_approval_lifecycle(tmp_path):
     store = SQLiteControlPlane(tmp_path / "control.db")
     lifecycle = LifecycleService(store)

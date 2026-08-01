@@ -14,7 +14,17 @@ if TYPE_CHECKING:
 
 _TOP_LEVEL = frozenset({"id", "version", "default_effect", "rules"})
 _RULE_FIELDS = frozenset(
-    {"id", "effect", "actions", "actors", "scopes", "permissions", "roles", "reason"}
+    {
+        "id",
+        "effect",
+        "actions",
+        "actors",
+        "scopes",
+        "permissions",
+        "roles",
+        "resource_arguments",
+        "reason",
+    }
 )
 
 
@@ -98,6 +108,7 @@ class PolicyRegistry:
                     scopes=_string_tuple(item, "scopes", ("*",)),
                     permissions=_string_tuple(item, "permissions", ()),
                     roles=_string_tuple(item, "roles", ()),
+                    resource_arguments=_resource_arguments(item),
                     reason=reason,
                 )
             )
@@ -120,3 +131,18 @@ def _string_tuple(item: dict, key: str, default: tuple[str, ...]) -> tuple[str, 
     ):
         raise PolicyDocumentError(f"policy rule field {key!r} must be a string list")
     return tuple(value)
+
+
+def _resource_arguments(item: dict) -> dict[str, str]:
+    value = item.get("resource_arguments", {})
+    if not isinstance(value, dict) or not all(
+        isinstance(argument, str)
+        and bool(argument)
+        and isinstance(resource, str)
+        and bool(resource)
+        for argument, resource in value.items()
+    ):
+        raise PolicyDocumentError(
+            "policy rule field 'resource_arguments' must map argument names to context resources"
+        )
+    return dict(value)

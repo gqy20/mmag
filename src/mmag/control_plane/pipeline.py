@@ -119,6 +119,50 @@ class MessagePipeline:
         await self.scheduler.submit(event)
         return True
 
+    async def replay_dead_letter(
+        self,
+        event_id: str,
+        *,
+        replay_id: str,
+        actor_id: str,
+    ) -> bool:
+        """Replay one failed Inbox record as a new, caller-idempotent event."""
+        if not replay_id or not actor_id:
+            raise ValueError("replay_id and actor_id are required")
+        source = self.store.get_inbox(event_id)
+        if source.status != "failed":
+            raise ValueError(f"inbox event {event_id!r} is not a dead letter")
+        try:
+            existing = self.store.get_inbox(replay_id)
+        except KeyError:
+            pass
+        else:
+            replay_metadata = existing.event.payload.get("_mmag_replay", {})
+            if replay_metadata.get("source_event_id") != event_id:
+                raise ValueError(f"replay id {replay_id!r} is already used by another event")
+            return False
+
+        payload = dict(source.event.payload)
+        payload["_mmag_replay"] = {
+            "source_event_id": event_id,
+            "requested_by": actor_id,
+            "source_attempts": source.attempts,
+            "source_error": source.last_error,
+        }
+        replay = InboundEvent(
+            event_id=replay_id,
+            platform=source.event.platform,
+            event_type=source.event.event_type,
+            conversation_id=source.event.conversation_id,
+            actor_id=source.event.actor_id,
+            occurred_at=time.time(),
+            payload=payload,
+        )
+        accepted = await self.accept(replay)
+        if accepted:
+            self._append_replay_audit(source.event, replay, actor_id)
+        return accepted
+
     async def join(self) -> None:
         await self.scheduler.join()
         self._delivery_wake.set()
@@ -196,6 +240,24 @@ class MessagePipeline:
             )
         except Exception:
             log.exception("inbox %s audit write failed", event.event_id)
+
+    def _append_replay_audit(
+        self,
+        source: InboundEvent,
+        replay: InboundEvent,
+        actor_id: str,
+    ) -> None:
+        try:
+            self.store.append_audit(
+                "inbox.replayed",
+                actor_id=actor_id,
+                scope_id=source.conversation_id,
+                target=replay.event_id,
+                decision="accepted",
+                details={"source_event_id": source.event_id},
+            )
+        except Exception:
+            log.exception("inbox replay %s audit write failed", replay.event_id)
 
     async def _delivery_loop(self) -> None:
         while True:

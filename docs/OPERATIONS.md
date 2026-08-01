@@ -16,6 +16,14 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 - 出站网络只允许 Mattermost、配置的模型端点和显式授权的 MCP Server。
 - Secret 通过环境或部署平台 Secret 注入，不写入镜像、日志和数据库。
 
+## Policy 与网络隔离
+
+- 全局 Bot 使用 `global-bot@1.0.0`，默认效果为 `deny`。`resource_arguments` 将 Capability 参数映射到可信的请求资源；缺参数、缺可信资源或值不一致都会拒绝。
+- 当前频道资源来自已认证 Mattermost 事件，而不是 Prompt。`get_posts`、消息/知识检索和知识写入不能跨到模型自行提供的其他频道；画像默认只允许读取当前 actor。
+- 文件外发和所有外部 MCP 调用默认进入 LangGraph 审批。审批恢复会还原原始 CapabilityContext，副作用前的用户意图与频道目标不会被审批消息覆盖。
+- MCP stdio 子进程仅继承 `PATH`、语言、临时目录、Home 和 Windows 启动必需变量；其他值必须在 `.mcp.json` 的 Server `env` 中显式声明。环境隔离不是进程沙箱，高风险 Server 仍应放入容器并限制文件系统与网络。
+- URL 分析禁用自动重定向与环境代理；初始 URL 和最多五个重定向目标均重新做协议、DNS 和公网 IP 校验。出站防火墙仍是最终网络边界。
+
 ## 容量与保护
 
 - `PIPELINE_MAX_CONCURRENCY` 控制跨会话执行并发，默认 8。
@@ -27,6 +35,14 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 - Outbox 使用持久 delivery ID 作为 Mattermost `pending_post_id`，进程内和重启后的重试复用同一幂等键。
 
 Task 与 AgentRun 的终态语义不同：AgentRun 在模型执行成功后结束；存在出站消息时，Task 必须等全部 Delivery 成功后才进入 `succeeded`，任何最终 Delivery 失败都会把 Task 标为 `failed`。
+
+## Inbox DLQ 与 replay
+
+非瞬时错误或超过重试次数的事件保持 `failed`，它们就是持久 DLQ。应用管理层可用 `SQLiteControlPlane.list_dead_letters(limit=..., conversation_id=...)` 查询，并在运行中的 Pipeline 上调用 `MessagePipeline.replay_dead_letter(event_id, replay_id=..., actor_id=...)`。
+
+replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新事件，在 `_mmag_replay` 中记录来源、操作人、原尝试次数和错误。操作方必须使用稳定、唯一的 `replay_id`（建议来自工单或管理命令 ID）；相同来源与 ID 的重复调用返回 `False`，ID 与其他事件碰撞则拒绝。成功入队写入 `inbox.replayed` 审计。
+
+当前接口是应用服务 API，尚未暴露为远程管理端点。生产接入管理面时必须增加管理员认证、scope 授权、批量限速和二次确认；在此之前不要直接修改 `inbox_events` 状态。
 
 ## 审批安全
 

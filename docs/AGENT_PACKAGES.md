@@ -40,7 +40,7 @@ model-policies/<model-policy-name>.yml
 
 模型只生成 `result` 对象，外围 Envelope 由 MMAG 创建，避免模型伪造 usage 或 provenance。首次输出不是合法 JSON 或不满足 Schema 时，Runner 最多调用一次 `output_repair`；修复调用看不到任何 Capability。第二次仍失败时抛出错误码 `INVALID_OUTPUT`，结果不得 handoff。
 
-能力边界分两层：Manifest allowlist 决定 Runtime 能看见什么；Policy Engine 在 CapabilityExecutor 执行前根据真实 action、permission、actor、scope 和 role 再次裁决。默认 Policy 是 DENY。
+能力边界分两层：Manifest allowlist 决定 Runtime 能看见什么；Policy Engine 在 CapabilityExecutor 执行前根据真实 action、permission、actor、scope、role 和动态资源参数再次裁决。`resource_arguments` 把模型参数（如 `channel_id`）映射到可信请求上下文资源，参数缺失、资源缺失或值不一致均不匹配。默认 Policy 是 DENY。
 
 ## 版本与复现
 
@@ -55,6 +55,6 @@ model-policies/<model-policy-name>.yml
 
 ## 当前状态与下一步
 
-Link Agent 已完成首个纵向切片：启动加载 Package 与版本化只读 Policy，运行时校验输入、输出和 `link_analysis` Artifact。全局 Bot 仍显式使用临时 ALLOW 策略以保持既有工具行为，这是兼容边界，不适用于新 Package。
+Link Agent 已完成首个纵向切片：启动加载 Package 与版本化只读 Policy，运行时校验输入、输出和 `link_analysis` Artifact。全局 Bot 已迁移到版本化 `global-bot@1.0.0` 默认拒绝 Policy；频道读取/知识写入只能命中当前会话资源，画像默认仅可读取本人，文件外发与 MCP 调用需要审批。
 
-接下来按依赖顺序推进：持久 provenance → Model Policy Registry/ModelGateway 接线 → Research Package → Presentation Package → `research-report` Artifact → 严格 handoff → eval 发布门禁与回滚 → 删除全局 ALLOW 兼容。
+接下来按依赖顺序推进：持久 provenance → Model Policy Registry/ModelGateway 接线 → Research Package → Presentation Package → `research-report` Artifact → 严格 handoff → eval 发布门禁与回滚 → 全局 Bot Package 化。

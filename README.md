@@ -189,6 +189,7 @@ Bot 支持三种触发方式：
 - [LangGraph HITL ADR](docs/adr/0005-langgraph-native-hitl.md)：checkpoint、interrupt、resume 与生命周期同步；
 - [请求级 Capability Context ADR](docs/adr/0003-request-scoped-capability-context.md)：异步上下文隔离与持久 SDK 桥接策略；
 - [MCP Capability Adapter ADR](docs/adr/0004-mcp-capability-adapter.md)：外部工具发现、双 Runtime binding 与统一 Policy；
+- [资源级 Policy 与恢复 ADR](docs/adr/0006-resource-policy-and-replay.md)：动态资源约束、MCP/URL 隔离和 Inbox replay；
 - [Mattermost ID 指南](docs/MATTERMOST_ID_GUIDE.md)：Team、Channel 和 User ID 的获取与配置。
 
 ## 记忆系统
@@ -223,7 +224,10 @@ Bot 具备跨会话持久记忆：
 - **断线续传**：通过 `connection_id` + `sequence_number` 实现断线后恢复
 - **消息永久存储**：`message_log` 表只增不删，启动时 backfill 补全 Mattermost 端所有历史；FTS5 虚表（unicode61）支持中英文 BM25 全文检索
 - **Schema 演进**：启动时按版本顺序执行原子 migration；支持旧库字段补齐、`message_cache` 数据/FTS 迁移、失败回滚及未来版本拒绝
-- **MCP 权限**：外部 MCP 默认不连接，需通过 `MCP_ALLOWED_TOOLS` 精确授权 `mcp_<server>_<tool>`；命中后统一进入 Capability Policy
+- **MCP 权限**：外部 MCP 默认不连接，需通过 `MCP_ALLOWED_TOOLS` 精确授权 `mcp_<server>_<tool>`；命中后仍统一进入默认拒绝 Policy，调用默认需审批，stdio 子进程只继承最小运行环境
+- **资源级 Policy**：全局 Bot 不再使用兼容 ALLOW；频道/用户参数必须匹配请求上下文中的真实资源，文件外发进入 LangGraph 原生审批
+- **链接安全**：URL 客户端禁用自动重定向和环境代理，每个重定向目标都重新执行 DNS/IP SSRF 校验
+- **失败恢复**：处理失败的 Inbox 可按频道查询为 DLQ；人工 replay 使用新 `event_id`，保留原失败证据并通过调用方 `replay_id` 幂等
 - **消息可靠性**：重复 `posted` 事件在 Runtime 调用前按持久化 post ID 去重；创建回复使用 `pending_post_id` 对瞬时故障做有界幂等重试
 - **Runtime 边界**：应用层统一使用不可变 `RunRequest` / `AgentResult`；LangGraph 默认持久运行，Claude SDK 仅显式启用
 - **Prompt 资源**：默认使用 wheel 内置 `prompts.yml`；开发时可设置 `PROMPTS_PATH` 显式覆盖

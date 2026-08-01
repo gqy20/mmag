@@ -12,7 +12,7 @@ from mmag.capabilities import (
     CapabilityStatus,
     SourcePolicy,
 )
-from mmag.mcp_bridge import MCPClientBridge
+from mmag.mcp_bridge import MCPClientBridge, _stdio_environment
 from mmag.tools import ToolRegistry
 
 
@@ -57,6 +57,23 @@ def test_external_mcp_allowlist_matches_exact_tool_name():
 
     assert bridge.is_tool_allowed("docs", "search") is True
     assert bridge.is_tool_allowed("docs", "delete") is False
+
+
+def test_stdio_environment_only_inherits_runtime_basics_and_explicit_server_values(
+    monkeypatch,
+):
+    monkeypatch.setenv("PATH", "/runtime/bin")
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+    monkeypatch.setenv("MM_TOKEN", "mattermost-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "model-secret")
+
+    environment = _stdio_environment({"DOCS_TOKEN": "explicit-secret"})
+
+    assert environment["PATH"] == "/runtime/bin"
+    assert environment["LANG"] == "zh_CN.UTF-8"
+    assert environment["DOCS_TOKEN"] == "explicit-secret"
+    assert "MM_TOKEN" not in environment
+    assert "ANTHROPIC_API_KEY" not in environment
 
 
 @pytest.mark.asyncio

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from fnmatch import fnmatch
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from ..capabilities import CapabilityAuthorization
@@ -29,6 +30,10 @@ class GovernanceContext:
     actor_id: str
     scope: str
     roles: frozenset[str] = frozenset()
+    resources: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "resources", MappingProxyType(dict(self.resources)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +45,15 @@ class PolicyRule:
     permissions: tuple[str, ...] = ()
     roles: tuple[str, ...] = ()
     actions: tuple[str, ...] = ("*",)
+    resource_arguments: Mapping[str, str] = field(default_factory=dict)
     reason: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "resource_arguments",
+            MappingProxyType(dict(self.resource_arguments)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,21 +79,42 @@ class PolicyEngine:
         arguments: Mapping[str, Any],
         context: GovernanceContext,
     ) -> PolicyDecision:
-        del arguments
         for rule in self.rules:
-            if self._matches(rule, spec, context):
+            if self._matches(rule, spec, arguments, context):
                 reason = rule.reason or f"matched policy {rule.id}"
                 return PolicyDecision(rule.effect, rule.id, reason)
         return PolicyDecision(self.default_effect, "default", "no explicit policy rule matched")
 
     @staticmethod
-    def _matches(rule: PolicyRule, spec: CapabilitySpec, context: GovernanceContext) -> bool:
+    def _matches(
+        rule: PolicyRule,
+        spec: CapabilitySpec,
+        arguments: Mapping[str, Any],
+        context: GovernanceContext,
+    ) -> bool:
         return (
             any(fnmatch(spec.name, pattern) for pattern in rule.actions)
             and any(fnmatch(context.actor_id, pattern) for pattern in rule.actors)
             and any(fnmatch(context.scope, pattern) for pattern in rule.scopes)
-            and (not rule.permissions or spec.permission in rule.permissions)
+            and (
+                not rule.permissions
+                or any(fnmatch(spec.permission, pattern) for pattern in rule.permissions)
+            )
             and (not rule.roles or bool(context.roles.intersection(rule.roles)))
+            and PolicyEngine._matches_resources(rule, arguments, context)
+        )
+
+    @staticmethod
+    def _matches_resources(
+        rule: PolicyRule,
+        arguments: Mapping[str, Any],
+        context: GovernanceContext,
+    ) -> bool:
+        return all(
+            argument in arguments
+            and resource_name in context.resources
+            and arguments[argument] == context.resources[resource_name]
+            for argument, resource_name in rule.resource_arguments.items()
         )
 
 

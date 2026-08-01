@@ -47,17 +47,30 @@ class LangGraphApprovalCoordinator:
         *,
         requested_by: str,
         scope_id: str,
+        capability_context: CapabilityContext | None = None,
     ) -> ApprovalRequest:
         interruption = dict(result.interruptions[0])
         payload = dict(interruption["value"])
         tool_calls = list(payload.get("tool_calls", ()))
         names = ", ".join(str(call.get("capability", "?")) for call in tool_calls)
+        if capability_context is not None:
+            payload["capability_context"] = {
+                "trace_id": capability_context.trace_id,
+                "conversation_id": capability_context.conversation_id,
+                "message_id": capability_context.message_id,
+                "message": capability_context.message,
+            }
         approval = self.approvals.request(
             names or "langgraph_tool_batch",
             {
                 "thread_id": payload["thread_id"],
                 "interrupt_id": interruption["id"],
                 "tool_calls": tool_calls,
+                **(
+                    {"capability_context": payload["capability_context"]}
+                    if "capability_context" in payload
+                    else {}
+                ),
             },
             requested_by=requested_by,
             scope_id=scope_id,
@@ -114,18 +127,33 @@ class LangGraphApprovalCoordinator:
         )
         decisions = _decisions(payload, approved)
         thread_id = str(payload["thread_id"])
+        original_context = payload.get("capability_context", {})
+        if not isinstance(original_context, dict):
+            original_context = {}
         context = CapabilityContext(
-            trace_id=trace_id,
+            trace_id=str(original_context.get("trace_id") or trace_id),
             actor_id=request.requested_by,
-            conversation_id=request.scope_id.rsplit("/", 1)[-1],
-            message_id=request_id,
-            message="approval resume",
+            conversation_id=str(
+                original_context.get("conversation_id")
+                or request.scope_id.rsplit("/", 1)[-1]
+            ),
+            message_id=str(original_context.get("message_id") or request_id),
+            message=str(original_context.get("message") or "approval resume"),
             scope=request.scope_id,
         )
         self._transition_run(thread_id, "running", request_id)
         with (
             bind_capability_context(context),
-            bind_governance_context(GovernanceContext(request.requested_by, request.scope_id)),
+            bind_governance_context(
+                GovernanceContext(
+                    request.requested_by,
+                    request.scope_id,
+                    resources={
+                        "actor_id": request.requested_by,
+                        "conversation_id": context.conversation_id,
+                    },
+                )
+            ),
         ):
             result = await self.gateway.resume(thread_id, {"decisions": decisions})
         if result.status is not RuntimeStatus.WAITING_APPROVAL:

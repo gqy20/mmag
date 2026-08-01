@@ -34,7 +34,7 @@ import re
 import socket
 import time
 from html.parser import HTMLParser
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -54,6 +54,8 @@ log = get_logger(__name__)
 USER_AGENT = "mmag-bot/0.1 (+https://github.com)"
 DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 GITHUB_API_BASE = "https://api.github.com"
+MAX_REDIRECTS = 5
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 # 文本中识别 URL 的正则（保守：截断到空白/常见终止符）
 URL_PATTERN = re.compile(
@@ -107,7 +109,8 @@ def _get_client() -> httpx.AsyncClient:
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
             timeout=DEFAULT_TIMEOUT,
-            follow_redirects=True,
+            follow_redirects=False,
+            trust_env=False,
             headers={
                 "User-Agent": USER_AGENT,
                 "Accept": "application/json, text/html;q=0.9, */*;q=0.8",
@@ -194,14 +197,43 @@ def _is_safe_url(url: str) -> tuple[bool, str | None]:
                 for net in _BLOCKED_NETWORKS:
                     if ip in net:
                         return False, f"目标解析到内网/回环 IP: {ip_str} ({net})"
+                if not ip.is_global:
+                    return False, f"目标解析到非公网 IP: {ip_str}"
             return True, None
         # host 本身就是 IP
         for net in _BLOCKED_NETWORKS:
             if ip in net:
                 return False, f"内网/回环 IP 被禁止: {ip} ({net})"
+        if not ip.is_global:
+            return False, f"非公网 IP 被禁止: {ip}"
         return True, None
     except socket.gaierror as e:
         return False, f"DNS 解析失败: {e}"
+
+
+class UnsafeUrlError(ValueError):
+    """Raised before a request when an initial or redirected URL is unsafe."""
+
+
+async def _safe_get(url: str) -> httpx.Response:
+    """GET a URL with SSRF validation repeated before every redirect hop."""
+    client = _get_client()
+    current_url = url
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        safe, reason = _is_safe_url(current_url)
+        if not safe:
+            target = "重定向目标" if redirect_count else "URL"
+            raise UnsafeUrlError(f"{target}被拒绝: {reason or '不安全的目标'}")
+        response = await client.get(current_url)
+        if response.status_code not in _REDIRECT_STATUSES:
+            return response
+        location = response.headers.get("location", "")
+        if not location:
+            raise UnsafeUrlError("重定向响应缺少 Location")
+        if redirect_count >= MAX_REDIRECTS:
+            raise UnsafeUrlError(f"重定向次数超过上限 {MAX_REDIRECTS}")
+        current_url = urljoin(str(response.url), location)
+    raise UnsafeUrlError(f"重定向次数超过上限 {MAX_REDIRECTS}")
 
 
 # ============================================================
@@ -331,8 +363,7 @@ def _is_rate_limit_response(resp: httpx.Response) -> bool:
 
 
 async def _github_get(path: str) -> httpx.Response:
-    client = _get_client()
-    return await client.get(f"{GITHUB_API_BASE}{path}")
+    return await _safe_get(f"{GITHUB_API_BASE}{path}")
 
 
 async def _fetch_readme(owner: str, repo: str) -> str | None:
@@ -344,7 +375,7 @@ async def _fetch_readme(owner: str, repo: str) -> str | None:
     """
     try:
         resp = await _github_get(f"/repos/{owner}/{repo}/readme")
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, UnsafeUrlError) as e:
         log.debug("README 拉取失败 (%s/%s): %s", owner, repo, e)
         return None
     # 限流/404/5xx: 不影响主流程, 静默失败
@@ -380,7 +411,7 @@ async def _analyze_github_repo(owner: str, repo: str) -> dict:
             _github_get(f"/repos/{owner}/{repo}"),
             _fetch_readme(owner, repo),
         )
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, UnsafeUrlError) as e:
         return _err_dict("github_repo", f"网络错误: {e}")
     return _process_github_repo_response(repo_resp, owner, repo, readme=readme_text)
 
@@ -471,7 +502,7 @@ async def _analyze_github_issue(owner: str, repo: str, number: str) -> dict:
 async def _analyze_github_issue_impl(owner: str, repo: str, number: str, *, kind: str) -> dict:
     try:
         resp = await _github_get(f"/repos/{owner}/{repo}/issues/{number}")
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, UnsafeUrlError) as e:
         return _err_dict(kind, f"网络错误: {e}")
     if _is_rate_limit_response(resp):
         return _err_dict(kind, "GitHub API 限流 (60次/小时)，稍后重试", status="rate_limited")
@@ -556,9 +587,8 @@ async def _analyze_webpage(url: str) -> dict:
     if not safe:
         return _err_dict("webpage", reason or "URL 被拒绝", status="error")
     try:
-        client = _get_client()
-        resp = await client.get(url)
-    except httpx.HTTPError as e:
+        resp = await _safe_get(url)
+    except (httpx.HTTPError, UnsafeUrlError) as e:
         return _err_dict("webpage", f"网络错误: {e}")
     if resp.status_code == 404:
         return _err_dict("webpage", "404 Not Found", status="not_found")

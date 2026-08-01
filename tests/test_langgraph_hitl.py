@@ -3,7 +3,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mmag.capabilities import CapabilityEffect, CapabilityExecutor, CapabilitySpec
+from mmag.capabilities import (
+    CapabilityContext,
+    CapabilityEffect,
+    CapabilityExecutor,
+    CapabilitySpec,
+    get_capability_context,
+)
 from mmag.capabilities.bindings import bind_langgraph_capability
 from mmag.control_plane import (
     ApprovalService,
@@ -306,4 +312,61 @@ async def test_approval_coordinator_rejects_unqualified_actor_without_resuming(t
 
     assert store.get_approval_request(request.id).state.value == "pending"
     gateway.resume.assert_not_awaited()
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_approval_resume_restores_original_capability_context(tmp_path: Path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    lifecycle = LifecycleService(store)
+    observed_contexts: list[CapabilityContext | None] = []
+
+    async def resume(thread_id, decisions):
+        observed_contexts.append(get_capability_context())
+        return AgentResult("done", "langgraph")
+
+    gateway = AsyncMock()
+    gateway.resume = AsyncMock(side_effect=resume)
+    coordinator = LangGraphApprovalCoordinator(
+        store,
+        lifecycle,
+        ApprovalService(store, lifecycle),
+        gateway,
+        authorizer=StaticApprovalAuthorizer(frozenset({"reviewer-1"})),
+    )
+    paused = AgentResult(
+        "",
+        "langgraph",
+        RuntimeStatus.WAITING_APPROVAL,
+        interruptions=(
+            {
+                "id": "interrupt-1",
+                "value": {"thread_id": "run-1", "tool_calls": []},
+            },
+        ),
+    )
+    original = CapabilityContext(
+        "trace-original",
+        "user-1",
+        "channel-1",
+        "post-1",
+        "请导出并发文件",
+        "mattermost:team-1/channel-1",
+    )
+    approval = coordinator.register(
+        paused,
+        requested_by="user-1",
+        scope_id=original.scope,
+        capability_context=original,
+    )
+
+    await coordinator.resume(
+        approval.id,
+        approved=True,
+        actor_id="reviewer-1",
+        scope_id=original.scope,
+        trace_id="trace-review",
+    )
+
+    assert observed_contexts == [original]
     store.close()
