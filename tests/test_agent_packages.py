@@ -277,7 +277,43 @@ async def test_runtime_package_repairs_invalid_json_once_and_removes_tools():
     assert len(runtime.requests) == 2
     assert runtime.requests[0].capabilities
     assert runtime.requests[1].capabilities == ()
+    repair_prompt = runtime.requests[1].messages[0]["content"]
+    assert "Exact required JSON Schema" in repair_prompt
+    assert '{"type": "object"}' in repair_prompt
     assert result.envelope["usage"]["model_calls"] == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_package_narrows_channel_argument_to_trusted_conversation():
+    package = AgentPackageLoader().load(PACKAGE_ROOT)
+    capability_spec = CapabilitySpec(
+        name="analyze_link",
+        description="analyze",
+        input_schema={
+            "type": "object",
+            "properties": {"channel_id": {"type": "string"}},
+        },
+        handler=lambda: {},
+    )
+    capability = {
+        "name": "analyze_link",
+        "input_schema": capability_spec.input_schema,
+    }
+    runtime = SequenceRuntime([json.dumps({"summary": "ok"})])
+    agent = PackageAgentRunner(package, runtime, {"analyze_link": capability})
+
+    await agent.run(
+        AgentRequest(
+            intent="link",
+            prompt="https://example.com",
+            scope="mattermost:team-1/channel-1",
+        )
+    )
+
+    projected = runtime.requests[0].capabilities[0]["input_schema"]["properties"]["channel_id"]
+    assert projected["const"] == "channel-1"
+    assert "const" not in capability_spec.input_schema["properties"]["channel_id"]
+    assert runtime.requests[0].context.conversation_id == "channel-1"
 
 
 @pytest.mark.asyncio

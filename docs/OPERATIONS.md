@@ -8,10 +8,14 @@ Delivery worker 和 SQLite 控制面，不需要额外消息队列。
 ```text
 Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ── LLM provider
                                   │
-                                  └── persistent volume / agent_memory.db + artifacts/
+                                  └── persistent volume
+                                      ├── agent_memory.db
+                                      ├── agent_checkpoints.db
+                                      └── artifacts/
 ```
 
-- 每个 SQLite 数据库只运行一个 mmag 写实例；横向扩展前必须先更换支持租约的存储。
+- `MEMORY_DB_PATH` 保存业务/control-plane 状态，`CHECKPOINT_DB_PATH` 只保存 LangGraph checkpoint；
+  两者必须是不同文件。每个 SQLite 数据库只运行一个 mmag 写实例；横向扩展前必须先更换支持租约的存储。
 - 数据目录与 `ARTIFACT_STORE_PATH` 使用同一故障域内的持久卷，数据库开启 WAL、foreign keys、busy timeout 和 NORMAL synchronous。
 - 出站网络只允许 Mattermost、配置的模型端点和显式授权的 MCP Server。
 - Secret 通过环境或部署平台 Secret 注入，不写入镜像、日志和数据库。
@@ -70,9 +74,10 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 
 ## 备份与恢复
 
-1. 使用 `mmag.governance.backup_sqlite` 或 SQLite Online Backup API 生成一致性备份。
+1. 停止实例写入后，分别对 `MEMORY_DB_PATH` 和 `CHECKPOINT_DB_PATH` 使用
+   `mmag.governance.backup_sqlite` 或 SQLite Online Backup API 生成配对的一致性备份。
 2. 将备份复制到独立故障域并按组织的数据保留策略轮转。
-3. 恢复时停止旧实例，将备份恢复到新路径，再启动单个实例。
+3. 恢复时停止旧实例，将两份数据库备份恢复到配置路径，再启动单个实例。
 4. 启动过程会运行 forward-only migration，并 reconciliation 遗留的
    `RUNNING`、`SENDING`、`PROCESSING/RETRYING` 和未投递记录。
 5. 恢复演练必须验证 Inbox 不重复执行、Outbox 可继续投递、审批仍可读取、Artifact 文件与 SQLite metadata 一致，并能用原 `thread_id` 从 LangGraph SQLite checkpoint 恢复。
@@ -80,6 +85,8 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 ## 升级与回滚
 
 - 升级前备份数据库并先运行 `make verify`。
+- 从共库版本升级且存在待审批 Run 时，必须先停止实例并迁移 `checkpoints`、`writes` 表到
+  `CHECKPOINT_DB_PATH`，或先处理完待审批 Run；不能只切换路径后丢弃旧 checkpoint。
 - migration 只向前；应用回滚前必须确认旧版本支持当前 schema。
 - 优雅关闭顺序为：停止 WebSocket 接收、排空分区队列、排空 Delivery、关闭外部连接、关闭 SQLite。
 

@@ -125,6 +125,35 @@ async def test_delivery_terminal_state_settles_parent_task(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_delivered_error_response_keeps_agent_run_and_task_failed(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+
+    async def process(event: InboundEvent) -> tuple[OutboundMessage, ...]:
+        return (
+            OutboundMessage(
+                event.conversation_id,
+                "task failed",
+                message_kind="error",
+            ),
+        )
+
+    async def deliver(message: OutboundMessage) -> str:
+        return "error-post"
+
+    pipeline = MessagePipeline(store, process, deliver)
+    await pipeline.start()
+    await pipeline.accept(_event("agent-error", "channel"))
+    await pipeline.join()
+    await pipeline.close()
+
+    run = store.get_lifecycle_entity(EntityType.AGENT_RUN, "run:agent-error")
+    task = store.get_lifecycle_entity(EntityType.TASK, "task:agent-error")
+    assert run.state == "failed"
+    assert task.state == "failed"
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_pipeline_retries_transient_processing_failure_with_persisted_attempts(tmp_path):
     store = SQLiteControlPlane(tmp_path / "control.db")
     runs = 0

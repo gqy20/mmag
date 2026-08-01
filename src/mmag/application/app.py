@@ -66,10 +66,16 @@ from .probe import MattermostCapabilityProbe
 log = get_logger(__name__)
 
 
+def _validate_database_paths(memory_path: str, checkpoint_path: str) -> None:
+    if Path(memory_path).resolve() == Path(checkpoint_path).resolve():
+        raise ValueError("MEMORY_DB_PATH and CHECKPOINT_DB_PATH must use separate files")
+
+
 class Agent:
     """Application lifecycle; domain execution lives in composed services."""
 
     def __init__(self) -> None:
+        _validate_database_paths(config.memory_db_path, config.checkpoint_db_path)
         self.mm = MMClient()
         self.memory = Memory(config.memory_db_path)
         self.control_store = SQLiteControlPlane(config.memory_db_path)
@@ -127,7 +133,7 @@ class Agent:
         self.langgraph_runtime = LangGraphRuntimeAdapter(
             LLM(),
             capability_registry=self.capability_registry,
-            checkpoint_path=config.memory_db_path,
+            checkpoint_path=config.checkpoint_db_path,
         )
         self.runtime = ModelGateway(
             {"default": self.langgraph_runtime},

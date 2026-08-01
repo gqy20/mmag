@@ -132,6 +132,7 @@ MAX_CONTEXT_MESSAGES=30                  # 上下文窗口大小
 TYPING_DELAY_MIN=1                       # 模拟打字最短延迟(秒)
 TYPING_DELAY_MAX=3                       # 模拟打字最长延迟(秒)
 MEMORY_DB_PATH=./agent_memory.db        # SQLite 记忆存储路径
+CHECKPOINT_DB_PATH=./agent_checkpoints.db # LangGraph checkpoint 独立路径
 LOG_LEVEL=INFO                          # 日志级别 DEBUG/INFO/WARNING/ERROR
 ```
 

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/evals/scenario/1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "kind", "metadata", "spec"],
+  "properties": {
+    "api_version": {"const": "mmag.ai/eval/v1"},
+    "kind": {"const": "EvaluationScenario"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,127}$"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "tags": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor", "input", "expected"],
+      "properties": {
+        "actor": {"type": "string", "minLength": 1},
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["message"],
+          "properties": {"message": {"type": "string", "minLength": 1}}
+        },
+        "expected": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "response": {"$ref": "#/$defs/response"},
+            "approval": {"$ref": "#/$defs/approval"},
+            "artifacts": {"$ref": "#/$defs/artifacts"},
+            "control_plane": {"$ref": "#/$defs/controlPlane"}
+          }
+        },
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_duration_seconds": {"type": "number", "minimum": 1, "maximum": 1800}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["result", "approval", "error", "status"]},
+        "terminal_status": {"enum": ["succeeded", "failed", "exhausted", "waiting_approval"]},
+        "thread_required": {"type": "boolean"},
+        "raw_json_forbidden": {"type": "boolean"},
+        "contains_all": {"$ref": "#/$defs/strings"},
+        "contains_any": {"$ref": "#/$defs/strings"},
+        "not_contains": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "decision": {"enum": ["approve", "reject"]},
+        "actor": {"type": "string", "minLength": 1},
+        "authorized": {"type": "boolean"}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"minimum": {"type": "integer", "minimum": 0}}
+    },
+    "controlPlane": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent_run_state": {"type": "string"},
+        "task_state": {"type": "string"}
+      }
+    }
+  }
+}

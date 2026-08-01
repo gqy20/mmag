@@ -99,6 +99,10 @@ class ScriptExecutor:
             raise
         except Exception as error:
             code = getattr(error, "code", "execution_failed")
+            details = {"error_code": str(code)}
+            audit_details = getattr(error, "audit_details", {})
+            if isinstance(audit_details, dict):
+                details.update(audit_details)
             self._audit(
                 context,
                 profile,
@@ -106,7 +110,7 @@ class ScriptExecutor:
                 "failed",
                 input_hash,
                 script_hash,
-                {"error_code": str(code)},
+                details,
             )
             raise ScriptExecutionError(
                 f"managed execution failed with {code}",

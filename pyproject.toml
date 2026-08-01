@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 mmag = "mmag.cli:main"
+mmag-eval = "mmag.evaluation.cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -2,6 +2,9 @@
 
 import logging
 
+import pytest
+
+from mmag.application.app import _validate_database_paths
 from mmag.config import _log_config_loading
 
 
@@ -16,3 +19,12 @@ def test_config_log_reports_secret_presence_without_value(monkeypatch, caplog):
     assert "ANTHROPIC_API_KEY = (已设置)" in caplog.text
     assert "MM_PREFI" not in caplog.text
     assert "AK_PREFI" not in caplog.text
+
+
+def test_business_and_checkpoint_databases_must_be_separate(tmp_path):
+    business = tmp_path / "business.db"
+    checkpoint = tmp_path / "checkpoints.db"
+
+    _validate_database_paths(str(business), str(checkpoint))
+    with pytest.raises(ValueError, match="must use separate files"):
+        _validate_database_paths(str(business), str(tmp_path / "." / "business.db"))

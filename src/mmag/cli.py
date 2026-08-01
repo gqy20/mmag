@@ -11,25 +11,28 @@ from .logger import get_logger, init_logging
 log = get_logger(__name__)
 
 
-async def main():
-    # 统一日志初始化（控制台 + 按日期分文件 + 自动清理）
+async def _run_agent() -> None:
+    agent = Agent()
+    try:
+        await agent.start()
+    finally:
+        await agent.stop()
+
+
+def main() -> None:
+    """Synchronous console-script entry point."""
     init_logging(
         level=config.log_level,
         log_dir=config.log_dir or None,
         retain_days=config.log_retention_days,
     )
-
-    agent = Agent()
     try:
-        # Agent.start() 内部已包含指数退避重连；自然返回/抛错时由 KeyboardInterrupt/Exception 兜底
-        await agent.start()
+        asyncio.run(_run_agent())
     except KeyboardInterrupt:
-        log.info("👋 收到中断信号，正在停止...")
-        await agent.stop()
+        log.info("👋 收到中断信号，已停止")
     except Exception as e:
         log.error("Agent 异常退出: %s", e, exc_info=True)
-        await agent.stop()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

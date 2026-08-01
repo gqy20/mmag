@@ -72,6 +72,7 @@ _FIELD_TO_ENV: dict[str, str] = {
     "typing_delay_min": "TYPING_DELAY_MIN",
     "typing_delay_max": "TYPING_DELAY_MAX",
     "memory_db_path": "MEMORY_DB_PATH",
+    "checkpoint_db_path": "CHECKPOINT_DB_PATH",
     "log_level": "LOG_LEVEL",
     "log_dir": "LOG_DIR",
     "log_retention_days": "LOG_RETENTION_DAYS",
@@ -170,6 +171,7 @@ class Config:
     typing_delay_min: float = float(os.getenv("TYPING_DELAY_MIN", "1"))
     typing_delay_max: float = float(os.getenv("TYPING_DELAY_MAX", "3"))
     memory_db_path: str = os.getenv("MEMORY_DB_PATH", "./agent_memory.db")
+    checkpoint_db_path: str = os.getenv("CHECKPOINT_DB_PATH", "./agent_checkpoints.db")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     log_dir: str = os.getenv("LOG_DIR", "logs")  # 日志目录（空则不写文件）
     log_retention_days: int = int(os.getenv("LOG_RETENTION_DAYS", "30"))  # 日志保留天数

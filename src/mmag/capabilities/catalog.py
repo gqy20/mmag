@@ -359,9 +359,8 @@ def _get_posts_cached(mm_client, memory, channel_id: str, limit: int) -> list[di
         for post in rest_posts:
             post["channel_id"] = channel_id
             post["username"] = mm_client.get_username(post.get("user_id", ""))
-            if not memory.log_message(post):
-                log.warning("get_posts 回填 message_log 失败 (id=%s)", post.get("id", "")[:12])
-        log.debug("get_posts: 已回填 %d 条消息到本地缓存", len(rest_posts))
+        # READ Capability 不附带缓存写副作用。实时 WebSocket 消息仍由入口链路
+        # 持久化，避免工具超时后遗留的 to_thread 在后台继续修改业务状态。
     return rest_posts if rest_posts else cached
 
 

@@ -18,6 +18,7 @@ from mmag.execution import (
     ExecutionProfileLoader,
     ExecutionProfileRegistry,
     ExecutionWorkspace,
+    ProcessFailedError,
     ProcessRequest,
     ProcessResult,
     ProcessRunner,
@@ -52,6 +53,11 @@ class WritingRunner:
         else:
             request.output_path.write_bytes(b"PK\x03\x04governed-pptx")
         return ProcessResult(0, 12, 0, 0, "a" * 64, "b" * 64)
+
+
+class FailingRunner:
+    async def run(self, request):
+        raise ProcessFailedError(7, b"", b"renderer failed without sensitive input")
 
 
 def _profiles() -> ExecutionProfileRegistry:
@@ -226,6 +232,12 @@ def test_process_runner_fails_closed_without_sandbox(tmp_path):
             ProcessRunner(Path(sys.prefix), bubblewrap_path="/missing/bwrap").build_argv(request)
 
 
+def test_process_runner_classifies_namespace_denial_as_sandbox_unavailable():
+    assert ProcessRunner._is_sandbox_bootstrap_failure(
+        b"bwrap: Creating new namespace failed: Operation not permitted"
+    )
+
+
 @pytest.mark.asyncio
 async def test_process_communication_timeout_cancels_stream_tasks(tmp_path):
     class HangingProcess:
@@ -364,6 +376,31 @@ async def test_script_executor_rejects_tampered_skill_script(tmp_path):
             permission="artifact:generate",
             payload={"deck": _deck()},
         )
+
+
+@pytest.mark.asyncio
+async def test_script_executor_audits_content_free_process_failure_details(tmp_path):
+    executor, store, _, _ = _executor(tmp_path, FailingRunner())
+    session = SkillResourceLoader().create_session(_slides())
+
+    with (
+        bind_capability_context(_context()),
+        bind_skill_resource_session(session),
+        pytest.raises(ScriptExecutionError),
+    ):
+        await executor.execute(
+            profile_ref="ppt@1.0.0",
+            capability="ppt.render",
+            permission="artifact:generate",
+            payload={"deck": _deck()},
+        )
+
+    audit = store.list_audits(event_type="execution.process", target="ppt.render")[0]
+    assert audit.details["error_code"] == "process_failed"
+    assert audit.details["return_code"] == 7
+    assert audit.details["stderr_bytes"] > 0
+    assert len(audit.details["stderr_sha256"]) == 64
+    assert "renderer failed" not in json.dumps(audit.details)
 
 
 def test_agent_manifest_cannot_self_authorize_skill_execution_profile(tmp_path):

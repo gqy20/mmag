@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -22,6 +23,7 @@ from ..capabilities import (
 )
 from ..governance import GovernanceContext, bind_governance_context, get_governance_context
 from ..runtimes import RunContext, RunRequest, RuntimeStatus
+from ..runtimes.base import thaw
 from ..skill_packages import (
     SkillContractError,
     SkillResourceLoader,
@@ -39,8 +41,6 @@ from .errors import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from ..agent_system import ManagedAgent
     from ..runtimes import AgentRuntime
     from .models import AgentPackage, PromptAsset, SchemaAsset
@@ -267,6 +267,47 @@ def _validate_skill_output(package: AgentPackage, request: AgentRequest, result:
     )
 
 
+def _expected_result_schema(package: AgentPackage, request: AgentRequest) -> Mapping[str, Any]:
+    if request.skill is not None:
+        skill = package.skills[request.skill.ref]
+        return skill.schemas[skill.manifest.output_schema_ref].schema
+    envelope_schema = package.schemas[package.manifest.result_schema_ref].schema
+    properties = envelope_schema.get("properties", {})
+    result_schema = properties.get("result") if isinstance(properties, Mapping) else None
+    if isinstance(result_schema, Mapping) and isinstance(result_schema.get("$ref"), str):
+        reference = result_schema["$ref"]
+        if reference.startswith("#/$defs/"):
+            definitions = envelope_schema.get("$defs", {})
+            name = reference.removeprefix("#/$defs/")
+            result_schema = definitions.get(name) if isinstance(definitions, Mapping) else None
+    return result_schema if isinstance(result_schema, Mapping) else envelope_schema
+
+
+def _schema_json(schema: Mapping[str, Any]) -> str:
+    return json.dumps(
+        thaw(schema),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _bind_conversation_resource(
+    capabilities: tuple[Mapping[str, Any], ...], conversation_id: str
+) -> tuple[Mapping[str, Any], ...]:
+    """Narrow model-visible channel arguments without changing authorization policy."""
+    projected: list[Mapping[str, Any]] = []
+    for capability in capabilities:
+        narrowed = thaw(capability)
+        schema = narrowed.get("input_schema")
+        properties = schema.get("properties") if isinstance(schema, dict) else None
+        channel = properties.get("channel_id") if isinstance(properties, dict) else None
+        if isinstance(channel, dict):
+            channel["const"] = conversation_id
+            channel["description"] = "Trusted originating conversation ID; use this exact value."
+        projected.append(narrowed)
+    return tuple(projected)
+
+
 def _create_resource_session(
     package: AgentPackage,
     request: AgentRequest,
@@ -479,6 +520,7 @@ class PackageAgentRunner:
             capabilities = tuple(
                 self._capability_catalog[name] for name in request.skill.capabilities
             )
+        capabilities = _bind_conversation_resource(capabilities, conversation_id)
         system_prompt = _render(self.package.prompts[prompt.system_ref], variables)
         if request.skill is not None:
             system_prompt = f"{system_prompt}\n\n## Active Skill\n{request.skill.prompt_context}"
@@ -486,7 +528,7 @@ class PackageAgentRunner:
             context=RunContext(
                 trace_id=envelope["run_id"][:12],
                 actor_id=request.actor_id,
-                conversation_id=request.scope,
+                conversation_id=conversation_id,
                 scope=request.scope,
                 deadline=now + timedelta(seconds=self.package.manifest.runtime.timeout_seconds),
                 run_id=envelope["run_id"],
@@ -558,12 +600,17 @@ class PackageAgentRunner:
                 "invalid_output": runtime_result.text,
                 "validation_error": str(first_error),
             }
+            repair_content = _render(self.package.prompts[repair_ref], repair_variables)
+            repair_content = (
+                f"{repair_content}\n\nExact required JSON Schema:\n"
+                f"{_schema_json(_expected_result_schema(self.package, request))}"
+            )
             repair_request = replace(
                 runtime_request,
                 messages=(
                     {
                         "role": "user",
-                        "content": _render(self.package.prompts[repair_ref], repair_variables),
+                        "content": repair_content,
                     },
                 ),
                 capabilities=(),

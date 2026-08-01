@@ -1,0 +1,22 @@
+api_version: mmag.ai/eval/v1
+kind: EvaluationScenario
+
+metadata:
+  id: mattermost-chat-basic
+  version: 1.0.0
+  tags: [mattermost, smoke, chat]
+
+spec:
+  actor: requester
+  input:
+    message: "@{bot} 请简短确认当前用户与 Bot 的评估链路正常。"
+  expected:
+    response:
+      kind: result
+      terminal_status: succeeded
+      thread_required: true
+      raw_json_forbidden: true
+      contains_any: [评估, 链路, 正常]
+      not_contains: [password=, token=, api_key=]
+  thresholds:
+    max_duration_seconds: 120

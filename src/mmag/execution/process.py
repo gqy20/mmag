@@ -20,6 +20,10 @@ from .models import ProcessRequest, ProcessResult
 class ProcessExecutionError(RuntimeError):
     code = "execution_failed"
 
+    def __init__(self, message: str, *, audit_details: dict[str, int | str] | None = None) -> None:
+        super().__init__(message)
+        self.audit_details = dict(audit_details or {})
+
 
 class SandboxUnavailableError(ProcessExecutionError):
     code = "sandbox_unavailable"
@@ -36,8 +40,11 @@ class ProcessOutputLimitError(ProcessExecutionError):
 class ProcessFailedError(ProcessExecutionError):
     code = "process_failed"
 
-    def __init__(self, return_code: int) -> None:
-        super().__init__(f"managed process exited with code {return_code}")
+    def __init__(self, return_code: int, stdout: bytes = b"", stderr: bytes = b"") -> None:
+        super().__init__(
+            f"managed process exited with code {return_code}",
+            audit_details=_failure_details(return_code, stdout, stderr),
+        )
         self.return_code = return_code
 
 
@@ -80,7 +87,13 @@ class ProcessRunner:
             await self._terminate(process)
             raise
         if return_code != 0:
-            raise ProcessFailedError(return_code)
+            details = _failure_details(return_code, stdout, stderr)
+            if self._is_sandbox_bootstrap_failure(stderr):
+                raise SandboxUnavailableError(
+                    "bubblewrap could not create the required sandbox",
+                    audit_details=details,
+                )
+            raise ProcessFailedError(return_code, stdout, stderr)
         duration_ms = max(0, round((time.monotonic() - started) * 1000))
         logical_argv = json.dumps(
             {
@@ -286,3 +299,23 @@ class ProcessRunner:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
+
+    @staticmethod
+    def _is_sandbox_bootstrap_failure(stderr: bytes) -> bool:
+        lowered = stderr.lower()
+        return (
+            b"creating new namespace failed" in lowered
+            or b"no permissions to create a new namespace" in lowered
+            or (b"bwrap:" in lowered and b"operation not permitted" in lowered)
+        )
+
+
+def _failure_details(return_code: int, stdout: bytes, stderr: bytes) -> dict[str, int | str]:
+    """Return bounded, content-free process diagnostics safe for audit storage."""
+    return {
+        "return_code": return_code,
+        "stdout_bytes": len(stdout),
+        "stderr_bytes": len(stderr),
+        "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+    }

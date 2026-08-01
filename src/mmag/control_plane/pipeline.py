@@ -209,12 +209,14 @@ class MessagePipeline:
         self.store.complete_event(event.event_id, messages)
         run_id = f"run:{event.event_id}"
         run = self.store.get_lifecycle_entity(EntityType.AGENT_RUN, run_id)
+        failed = any(message.message_kind == "error" for message in messages)
         if run.state == "running":
             self.lifecycle.transition(
                 EntityType.AGENT_RUN,
                 run_id,
-                "succeeded",
-                command_id=f"run-success:{event.event_id}",
+                "failed" if failed else "succeeded",
+                command_id=f"run-{'failed' if failed else 'success'}:{event.event_id}",
+                reason="agent returned an error response" if failed else "",
             )
         if not messages:
             self._transition_task(event.event_id, "succeeded", "no delivery required")
@@ -385,7 +387,11 @@ class MessagePipeline:
             return
         deliveries = self.store.list_deliveries_for_run(agent_run_id)
         if deliveries and all(delivery.status == "delivered" for delivery in deliveries):
-            self._transition_task(event_id, "succeeded", "all deliveries completed")
+            run = self.store.get_lifecycle_entity(EntityType.AGENT_RUN, agent_run_id)
+            if run.state == "failed":
+                self._transition_task(event_id, "failed", "agent failed; error delivery completed")
+            else:
+                self._transition_task(event_id, "succeeded", "all deliveries completed")
 
     def _transition_task(self, event_id: str, target: str, reason: str) -> None:
         task_id = f"task:{event_id}"

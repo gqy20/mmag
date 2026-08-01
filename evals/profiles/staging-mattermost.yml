@@ -1,0 +1,26 @@
+api_version: mmag.ai/eval/v1
+kind: EvaluationProfile
+
+metadata:
+  id: staging-mattermost
+  version: 1.0.0
+
+spec:
+  driver: mattermost-api
+  base_url_env: MM_URL
+  channel_id_env: MM_CHANNEL_ID
+  bot_username_env: MM_E2E_BOT_USERNAME
+  enabled_env: MMAG_E2E_ENABLED
+  control_plane_db_env: MEMORY_DB_PATH
+  timeout_seconds: 300
+  poll_interval_seconds: 1
+  actors:
+    requester:
+      username_env: MM_USERNAME
+      password_env: MM_PASSWORD
+    approver:
+      username_env: MM_APPROVER_USERNAME
+      password_env: MM_APPROVER_PASSWORD
+    unauthorized:
+      username_env: MM_UNAUTHORIZED_USERNAME
+      password_env: MM_UNAUTHORIZED_PASSWORD

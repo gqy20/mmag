@@ -1,0 +1,27 @@
+api_version: mmag.ai/eval/v1
+kind: EvaluationScenario
+
+metadata:
+  id: mattermost-ppt-approval
+  version: 1.0.0
+  tags: [mattermost, ppt, approval, artifact]
+
+spec:
+  actor: requester
+  input:
+    message: "@{bot} 生成一份三页项目状态汇报 PPTX，并在审批后发送到当前线程。"
+  expected:
+    response:
+      kind: result
+      terminal_status: succeeded
+      thread_required: true
+      raw_json_forbidden: true
+    approval:
+      required: true
+      decision: approve
+      actor: requester
+      authorized: true
+    artifacts:
+      minimum: 1
+  thresholds:
+    max_duration_seconds: 300

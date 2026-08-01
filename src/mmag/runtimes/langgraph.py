@@ -321,6 +321,7 @@ class LangGraphRuntimeAdapter:
         artifacts: list[dict[str, Any]] = []
         deliveries: list[dict[str, Any]] = []
         capability_calls: list[dict[str, Any]] = []
+        failed_approved_capabilities: set[str] = set()
         for call in last_tool_calls(state):
             authorization = self.capability_registry.authorization(call["name"], call["input"])
             requires_approval = bool(
@@ -349,19 +350,31 @@ class LangGraphRuntimeAdapter:
             payload = self._tool_payload(result)
             artifacts.extend(self._tool_artifacts(payload))
             deliveries.extend(self._tool_deliveries(payload))
+            if requires_approval and "error" in payload:
+                # An error does not prove that a side effect did not occur. Do not expose
+                # the same approved write again during this run: the model may summarize
+                # the failure, but a retry requires a new user request and approval chain.
+                failed_approved_capabilities.add(call["name"])
             capability_calls.append(
                 {
                     "name": call["name"],
                     "status": "error" if "error" in payload else "succeeded",
                 }
             )
-        return {
+        update: dict[str, Any] = {
             "messages": new_messages,
             "review_decisions": {},
             "artifacts": artifacts,
             "deliveries": deliveries,
             "capability_calls": capability_calls,
         }
+        if failed_approved_capabilities:
+            update["capabilities"] = [
+                capability
+                for capability in state["capabilities"]
+                if capability.get("name") not in failed_approved_capabilities
+            ]
+        return update
 
     @staticmethod
     def _tool_payload(result: str) -> dict[str, Any]:

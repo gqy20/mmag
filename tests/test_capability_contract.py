@@ -157,20 +157,18 @@ async def test_get_posts_bindings_share_cache_hit_behavior():
 
 
 @pytest.mark.asyncio
-async def test_get_posts_caps_rest_fallback_and_backfills_cache():
+async def test_get_posts_caps_rest_fallback_without_writing_during_tool_execution():
     memory, client = MagicMock(), MagicMock()
     memory.get_recent_messages.return_value = []
     client.get_posts.return_value = [
         {"id": "post-1", "user_id": "user-1", "message": "hello", "create_at": 1}
     ]
     client.get_username.return_value = "alice"
-    memory.log_message.return_value = True
-
     spec = create_get_posts_capability(client, memory)
     result = await bind_langgraph_capability(spec).handler(channel_id="channel-1", limit=999)
 
     client.get_posts.assert_called_once_with("channel-1", limit=100)
-    memory.log_message.assert_called_once()
+    memory.log_message.assert_not_called()
     assert result["messages"][0] == {"user": "alice", "message": "hello", "time": 1}
 
 

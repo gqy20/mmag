@@ -68,9 +68,12 @@ def _runtime(
     responses: list[ParsedResponse],
     *,
     checkpoint_path: Path | None = None,
+    publish_error: Exception | None = None,
 ) -> tuple[LangGraphRuntimeAdapter, AsyncMock]:
     async def publish(value: str) -> dict[str, str]:
         calls.append(value)
+        if publish_error is not None:
+            raise publish_error
         return {"published": value}
 
     spec = CapabilitySpec(
@@ -195,6 +198,39 @@ async def test_native_review_can_edit_arguments_or_reject():
         )
     assert rejected.text == "not published"
     assert rejected_calls == []
+
+
+@pytest.mark.asyncio
+async def test_failed_approved_write_is_not_exposed_for_automatic_retry():
+    calls: list[str] = []
+    runtime, complete = _runtime(
+        calls,
+        [_tool_turn()],
+        publish_error=RuntimeError("write outcome is unknown"),
+    )
+    context = GovernanceContext("user-1", "mattermost:team-1/channel-1")
+    with bind_governance_context(context):
+        await runtime.run(_request("failed-write-run"))
+
+    observed_tools: list[tuple[str, ...]] = []
+
+    async def finish_after_failure(*, tools, **kwargs):
+        del kwargs
+        observed_tools.append(tuple(tool["name"] for tool in tools))
+        return ParsedResponse(texts=["write failed without retry"])
+
+    complete.side_effect = finish_after_failure
+    with bind_governance_context(context):
+        result = await runtime.resume(
+            "failed-write-run",
+            {"decisions": [{"tool_call_id": "call-1", "decision": "approve"}]},
+        )
+
+    assert result.status is RuntimeStatus.COMPLETED
+    assert result.text == "write failed without retry"
+    assert calls == ["original"]
+    assert observed_tools == [()]
+    assert result.capability_calls == ({"name": "publish", "status": "error"},)
 
 
 @pytest.mark.asyncio

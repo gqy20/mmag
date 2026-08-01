@@ -21,10 +21,13 @@ venv/
 
 # 运行时数据
 agent_memory.db
+agent_checkpoints.db
 *.db-journal
 *.db-wal
 *.db-shm
 /artifacts/
+/.eval-runs/
+/.playwright-cli/
 
 # IDE / 编辑器
 .vscode/
