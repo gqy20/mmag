@@ -100,6 +100,17 @@ make verify     # Ruff、coverage、mypy、wheel smoke
 
 默认测试不访问真实 Mattermost、LLM 或公网。wheel smoke 会验证 Agent、Skill、Policy 和 Model Policy 能脱离源码树加载。
 
+系统评估资产位于 `evals/`。静态校验不会访问外部服务；真实用户—Bot E2E 必须同时显式开启环境门禁
+和 `--allow-external`，并只使用专用测试账号：
+
+```bash
+uv run mmag-eval --root evals validate
+MMAG_E2E_ENABLED=1 uv run mmag-eval --root evals run suites/smoke.yml \
+  --profile profiles/staging-mattermost.yml --allow-external
+```
+
+详细边界见 [评估体系](docs/EVALUATION.md)。
+
 ## 项目结构
 
 ```text
@@ -126,6 +137,7 @@ skills/
 policies/                  # 默认拒绝的 Policy-as-Code
 model-policies/            # 模型路由、输出预算和采样策略
 execution-profiles/        # 固定 argv、断网、挂载和资源限制
+evals/                     # 跨组件系统评估 Scenario、Suite 与 Profile
 
 src/mmag/
   application/             # Composition root、消息编排、上下文/附件、Delivery
@@ -137,6 +149,7 @@ src/mmag/
   runtimes/                # LangGraph 默认 Runtime、可选 Claude SDK Adapter
   control_plane/           # Inbox/Outbox、Lifecycle、Approval、DLQ/replay
   governance/              # Policy、Model Policy、Secret、Quota、运维原语
+  evaluation/              # 评估 Loader、Runner、断言、Driver 与报告
   infrastructure/          # 持久化基础设施
   memory.py                # 记忆业务 Facade
   memory_compactor.py      # 长期记忆压缩
@@ -194,6 +207,7 @@ Skill 同样使用扁平目录和 Manifest 内版本。`SKILL.md` 只描述工�
 - [Roadmap](docs/ROADMAP.md)
 - [技术债](docs/TECH_DEBT.md)
 - [运维指南](docs/OPERATIONS.md)
+- [评估体系](docs/EVALUATION.md)
 - [架构决策记录](docs/adr/)
 
 ## License

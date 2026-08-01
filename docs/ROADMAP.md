@@ -72,6 +72,16 @@
 - [x] 已确认当前差距：普通最终回复未传 `root_id`，`OutboundMessage` 未承载 `file_ids`/Artifact/action，结构化 Agent 结果尚无 Mattermost 展示层；
 - [x] 当前 `MM_URL` 为明文 HTTP，公开配置可读但认证配置探测不安全；未使用 Bot Token 执行探测。
 
+### 评估基线
+
+- [x] Agent/Skill Package 的 contract case 进入各自 Package Hash；
+- [x] 定义顶层 `mmag.ai/eval/v1` Profile、Suite、Scenario 和 Result 契约，严格拒绝未知字段与路径越界；
+- [x] 实现 `EvaluationRunner`、确定性功能/安全断言、Suite 阈值和原子脱敏 JSON 报告；
+- [x] 实现显式 Mattermost 用户登录、Thread 观察、文本审批和 Artifact 交付观察 Driver；真实请求要求
+  `external` 标记、双重开关及 HTTPS/本机受信 HTTP；
+- [x] 默认测试保持离线，真实用户—Bot smoke、PPT 审批和未授权审批作为显式 Suite；
+- [x] 已确认当前边界：尚未把评估执行接入 Package 激活事务，也未持久化正式发布记录。
+
 ## 实施原则
 
 1. 单向硬迁移，不保留旧模块转发层；
@@ -139,9 +149,10 @@
 
 优先级：P0。
 
-- [ ] contract case 在激活前离线执行；
+- [x] 建立版本化系统 Eval Loader、Runner、真实 Mattermost Driver、确定性断言和报告格式；
+- [ ] Agent/Skill contract case 在激活前离线执行；
 - [ ] quality case 定义数据集版本、阈值和评分器版本；
-- [ ] eval 结果 Hash、发布时间和发布人进入发布记录；
+- [ ] EvaluationRun、结果 Hash、环境快照、发布时间和发布人进入控制面发布记录；
 - [ ] 失败 Package 不得生成发布制品或进入部署；
 - [ ] 旧制品可按 Package Hash 原子回滚。
 
@@ -235,12 +246,77 @@
 
 优先级：P1。
 
-- [ ] 统一 Agent/Runtime/Capability/Approval/Delivery 结构化事件字段；
-- [ ] 输出 duration、status、error code、queue depth 和 cost 指标；
-- [ ] 可选接入 OpenTelemetry，控制 label 基数和正文采集；
-- [ ] 完成目标环境容量、备份恢复、升级回滚和灾难演练。
+### 当前审计基线
 
-退出标准：告警可定位到 Run/Package/Capability，目标环境有可验证 RPO/RTO。
+- [x] 已有统一 `mmag.*` Logger、控制台/文件输出、启动期保留清理和基于 `ContextVar` 的请求
+  `trace_id`；
+- [x] Capability 常规日志只记录参数 key、输入 Hash、耗时和结果大小，受控执行审计已记录 Profile、
+  脚本、可执行文件、argv、输入和 Artifact Hash；
+- [x] 已有独立 `AuditEvent` 存储，覆盖 Agent 成功运行、受控执行、审批、Inbox 重试/replay、Delivery
+  终态和 Mattermost 能力探测；
+- [x] 已确认敏感数据风险：用户消息片段进入 INFO，URL 和附件名称可能进入日志，第三方异常正文未经
+  统一脱敏；当前没有中心化 Redaction Filter；
+- [x] 已确认关联性缺口：Trace 仍通过人工拼接文本前缀，异步 Pipeline、Delivery、审批恢复及部分审计
+  没有稳定携带同一组 task/run/trace 标识，异常路径也不能保证自动恢复 Context；
+- [x] 已确认结构化缺口：普通日志没有稳定事件名和 JSON 字段；CapabilityCall 生命周期未逐次持久化，
+  通用 Policy、模型调用和 Agent 失败审计不完整；
+- [x] 已确认审计查询缺口：AuditEvent 没有事件 Schema 版本，Python 模型未暴露 `created_at`，查询缺少
+  trace/run/actor/scope/时间区间和分页能力，也没有归档、保留及防篡改策略；
+- [x] 已确认运维缺口：空 `LOG_DIR` 不能真正关闭文件输出，文件没有大小轮转，过期清理只在启动时执行，
+  时间戳没有时区，多实例可能竞争同一启动日志文件；
+- [x] 已确认测试缺口：当前只覆盖 TraceContext 并发隔离，没有日志脱敏、Context 异常恢复、结构化字段、
+  Handler 生命周期和审计完整性负向测试。
+
+### 实施批次
+
+1. 日志安全基线（P0）：
+   - [ ] 删除消息正文、URL query、敏感文件名和未经分类的异常正文日志；正文只允许进入受保护、显式授权的
+     业务存储，不能进入普通 telemetry；
+   - [ ] 实现中心化 Redaction Filter 和安全异常序列化，默认只输出稳定 `error_code`、异常类型和允许公开的
+     摘要；
+   - [ ] 配置日志改为非敏感字段 allowlist 或带敏感元数据的声明式过滤；新增 Secret 不得依赖手工维护
+     denylist 才能避免泄漏；
+   - [ ] 为正文、Token、Authorization header、签名 URL、Tool 参数和 Provider 异常增加负向泄漏测试。
+
+2. 结构化上下文与运行日志（P1）：
+   - [ ] 用可绑定、可嵌套并通过 ContextVar token 自动 reset 的 `LogContext` 取代人工 `trace.prefix()`；
+   - [ ] 统一传播 `trace_id`、`task_id`、`run_id`、`conversation_id`、`agent_ref`、`skill_ref`、
+     `capability`、`policy_ref` 和 `delivery_id`，包括分区 worker、流式投影、Outbox、审批 interrupt/resume
+     与后台任务；
+   - [ ] 定义版本化运行事件契约，至少包含 UTC timestamp、event、level、status、duration_ms、error_code、
+     attempt 和受控 provenance 字段；
+   - [ ] 生产环境输出 JSON Lines，开发环境保留人类可读 Formatter；业务代码使用稳定事件名，不依赖中文
+     自由文本和 Emoji 作为机器查询条件。
+
+3. 审计闭环（P1）：
+   - [ ] 为 Agent 成功/失败/超时、Runtime、每次 CapabilityCall、Policy allow/deny/approval、模型调用、
+     Approval、Execution、Artifact、Inbox 和 Delivery 建立统一事件目录与 details Schema；
+   - [ ] 将 LangGraph 工具调用接入持久 `CapabilityCall` 生命周期，记录调用 ID、run/trace、能力名、授权
+     决策、状态、耗时和安全输入摘要，不记录完整输入输出；
+   - [ ] 所有审计事件记录 `schema_version`、`created_at`、actor/scope/trace/run 和 Package/Prompt/Skill/
+     Policy/Model Policy provenance；失败分支与恢复分支不得漏记终态；
+   - [ ] 扩展审计查询，支持 trace/run/actor/scope/event/time/status、游标分页和企业导出；定义保留、归档、
+     访问控制及可选防篡改/外部归档边界；
+   - [ ] 审计写入失败必须产生可告警的降级事件；高风险副作用按策略决定 fail-close，不能统一静默继续。
+
+4. Metrics、Trace 与日志运维（P1）：
+   - [ ] 输出 Agent/Skill/Capability/Approval/Delivery 的 duration、status、error code、queue depth、retry、
+     token 和 cost 指标，限制 actor、run、trace 等高基数字段进入 metrics label；
+   - [ ] 可选接入 OpenTelemetry，复用统一 trace/run 上下文；默认不采集 Prompt、消息正文、工具参数、
+     stdout/stderr 或 Artifact 内容；
+   - [ ] 容器部署默认写 stdout 交给平台采集；本地文件模式修复禁用语义，并实现安全轮转、UTC 时区、
+     Handler 关闭及多实例边界；
+   - [ ] 建立 Inbox/Outbox 失败、Runtime timeout/rate-limit、审批积压、预算耗尽、WebSocket 重连、数据库
+     磁盘和 Sandbox/Artifact 故障告警。
+
+5. 部署验收（P1）：
+   - [ ] 完成结构化字段契约、异步 Context 隔离/恢复、审计完整性、日志轮转和 Secret 泄漏测试；
+   - [ ] 在目标日志平台验证按 Run/Package/Capability 定位一次完整请求，并验证采样、脱敏、保留和权限；
+   - [ ] 完成目标环境容量、备份恢复、升级回滚和灾难演练，记录可验证 RPO/RTO。
+
+退出标准：任一请求可通过稳定 trace/run 关联 Agent、Skill、Policy、Capability、审批、Artifact 和 Delivery；
+普通 telemetry 不包含 Secret、消息正文或未脱敏工具参数；关键失败有指标和告警；审计可按 scope 查询并满足
+保留策略；目标环境有可验证 RPO/RTO。
 
 ## 下一步 11：可选 Deep Agents Runtime 与可替换 Sandbox
 
