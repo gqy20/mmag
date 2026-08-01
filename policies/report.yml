@@ -1,0 +1,32 @@
+id: report
+version: 1.0.0
+default_effect: deny
+
+rules:
+  - id: read-skill-resource
+    effect: allow
+    actions: [load_skill_resource]
+    permissions: [skill:resource:read]
+    reason: Report may load only resources declared by its active Skill.
+
+  - id: read-current-knowledge
+    effect: allow
+    actions: [search_knowledge]
+    permissions: [memory:knowledge:read]
+    resource_arguments:
+      channel_id: conversation_id
+    reason: Report research is restricted to the originating channel knowledge scope.
+
+  - id: search-current-messages
+    effect: allow
+    actions: [search_messages]
+    permissions: [memory:messages:read]
+    resource_arguments:
+      channel_id: conversation_id
+    reason: Report research may search only the originating channel history.
+
+  - id: analyze-public-link
+    effect: allow
+    actions: [analyze_link]
+    permissions: [web:read]
+    reason: Public link analysis remains behind the shared SSRF controls.

@@ -14,6 +14,7 @@ from ..capabilities import AuthorizationDecision
 from ..governance import get_governance_context
 from ..llm import LLMError
 from ..model_artifacts import strip_model_artifacts
+from ..skill_packages import get_skill_resource_session
 from .base import (
     AgentResult,
     AgentRuntimeError,
@@ -219,6 +220,7 @@ class LangGraphRuntimeAdapter:
             return {"review_decisions": {}}
 
         governance = get_governance_context()
+        skill_resources = get_skill_resource_session()
         response = interrupt(
             {
                 "kind": "tool_approval",
@@ -231,6 +233,9 @@ class LangGraphRuntimeAdapter:
                     ),
                     "roles": list(governance.roles if governance is not None else ()),
                 },
+                "skill_resource_state": (
+                    skill_resources.to_state() if skill_resources is not None else {}
+                ),
             }
         )
         decisions = response.get("decisions", []) if isinstance(response, Mapping) else []

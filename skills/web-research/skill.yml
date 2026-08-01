@@ -1,0 +1,36 @@
+api_version: mmag.ai/v1
+kind: Skill
+
+metadata:
+  name: web-research
+  version: 1.0.0
+  description: Plan, verify, and synthesize web research with source-aware evidence.
+
+spec:
+  instruction_ref: SKILL.md
+  input_schema_ref: schemas/input.schema.json
+  output_schema_ref: schemas/output.schema.json
+
+  activation:
+    intents: [research, compare, report]
+    keywords: [调研, 研究, 竞品, 对比, research, compare]
+    priority: 50
+
+  required_capabilities:
+    - analyze_link
+    - load_skill_resource
+  optional_capabilities:
+    - search_knowledge
+
+  resources:
+    templates:
+      - templates/report.md
+    references:
+      - references/source-quality.md
+    scripts: []
+
+  disclosure:
+    max_resources: 3
+    max_resource_bytes: 16384
+    max_total_bytes: 32768
+    max_estimated_tokens: 8000

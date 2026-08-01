@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from ..agent_packages import AgentPackageError
 from ..agent_system import AgentRequest
 from ..capabilities import CapabilityContext, bind_capability_context
 from ..config import config
@@ -16,10 +17,12 @@ from ..control_plane import InboundEvent, MessagePipeline, OutboundMessage
 from ..governance import GovernanceContext, bind_governance_context
 from ..logger import get_logger, trace
 from ..runtimes import AgentResult, AgentRuntimeError, RunContext, RunRequest, RuntimeStatus
+from ..skill_packages import SkillPackageError
 from .delivery import OUTBOUND_COLLECTOR, MattermostDelivery
 
 if TYPE_CHECKING:
     from ..agent_system import ManagedAgent
+    from ..skill_packages import SkillResolver
     from .context import AttachmentProcessor, BotIdentity, ContextBuilder
 
 log = get_logger(__name__)
@@ -36,6 +39,8 @@ class MessageHandler:
         compactor,
         capability_registry,
         agent_router,
+        skill_resolver: SkillResolver,
+        audit_store,
         approval_coordinator,
         working_memory: dict[str, list],
         identity: BotIdentity,
@@ -49,6 +54,8 @@ class MessageHandler:
         self.compactor = compactor
         self.capability_registry = capability_registry
         self.agent_router = agent_router
+        self.skill_resolver = skill_resolver
+        self.audit_store = audit_store
         self.approval_coordinator = approval_coordinator
         self.working_memory = working_memory
         self.identity = identity
@@ -218,9 +225,13 @@ class MessageHandler:
         *,
         capabilities: tuple[dict, ...],
         max_rounds: int,
+        skill_context: str = "",
     ) -> RunRequest:
         channel_id = post["channel_id"]
         team_id = self.mm.get_channel(channel_id).get("team_id") or "-"
+        system_prompt = prompt_context["system"]
+        if skill_context:
+            system_prompt = f"{system_prompt}\n\n## Active Skill\n{skill_context}"
         return RunRequest(
             context=RunContext(
                 trace_id=trace.current,
@@ -231,7 +242,7 @@ class MessageHandler:
                 run_id=f"mattermost:{post.get('id', trace.current)}",
             ),
             messages=tuple(prompt_context["messages"]),
-            system_prompt=prompt_context["system"],
+            system_prompt=system_prompt,
             capabilities=capabilities,
             max_rounds=max_rounds,
         )
@@ -248,30 +259,33 @@ class MessageHandler:
         context = self.context_builder.build(post, mention=tag == "mention")
         rounds = max_rounds if max_rounds is not None else config.max_tool_rounds
         request = self.build_agent_request(post, tag)
-        selection = self.agent_router.route(request)
-        runtime_request = self.build_run_request(
-            post,
-            context,
-            capabilities=tuple(
-                self.capability_registry.get_schema_list(selection.agent.descriptor.capabilities)
-            ),
-            max_rounds=rounds,
-        )
         try:
+            selection = self.agent_router.route(request)
+            request = replace(request, intent=selection.intent)
+            request = self._resolve_skill(request, selection.agent)
+            capability_names = self._effective_capabilities(request, selection.agent)
+            runtime_request = self.build_run_request(
+                post,
+                context,
+                capabilities=tuple(self.capability_registry.get_schema_list(capability_names)),
+                max_rounds=rounds,
+                skill_context=request.skill.prompt_context if request.skill is not None else "",
+            )
             result = await self.run_request(
                 post,
-                replace(
-                    self.build_agent_request(post, selection.intent),
-                    runtime_request=runtime_request,
-                ),
+                replace(request, runtime_request=runtime_request),
                 selection.agent,
             )
             response = (
-                self._register_approval_interrupt(post, result)
+                self._register_approval_interrupt(
+                    post,
+                    result,
+                    allowed_capabilities=capability_names,
+                )
                 if result.status is RuntimeStatus.WAITING_APPROVAL
                 else result.text
             )
-        except AgentRuntimeError as error:
+        except (AgentPackageError, AgentRuntimeError, SkillPackageError) as error:
             log.error("%s [%s] Agent 执行失败: %s", trace.prefix(), tag, error, exc_info=True)
             response = "⚠️ LLM 服务暂时不可用，请稍后再试。"
         log.info(
@@ -284,6 +298,26 @@ class MessageHandler:
         if response:
             await self.delivery.reply(post, response)
 
+    def _resolve_skill(self, request: AgentRequest, agent: ManagedAgent) -> AgentRequest:
+        package = getattr(agent, "package", None)
+        if package is None or not package.skills:
+            return request
+        invocation = self.skill_resolver.resolve(
+            package,
+            request,
+            agent.descriptor.capabilities,
+        )
+        return replace(request, skill=invocation)
+
+    @staticmethod
+    def _effective_capabilities(
+        request: AgentRequest,
+        agent: ManagedAgent,
+    ) -> tuple[str, ...]:
+        if request.skill is not None:
+            return request.skill.capabilities
+        return agent.descriptor.capabilities
+
     def build_agent_request(self, post: dict, intent: str) -> AgentRequest:
         return AgentRequest(
             intent=intent,
@@ -295,7 +329,13 @@ class MessageHandler:
             run_id=f"mattermost:{post.get('id', trace.current)}",
         )
 
-    def _register_approval_interrupt(self, post: dict, runtime_result: AgentResult) -> str:
+    def _register_approval_interrupt(
+        self,
+        post: dict,
+        runtime_result: AgentResult,
+        *,
+        allowed_capabilities: tuple[str, ...] = (),
+    ) -> str:
         scope = self.post_scope(post)
         approval = self.approval_coordinator.register(
             runtime_result,
@@ -308,6 +348,7 @@ class MessageHandler:
                 message_id=post.get("id", ""),
                 message=post.get("message", ""),
                 scope=scope,
+                allowed_capabilities=frozenset(allowed_capabilities),
             ),
         )
         return (
@@ -361,6 +402,7 @@ class MessageHandler:
         runtime_request = request.runtime_request
         if not isinstance(runtime_request, RunRequest):
             raise TypeError("Mattermost execution requires a prepared RunRequest")
+        allowed_capabilities = self._effective_capabilities(request, agent)
         capability_context = CapabilityContext(
             trace_id=runtime_request.context.trace_id,
             actor_id=runtime_request.context.actor_id,
@@ -368,7 +410,7 @@ class MessageHandler:
             message_id=post.get("id", ""),
             message=post.get("message", ""),
             scope=runtime_request.context.scope,
-            allowed_capabilities=frozenset(agent.descriptor.capabilities),
+            allowed_capabilities=frozenset(allowed_capabilities),
         )
         with (
             bind_capability_context(capability_context),
@@ -385,17 +427,40 @@ class MessageHandler:
         ):
             package = getattr(agent, "package", None)
             log.info(
-                "%s Agent route intent=%s agent=%s package=%s",
+                "%s Agent route intent=%s agent=%s skill=%s package=%s",
                 trace.prefix(),
                 request.intent,
                 agent.descriptor.name,
+                request.skill.ref if request.skill is not None else "none",
                 package.snapshot.package_hash[:12] if package is not None else "unpackaged",
             )
             output = await agent.run(request)
+            provenance = self._output_provenance(output, request, package)
+            runtime_status = getattr(
+                output.runtime_result,
+                "status",
+                RuntimeStatus.COMPLETED,
+            )
+            self.audit_store.append_audit(
+                "agent.run",
+                actor_id=capability_context.actor_id,
+                scope_id=capability_context.scope,
+                trace_id=capability_context.trace_id,
+                target=agent.descriptor.name,
+                decision=runtime_status.value,
+                details={
+                    "intent": request.intent,
+                    "skill_ref": request.skill.ref if request.skill is not None else "",
+                    "capabilities": list(allowed_capabilities),
+                    "provenance": dict(provenance),
+                    "skill_resource_state": self._interrupted_resource_state(output),
+                },
+            )
             log.info(
-                "%s Agent complete agent=%s artifacts=%d runtime=%s",
+                "%s Agent complete agent=%s skill=%s artifacts=%d runtime=%s",
                 trace.prefix(),
                 output.agent_name,
+                request.skill.ref if request.skill is not None else "none",
                 len(output.artifacts),
                 getattr(output.runtime_result, "runtime", "deterministic"),
             )
@@ -406,3 +471,23 @@ class MessageHandler:
             runtime=f"agent:{output.agent_name}",
             artifacts=tuple(output.artifacts),
         )
+
+    @staticmethod
+    def _output_provenance(output, request: AgentRequest, package) -> dict:
+        if output.envelope:
+            return dict(output.envelope.get("provenance", {}))
+        provenance = package.snapshot.to_dict() if package is not None else {}
+        if request.skill is not None:
+            provenance.update(request.skill.provenance)
+        return provenance
+
+    @staticmethod
+    def _interrupted_resource_state(output) -> dict:
+        runtime_result = output.runtime_result
+        if runtime_result is None or not runtime_result.interruptions:
+            return {}
+        value = runtime_result.interruptions[0].get("value", {})
+        if not isinstance(value, dict):
+            return {}
+        state = value.get("skill_resource_state", {})
+        return dict(state) if isinstance(state, dict) else {}

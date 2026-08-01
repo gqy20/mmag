@@ -44,6 +44,7 @@ from ..memory import Memory
 from ..memory_compactor import MemoryCompactor
 from ..runtimes import ClaudeSDKRuntimeAdapter, LangGraphRuntimeAdapter
 from ..sdk_llm import SDKLLM
+from ..skill_packages import SkillPackageRegistry, SkillResolver, SkillResourceLoader
 from ..ws_client import WebSocketClient
 from .context import AttachmentProcessor, BotIdentity, ContextBuilder
 from .delivery import MattermostDelivery
@@ -87,9 +88,13 @@ class Agent:
             ledger=QuotaLedger(default_limit_usd=config.model_budget_usd),
         )
 
+        self.skill_package_registry = SkillPackageRegistry()
+        self.skill_package_registry.load_directory(Path(config.skill_packages_path))
+        self.skill_resource_loader = SkillResourceLoader()
         self.agent_package_registry = AgentPackageRegistry(
             policy_registry=self.policy_registry,
             model_policy_registry=self.model_policy_registry,
+            skill_registry=self.skill_package_registry,
         )
         self.agent_package_registry.load_directory(Path(config.agent_packages_path))
         self.agent_provider_registry = AgentProviderRegistry()
@@ -99,19 +104,32 @@ class Agent:
                 self.capability_registry,
                 self.model_policy_registry,
                 additional_capabilities=config.mcp_allowed_tools,
+                skill_resources=self.skill_resource_loader,
             )
         )
         self.agent_provider_registry.register(
-            LangGraphJSONProvider(self.runtime, self.capability_registry)
+            LangGraphJSONProvider(
+                self.runtime,
+                self.capability_registry,
+                self.skill_resource_loader,
+            )
         )
         self.agent_provider_registry.register(
-            SingleCapabilityProvider(self.capability_registry, self.capability_executor)
+            SingleCapabilityProvider(
+                self.capability_registry,
+                self.capability_executor,
+                self.skill_resource_loader,
+            )
         )
         self.agent_factory = AgentFactory(self.agent_provider_registry)
         self.agent_registry = AgentRegistry(
             self.agent_factory.create_all(self.agent_package_registry.list())
         )
         self.agent_router = AgentRouter(self.agent_registry)
+        self.skill_resolver = SkillResolver(
+            self.skill_package_registry,
+            self.capability_registry,
+        )
         default_agent = self.agent_registry.default()
         default_package = self.agent_package_registry.get(default_agent.descriptor.name)
 
@@ -126,6 +144,8 @@ class Agent:
             approvals,
             self.runtime,
             authorizer=MattermostApprovalAuthorizer(self.mm),
+            skill_registry=self.skill_package_registry,
+            skill_resources=self.skill_resource_loader,
         )
         self.start_time = time.time()
         self.stats = {"messages": 0, "responses": 0, "dropped_messages": 0}
@@ -153,6 +173,8 @@ class Agent:
             compactor=self.compactor,
             capability_registry=self.capability_registry,
             agent_router=self.agent_router,
+            skill_resolver=self.skill_resolver,
+            audit_store=self.control_store,
             approval_coordinator=self.approval_coordinator,
             working_memory=self.working_memory,
             identity=self.identity,

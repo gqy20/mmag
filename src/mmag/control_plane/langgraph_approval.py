@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 
 from ..capabilities import CapabilityContext, bind_capability_context
 from ..governance import GovernanceContext, bind_governance_context
 from ..runtimes import RuntimeStatus
+from ..skill_packages import bind_skill_resource_session
 from .models import EntityType
 
 if TYPE_CHECKING:
     from ..governance import ModelGateway
     from ..runtimes import AgentResult
+    from ..skill_packages import SkillPackageRegistry, SkillResourceLoader, SkillResourceSession
     from .approval import ApprovalService
     from .approval_policy import ApprovalAuthorizer
     from .lifecycle import LifecycleService
@@ -30,11 +33,15 @@ class LangGraphApprovalCoordinator:
         gateway: ModelGateway,
         *,
         authorizer: ApprovalAuthorizer | None = None,
+        skill_registry: SkillPackageRegistry | None = None,
+        skill_resources: SkillResourceLoader | None = None,
     ) -> None:
         self.store = store
         self.lifecycle = lifecycle
         self.approvals = approvals
         self.gateway = gateway
+        self.skill_registry = skill_registry
+        self.skill_resources = skill_resources
         if authorizer is None:
             from .approval_policy import RequesterApprovalAuthorizer
 
@@ -67,6 +74,7 @@ class LangGraphApprovalCoordinator:
                 "interrupt_id": interruption["id"],
                 "tool_calls": tool_calls,
                 "governance_context": payload.get("governance_context", {}),
+                "skill_resource_state": payload.get("skill_resource_state", {}),
                 **(
                     {"capability_context": payload["capability_context"]}
                     if "capability_context" in payload
@@ -150,9 +158,27 @@ class LangGraphApprovalCoordinator:
             allowed_capabilities = ()
         if not isinstance(roles, (list, tuple)):
             roles = ()
+        resource_session = self._restore_skill_resource_session(payload)
+        resource_context = (
+            bind_skill_resource_session(resource_session)
+            if resource_session is not None
+            else nullcontext()
+        )
+        context = CapabilityContext(
+            context.trace_id,
+            context.actor_id,
+            context.conversation_id,
+            context.message_id,
+            context.message,
+            context.scope,
+            frozenset(
+                str(name) for name in allowed_capabilities if isinstance(name, str) and name
+            ),
+        )
         self._transition_run(thread_id, "running", request_id)
         with (
             bind_capability_context(context),
+            resource_context,
             bind_governance_context(
                 GovernanceContext(
                     request.requested_by,
@@ -172,7 +198,32 @@ class LangGraphApprovalCoordinator:
             result = await self.gateway.resume(thread_id, {"decisions": decisions})
         if result.status is not RuntimeStatus.WAITING_APPROVAL:
             self._transition_run(thread_id, "succeeded", request_id)
+            if resource_session is not None:
+                self.store.append_audit(
+                    "skill.resources.resumed",
+                    actor_id=request.requested_by,
+                    scope_id=request.scope_id,
+                    trace_id=context.trace_id,
+                    target=resource_session.skill_ref,
+                    decision="completed",
+                    details=resource_session.provenance(),
+                )
         return result
+
+    def _restore_skill_resource_session(
+        self,
+        payload: dict[str, Any],
+    ) -> SkillResourceSession | None:
+        state = payload.get("skill_resource_state", {})
+        if not isinstance(state, dict) or not state:
+            return None
+        if self.skill_registry is None or self.skill_resources is None:
+            raise RuntimeError("Skill resource resume services are not configured")
+        skill_ref = state.get("skill_ref")
+        if not isinstance(skill_ref, str) or not skill_ref:
+            raise ValueError("approval contains an invalid Skill resource state")
+        package = self.skill_registry.get(skill_ref)
+        return self.skill_resources.restore_session(package, state)
 
     def _transition_run(self, thread_id: str, target: str, command: str) -> None:
         if not thread_id.startswith("mattermost:"):

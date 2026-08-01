@@ -28,6 +28,7 @@ from .models import (
     PromptDeclaration,
     RoutingDeclaration,
     RuntimeDeclaration,
+    SkillDeclaration,
 )
 
 if TYPE_CHECKING:
@@ -216,6 +217,7 @@ class AgentPackageLoader:
                 runtime["retry"]["max_attempts"],
             ),
             CapabilityDeclaration(tuple(capabilities["allow"]), tuple(capabilities["deny"])),
+            SkillDeclaration(tuple(spec["skills"]["allow"]), tuple(spec["skills"]["deny"])),
             ContextDeclaration(tuple(context["read_scopes"]), tuple(context["write_scopes"])),
             spec["policy_ref"],
             spec["model_policy_ref"],

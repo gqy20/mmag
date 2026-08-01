@@ -1,0 +1,24 @@
+id: ppt
+version: 1.0.0
+default_effect: deny
+
+rules:
+  - id: read-skill-resource
+    effect: allow
+    actions: [load_skill_resource]
+    permissions: [skill:resource:read]
+    reason: PPT may load only resources declared by its active Skill.
+
+  - id: read-current-knowledge
+    effect: allow
+    actions: [search_knowledge]
+    permissions: [memory:knowledge:read]
+    resource_arguments:
+      channel_id: conversation_id
+    reason: Presentation context is restricted to the originating channel knowledge scope.
+
+  - id: approve-deck-delivery
+    effect: require_approval
+    actions: [send_file]
+    permissions: [mattermost:file:write]
+    reason: Delivering generated slide source is an external side effect.

@@ -18,6 +18,11 @@ _INSTALLED_AGENT_PACKAGES = Path(__file__).resolve().parent / "agents"
 _DEFAULT_AGENT_PACKAGES = (
     _SOURCE_AGENT_PACKAGES if _SOURCE_AGENT_PACKAGES.is_dir() else _INSTALLED_AGENT_PACKAGES
 )
+_SOURCE_SKILL_PACKAGES = Path(__file__).resolve().parents[2] / "skills"
+_INSTALLED_SKILL_PACKAGES = Path(__file__).resolve().parent / "skills"
+_DEFAULT_SKILL_PACKAGES = (
+    _SOURCE_SKILL_PACKAGES if _SOURCE_SKILL_PACKAGES.is_dir() else _INSTALLED_SKILL_PACKAGES
+)
 _SOURCE_POLICIES = Path(__file__).resolve().parents[2] / "policies"
 _INSTALLED_POLICIES = Path(__file__).resolve().parent / "policies"
 _DEFAULT_POLICIES = _SOURCE_POLICIES if _SOURCE_POLICIES.is_dir() else _INSTALLED_POLICIES
@@ -63,6 +68,7 @@ _FIELD_TO_ENV: dict[str, str] = {
     "runtime_deadline_seconds": "RUNTIME_DEADLINE_SECONDS",
     "model_budget_usd": "MODEL_BUDGET_USD",
     "agent_packages_path": "AGENT_PACKAGES_PATH",
+    "skill_packages_path": "SKILL_PACKAGES_PATH",
     "policies_path": "POLICIES_PATH",
     "model_policies_path": "MODEL_POLICIES_PATH",
 }
@@ -153,6 +159,7 @@ class Config:
     runtime_deadline_seconds: float = float(os.getenv("RUNTIME_DEADLINE_SECONDS", "120"))
     model_budget_usd: float = float(os.getenv("MODEL_BUDGET_USD", "100"))
     agent_packages_path: str = os.getenv("AGENT_PACKAGES_PATH", str(_DEFAULT_AGENT_PACKAGES))
+    skill_packages_path: str = os.getenv("SKILL_PACKAGES_PATH", str(_DEFAULT_SKILL_PACKAGES))
     policies_path: str = os.getenv("POLICIES_PATH", str(_DEFAULT_POLICIES))
     model_policies_path: str = os.getenv("MODEL_POLICIES_PATH", str(_DEFAULT_MODEL_POLICIES))
 

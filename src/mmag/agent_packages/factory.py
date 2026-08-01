@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from ..agent_system import AgentRequest
     from ..capabilities import CapabilityExecutor, CapabilityRegistry
     from ..governance import ModelGateway, ModelPolicyRegistry
+    from ..skill_packages import SkillResourceLoader
     from .models import AgentPackage
 
 
@@ -81,11 +83,13 @@ class LangGraphTextProvider:
         model_policies: ModelPolicyRegistry,
         *,
         additional_capabilities: tuple[str, ...] = (),
+        skill_resources: SkillResourceLoader | None = None,
     ) -> None:
         self.gateway = gateway
         self.capabilities = capabilities
         self.model_policies = model_policies
         self.additional_capabilities = additional_capabilities
+        self.skill_resources = skill_resources
 
     def create(self, package: AgentPackage) -> ManagedAgent:
         names = self._capability_names(package)
@@ -105,7 +109,7 @@ class LangGraphTextProvider:
             request_factory=self._request_factory(package, names),
             use_prepared_request=package.manifest.routing.default,
         )
-        return ContractAgentDecorator(package, delegate)
+        return ContractAgentDecorator(package, delegate, self.skill_resources)
 
     def _capability_names(self, package: AgentPackage) -> tuple[str, ...]:
         declaration = package.manifest.capabilities
@@ -121,14 +125,47 @@ class LangGraphTextProvider:
         def build(request: AgentRequest, descriptor: AgentDescriptor) -> RunRequest:
             del descriptor
             now = datetime.now(UTC)
+            prepared = request.runtime_request
+            conversation_id = (
+                prepared.context.conversation_id
+                if isinstance(prepared, RunRequest)
+                else request.scope.rsplit("/", 1)[-1]
+            )
             variables: dict[str, Any] = {
                 "current_time": now.isoformat(),
                 "actor_name": request.actor_id,
                 "project_context": request.scope,
+                "conversation_id": conversation_id,
                 "task_goal": request.prompt,
+                "parameters_json": json.dumps(
+                    request.parameters,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ),
+                "context_refs_json": json.dumps(
+                    request.context_refs,
+                    ensure_ascii=False,
+                ),
+                "artifact_refs_json": json.dumps(
+                    request.artifact_refs,
+                    ensure_ascii=False,
+                ),
+                "artifacts_json": json.dumps(
+                    request.artifacts,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ),
                 **request.parameters,
             }
             prompt = package.manifest.prompt
+            selected_names = request.skill.capabilities if request.skill is not None else names
+            system_prompt = render_prompt(package.prompts[prompt.system_ref], variables)
+            if request.skill is not None:
+                system_prompt = (
+                    f"{system_prompt}\n\n## Active Skill\n{request.skill.prompt_context}"
+                )
             return RunRequest(
                 context=RunContext(
                     trace_id=(request.run_id or request.task_id)[:12],
@@ -144,8 +181,8 @@ class LangGraphTextProvider:
                         "content": render_prompt(package.prompts[prompt.task_ref], variables),
                     },
                 ),
-                system_prompt=render_prompt(package.prompts[prompt.system_ref], variables),
-                capabilities=tuple(self.capabilities.get_schema_list(names)),
+                system_prompt=system_prompt,
+                capabilities=tuple(self.capabilities.get_schema_list(selected_names)),
                 max_rounds=min(
                     package.manifest.runtime.max_turns,
                     package.manifest.budget.max_model_calls,
@@ -160,9 +197,15 @@ class LangGraphJSONProvider:
     kind = "langgraph"
     name = "json-v1"
 
-    def __init__(self, gateway: ModelGateway, capabilities: CapabilityRegistry) -> None:
+    def __init__(
+        self,
+        gateway: ModelGateway,
+        capabilities: CapabilityRegistry,
+        skill_resources: SkillResourceLoader | None = None,
+    ) -> None:
         self.gateway = gateway
         self.capabilities = capabilities
+        self.skill_resources = skill_resources
 
     def create(self, package: AgentPackage) -> ManagedAgent:
         declaration = package.manifest.capabilities
@@ -171,7 +214,7 @@ class LangGraphJSONProvider:
             name: self.capabilities.get_schema_list((name,))[0] for name in names
         }
         runtime = RoutedModelRuntime(self.gateway, package.manifest.runtime.route)
-        return PackageAgentRunner(package, runtime, catalog)
+        return PackageAgentRunner(package, runtime, catalog, self.skill_resources)
 
 
 class SingleCapabilityProvider:
@@ -182,9 +225,11 @@ class SingleCapabilityProvider:
         self,
         capabilities: CapabilityRegistry,
         executor: CapabilityExecutor,
+        skill_resources: SkillResourceLoader | None = None,
     ) -> None:
         self.capabilities = capabilities
         self.executor = executor
+        self.skill_resources = skill_resources
 
     def create(self, package: AgentPackage) -> ManagedAgent:
         execution = package.manifest.execution
@@ -222,7 +267,7 @@ class SingleCapabilityProvider:
             source_argument=execution.source_argument,
             artifact_kind=artifact_kind,
         )
-        return ContractAgentDecorator(package, delegate)
+        return ContractAgentDecorator(package, delegate, self.skill_resources)
 
     @staticmethod
     def _validate_source_argument(package: AgentPackage, input_schema) -> None:

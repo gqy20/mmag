@@ -1,0 +1,39 @@
+api_version: mmag.ai/v1
+kind: Skill
+
+metadata:
+  name: project
+  version: 1.0.0
+  description: Convert scoped team evidence into a project plan or status brief.
+
+spec:
+  instruction_ref: SKILL.md
+  input_schema_ref: schemas/input.schema.json
+  output_schema_ref: schemas/output.schema.json
+
+  activation:
+    intents: [project, plan, status]
+    keywords: [项目助理, 项目计划, 任务拆解, 进度跟踪, 里程碑]
+    priority: 60
+
+  required_capabilities:
+    - load_skill_resource
+    - get_posts
+  optional_capabilities:
+    - get_channel_info
+    - search_messages
+    - search_knowledge
+    - save_knowledge
+
+  resources:
+    templates:
+      - templates/brief.md
+    references:
+      - references/status.md
+    scripts: []
+
+  disclosure:
+    max_resources: 2
+    max_resource_bytes: 16384
+    max_total_bytes: 24576
+    max_estimated_tokens: 6000

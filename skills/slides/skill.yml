@@ -1,0 +1,36 @@
+api_version: mmag.ai/v1
+kind: Skill
+
+metadata:
+  name: slides
+  version: 1.0.0
+  description: Turn validated material into an audience-aware, editable presentation structure.
+
+spec:
+  instruction_ref: SKILL.md
+  input_schema_ref: schemas/input.schema.json
+  output_schema_ref: schemas/output.schema.json
+
+  activation:
+    intents: [presentation, ppt, slides]
+    keywords: [PPT, ppt, 幻灯片, 演示文稿, 路演, slides]
+    priority: 70
+
+  required_capabilities:
+    - load_skill_resource
+  optional_capabilities:
+    - search_knowledge
+    - send_file
+
+  resources:
+    templates:
+      - templates/deck.md
+    references:
+      - references/story.md
+    scripts: []
+
+  disclosure:
+    max_resources: 2
+    max_resource_bytes: 16384
+    max_total_bytes: 24576
+    max_estimated_tokens: 6000

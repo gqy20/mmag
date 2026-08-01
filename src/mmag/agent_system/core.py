@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fnmatch import fnmatch
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +29,23 @@ class AgentDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
+class SkillInvocation:
+    """One resolved Skill carried through the trusted runtime boundary."""
+
+    ref: str
+    instructions: str
+    resource_catalog: str
+    capabilities: tuple[str, ...]
+    provenance: Mapping[str, str]
+
+    @property
+    def prompt_context(self) -> str:
+        return "\n\n".join(
+            part for part in (self.instructions, self.resource_catalog) if part
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AgentRequest:
     intent: str
     prompt: str
@@ -41,6 +61,8 @@ class AgentRequest:
     context_refs: tuple[str, ...] = ()
     artifact_refs: tuple[str, ...] = ()
     runtime_request: Any | None = None
+    requested_skill: str = ""
+    skill: SkillInvocation | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,20 +230,12 @@ class HandoffCoordinator:
             try:
                 agent = self.registry.get(name)
                 result = await agent.run(
-                    AgentRequest(
-                        request.intent,
-                        last_text or request.prompt,
-                        request.scope,
-                        request.permissions,
-                        request.required_capabilities,
-                        request.budget_usd,
-                        tuple(artifacts),
-                        request.actor_id,
-                        request.task_id,
-                        request.run_id,
-                        request.parameters,
-                        request.context_refs,
-                        request.artifact_refs,
+                    replace(
+                        request,
+                        prompt=last_text or request.prompt,
+                        artifacts=tuple(artifacts),
+                        runtime_request=None,
+                        skill=None,
                     )
                 )
                 last_text = result.text

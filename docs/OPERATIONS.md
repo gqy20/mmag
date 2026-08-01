@@ -18,7 +18,13 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 
 ## Policy 与网络隔离
 
-- 每次 Capability 调用根据当前 Agent Package 的 `policy_ref` 动态选择 Policy；`mmchat` 使用 `mmchat@1.0.0`，默认效果为 `deny`。`resource_arguments` 将 Capability 参数映射到可信请求资源；缺参数、缺可信资源或值不一致都会拒绝。
+- 启动时先加载 Skill Package，再解析 Agent 的 `skills.allow` 精确版本。未知 Skill、Hash 漂移或 Required Capability 超出 Agent allowlist 会阻止整批 Agent 注册。
+- 选中 Skill 后，模型 Tool Schema、CapabilityContext 和 Package Governance 同时收窄到该 Skill 的 required/available optional 集合。Skill 未声明的 Agent Capability 在本次请求不可执行。
+- `SKILL.md` 在选中后加载；模板和参考资料只能通过 `load_skill_resource` 按精确 ref 加载，并受数量、字节和估算 token 预算限制。`scripts/` 在 v1 没有读取或执行入口。
+- Skill 资源首次按需加载时重新校验发布 Hash，之后按 Hash 缓存。审批 interrupt 保存已披露 ref，resume 只恢复这些资源；实际加载清单进入运行 provenance。
+- 每次 Capability 调用根据当前 Agent Package 的 `policy_ref` 动态选择 Policy；`mmchat`、
+  `link`、`report`、`ppt` 和 `project` 均使用各自版本化 Policy，默认效果为 `deny`。
+  `resource_arguments` 将 Capability 参数映射到可信请求资源；缺参数、缺可信资源或值不一致都会拒绝。
 - 当前频道资源来自已认证 Mattermost 事件，而不是 Prompt。`get_posts`、消息/知识检索和知识写入不能跨到模型自行提供的其他频道；画像默认只允许读取当前 actor。
 - 文件外发和所有外部 MCP 调用默认进入 LangGraph 审批。审批恢复会还原原始 CapabilityContext，副作用前的用户意图与频道目标不会被审批消息覆盖。
 - MCP stdio 子进程仅继承 `PATH`、语言、临时目录、Home 和 Windows 启动必需变量；其他值必须在 `.mcp.json` 的 Server `env` 中显式声明。环境隔离不是进程沙箱，高风险 Server 仍应放入容器并限制文件系统与网络。
@@ -70,7 +76,7 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 
 ## 可观测与告警
 
-所有 Task、AgentRun、CapabilityCall、ApprovalRequest 和 Delivery 都有版本化状态历史；
+所有 Task、AgentRun、CapabilityCall、ApprovalRequest 和 Delivery 都有版本化状态历史；成功的 `agent.run` 审计还记录 Agent/Skill provenance 与本次 Capability 集合。
 Policy 决策、配额和审计事件使用 actor/scope/trace 关联。部署层应至少告警：
 
 - Inbox `failed` 或 Outbox `failed` 增长；

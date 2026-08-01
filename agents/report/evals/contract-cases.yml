@@ -1,0 +1,10 @@
+version: 1
+cases:
+  - id: routes-research-report
+    intent: report
+    goal: 生成一份三家竞品的研究报告
+    expect: succeeded
+  - id: preserves-evidence-gaps
+    intent: research
+    goal: 根据当前证据总结市场规模，未知项必须说明
+    expect: succeeded

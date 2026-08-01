@@ -23,7 +23,7 @@
       "additionalProperties": false,
       "required": [
         "execution", "routing", "accepted_intents", "prompt", "input_schema_ref", "result_schema_ref",
-        "runtime", "capabilities", "context", "policy_ref", "model_policy_ref",
+        "runtime", "capabilities", "skills", "context", "policy_ref", "model_policy_ref",
         "budget", "artifacts"
       ],
       "properties": {
@@ -101,6 +101,15 @@
           "properties": {
             "allow": {"$ref": "#/$defs/stringArray"},
             "deny": {"$ref": "#/$defs/stringArray"}
+          }
+        },
+        "skills": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allow", "deny"],
+          "properties": {
+            "allow": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/versionedRef"}},
+            "deny": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/versionedRef"}}
           }
         },
         "context": {

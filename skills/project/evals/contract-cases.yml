@@ -1,0 +1,17 @@
+version: 1
+cases:
+  - id: selects-for-project-plan
+    input:
+      intent: project
+      goal: 生成项目里程碑计划
+      parameters: {}
+    expect:
+      selected: true
+      capability_subset: [load_skill_resource, get_posts]
+
+  - id: rejects-empty-goal
+    input:
+      intent: plan
+      goal: ""
+      parameters: {}
+    expect_error: INVALID_CONTRACT

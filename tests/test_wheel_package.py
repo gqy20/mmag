@@ -4,7 +4,7 @@ import subprocess
 import zipfile
 
 
-def test_wheel_contains_flat_agent_prompt_resource(tmp_path):
+def test_wheel_contains_flat_agent_and_skill_resources(tmp_path):
     subprocess.run(
         ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],
         check=True,
@@ -15,5 +15,7 @@ def test_wheel_contains_flat_agent_prompt_resource(tmp_path):
 
     with zipfile.ZipFile(wheel) as archive:
         prompt = archive.read("mmag/agents/mmchat/prompts/system.md").decode()
+        skill = archive.read("mmag/skills/web-research/SKILL.md").decode()
 
     assert "## 身份" in prompt
+    assert "# Web Research" in skill

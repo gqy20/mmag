@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
+    from ..skill_packages.models import SkillPackage
+
 
 def frozen_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType(dict(value))
@@ -62,6 +64,12 @@ class CapabilityDeclaration:
 
 
 @dataclass(frozen=True, slots=True)
+class SkillDeclaration:
+    allow: tuple[str, ...]
+    deny: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ContextDeclaration:
     read_scopes: tuple[str, ...]
     write_scopes: tuple[str, ...]
@@ -93,6 +101,7 @@ class AgentManifest:
     result_schema_ref: str
     runtime: RuntimeDeclaration
     capabilities: CapabilityDeclaration
+    skills: SkillDeclaration
     context: ContextDeclaration
     policy_ref: str
     model_policy_ref: str
@@ -139,6 +148,7 @@ class PackageVersionSnapshot:
     policy_hash: str = ""
     model_policy_hash: str = ""
     eval_hash: str = ""
+    skill_set_hash: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -155,6 +165,7 @@ class PackageVersionSnapshot:
             "policy_hash": self.policy_hash,
             "model_policy_hash": self.model_policy_hash,
             "eval_hash": self.eval_hash,
+            "skill_set_hash": self.skill_set_hash,
         }
 
 
@@ -166,3 +177,4 @@ class AgentPackage:
     schemas: Mapping[str, SchemaAsset]
     snapshot: PackageVersionSnapshot
     evals: Mapping[str, EvalAsset] = field(default_factory=lambda: MappingProxyType({}))
+    skills: Mapping[str, SkillPackage] = field(default_factory=lambda: MappingProxyType({}))

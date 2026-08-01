@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/skills/report/output/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title",
+    "executive_summary",
+    "findings",
+    "limitations",
+    "recommendations",
+    "sources"
+  ],
+  "properties": {
+    "title": {"type": "string", "minLength": 1},
+    "executive_summary": {"type": "string", "minLength": 1},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "evidence", "confidence"],
+        "properties": {
+          "claim": {"type": "string", "minLength": 1},
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source_id", "support"],
+              "properties": {
+                "source_id": {"type": "string", "minLength": 1},
+                "support": {"type": "string", "minLength": 1}
+              }
+            }
+          },
+          "confidence": {"enum": ["high", "medium", "low"]}
+        }
+      }
+    },
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "recommendations": {"type": "array", "items": {"type": "string"}},
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "ref", "source_type"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "ref": {"type": "string", "minLength": 1},
+          "source_type": {"enum": ["web", "knowledge", "message", "artifact"]},
+          "observed_at": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

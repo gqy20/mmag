@@ -1,0 +1,17 @@
+version: 1
+cases:
+  - id: selects-for-ppt
+    input:
+      intent: presentation
+      goal: 生成管理层汇报 PPT
+      parameters: {}
+    expect:
+      selected: true
+      capability_subset: [load_skill_resource]
+
+  - id: rejects-empty-goal
+    input:
+      intent: ppt
+      goal: ""
+      parameters: {}
+    expect_error: INVALID_CONTRACT

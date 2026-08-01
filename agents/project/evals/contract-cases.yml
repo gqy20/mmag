@@ -1,0 +1,10 @@
+version: 1
+cases:
+  - id: routes-project-plan
+    intent: project
+    goal: 把本项目拆成里程碑和任务
+    expect: succeeded
+  - id: keeps-unknown-owners
+    intent: plan
+    goal: 整理项目计划，未确认负责人不要猜测
+    expect: succeeded

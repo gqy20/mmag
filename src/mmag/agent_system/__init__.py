@@ -13,6 +13,7 @@ from .core import (
     HandoffStep,
     ManagedAgent,
     RuntimeAgent,
+    SkillInvocation,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "HandoffStep",
     "ManagedAgent",
     "RuntimeAgent",
+    "SkillInvocation",
 ]

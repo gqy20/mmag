@@ -1,0 +1,17 @@
+version: 1
+cases:
+  - id: selects-for-report
+    input:
+      intent: report
+      goal: 生成竞品研究报告
+      parameters: {}
+    expect:
+      selected: true
+      capability_subset: [load_skill_resource, search_knowledge]
+
+  - id: rejects-empty-goal
+    input:
+      intent: research
+      goal: ""
+      parameters: {}
+    expect_error: INVALID_CONTRACT

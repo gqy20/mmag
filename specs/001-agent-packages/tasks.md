@@ -17,11 +17,20 @@
 - [x] Capability 按当前 Package Policy 动态授权，Link 改为通用 Capability Agent；
 - [x] 删除全局 Prompt、旧 Agent/Tool 模块和硬编码占位 Agent；
 - [x] Model Policy Registry、严格引用和 route 校验；
+- [x] Skill Package v1 Manifest、Loader、Registry、Resolver、Schema 与资源 Hash；
+- [x] Agent-Skill 精确版本绑定和 Required Capability 不扩权门禁；
+- [x] Agent → Skill 路由、工具可见性/执行上下文收窄和 Skill provenance 审计；
+- [x] 首个 `web-research@1.0.0` Skill 与 `mmchat@1.1.0` 绑定；
+- [x] Skill Manifest → SKILL.md → template/reference 的三级渐进式披露；
+- [x] ResourceLoader、Hash Cache、数量/字节/token 预算与实际加载 provenance；
+- [x] `load_skill_resource` 进入 Capability/Policy 主链，scripts 保持不可读取和不可执行；
+- [x] LangGraph interrupt/resume 保存并恢复 Skill Resource Session；
 - [x] 聚焦契约测试。
 
 ## 下一阶段
 
-- [ ] 把 provenance、输入/输出 Schema 版本写入持久 AgentRun 与 AuditEvent；
+- [x] 把成功运行的 provenance、输入/输出 Schema 版本写入 AuditEvent；
+- [ ] 将 provenance 与 AgentRun 终态、失败、审批 resume 和 replay 原子持久化；
 - [ ] 把 Model Policy 的 token/model/temperature 参数接入 ModelGateway；
 - [ ] 将 Agent Package 发布加入可执行 eval gate 和发布人元数据；
 - [ ] 为 Runtime 错误实现 Manifest retry 策略，保持副作用调用不自动重试；

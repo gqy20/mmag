@@ -35,5 +35,9 @@ jobs:
         if: github.event_name == 'pull_request'
         run: uv run python scripts/check_agent_versions.py ${{ github.event.pull_request.base.sha }}
 
+      - name: Check Skill Package versions
+        if: github.event_name == 'pull_request'
+        run: uv run python scripts/check_skill_versions.py ${{ github.event.pull_request.base.sha }}
+
       - name: Run engineering gate
         run: make verify

@@ -116,7 +116,8 @@ flowchart LR
     IN --> APP[application.MessageHandler]
     APP --> ROUTER[agent_system.AgentRouter]
     ROUTER --> PKG[Agent Package Contract]
-    PKG --> LG[LangGraph default Runtime]
+    PKG --> SKILL[SkillResolver / Skill Contract]
+    SKILL --> LG[LangGraph default Runtime]
     LG --> REVIEW{review_tools}
     REVIEW -->|REQUIRE_APPROVAL| CP[(SQLite checkpoint)]
     CP -->|Command resume| REVIEW
@@ -219,7 +220,7 @@ WebSocket 事件现在先持久化到 Inbox，由 conversation scheduler 分发�
 2. 多人并发：跨会话并发，同一会话有序；
 3. 多 Agent 可管理：可注册、发现、路由、授权、暂停和审计；
 4. 上下文可继承：组织、项目、客户、会话和任务作用域明确；
-5. 能力只定义一次：同一 Tool/Skill/MCP 能被不同 Runtime 使用；
+5. 原子能力只定义一次：内置 Tool、企业 API 和 MCP Tool 统一适配为 Capability，Skill 只编排 Capability；
 6. 执行可恢复：任务、步骤和投递有持久状态；
 7. 全链路可控：模型、数据、工具、产物和权限均可治理；
 8. 渐进迁移：每一步都保持 Bot 可运行、可回滚。
@@ -363,9 +364,13 @@ Managed Agent 必须具备：
 - 执行记录和审计信息；
 - 取消、降级和健康状态。
 
-### 6.4 Capability Catalog
+### 6.4 Skill Package
 
-Capability 是 Tool、Skill、MCP 或企业 API 的统一抽象。一个能力只能有一个事实定义：
+Skill 是 Agent 可复用的工作方法，包含指令、输入输出 Schema、模板、eval 和所需 Capability。路由必须先选择 Agent，再从该 Agent 的 `skills.allow` 中选择 Skill。Skill 不拥有权限，只能进一步收窄 Agent 已获准的能力。
+
+### 6.5 Capability Catalog
+
+Capability 是内置 Tool、MCP Tool 或企业 API 原子动作的统一抽象。MCP Tool 先适配为 Capability，Skill 再编排一个或多个 Capability；两者不属于同一层。一个原子能力只能有一个事实定义：
 
 ```python
 @dataclass(frozen=True)
@@ -479,10 +484,11 @@ erDiagram
 5. Context Assembler 构建最小必要上下文
 6. Intent Classifier 判断无需响应 / 中枢直接回答 / 创建任务
 7. Agent Router 选择 AgentDescriptor / Agent Package
-8. Runtime 执行，Capability 调用逐次经过 Policy
-9. Result Assembler 汇总文本、来源和产物
-10. Outbox 幂等投递到 Mattermost
-11. 持久化 Run、调用记录、成本和审计事件
+8. SkillResolver 从该 Agent 白名单选择 Skill，并校验输入与 Capability 交集
+9. Runtime 执行，Capability 调用逐次经过 Policy
+10. Skill/Agent 输出契约汇总文本、来源和产物
+11. Outbox 幂等投递到 Mattermost
+12. 持久化 Run、版本 provenance、调用记录、成本和审计事件
 ```
 
 ### 8.2 复杂任务与多 Agent 协作
@@ -541,54 +547,26 @@ Context：组织、会话、任务、时间、风险级别
 - 审计记录用户、Agent、模型、工具、数据作用域、输入摘要、输出摘要和结果；
 - 写操作、外发、删除、审批等高风险能力默认需要更强策略。
 
-## 10. 建议代码结构
+## 10. 当前代码结构
 
-迁移期采用模块化单体：
+项目采用模块化单体，声明包与运行时代码分离：
 
 ```text
+agents/                    # Agent Manifest、Prompt、Schema、eval
+skills/                    # Skill Manifest、SKILL.md、Schema、资源、eval
+policies/                  # 默认拒绝的资源级 Policy
+model-policies/            # 模型路由与生成预算
+
 src/mmag/
-├── bootstrap.py
-├── domain/
-│   ├── conversation.py
-│   ├── context.py
-│   ├── task.py
-│   ├── agent.py
-│   └── capability.py
-├── application/
-│   ├── collaboration_hub.py
-│   ├── conversation_coordinator.py
-│   ├── context_assembler.py
-│   ├── task_planner.py
-│   ├── agent_router.py
-│   ├── result_assembler.py
-│   └── delivery_service.py
-├── agents/
-│   ├── registry.py
-│   ├── link_agent.py
-│   ├── research_agent.py
-│   └── project_assistant.py
-├── runtimes/
-│   ├── base.py
-│   ├── claude_sdk.py
-│   └── langgraph.py
-├── capabilities/
-│   ├── catalog.py
-│   ├── executor.py
-│   ├── policy.py
-│   └── adapters/
-├── ports/
-│   ├── inbound.py
-│   ├── outbound.py
-│   ├── repositories.py
-│   ├── model_gateway.py
-│   └── audit.py
-├── infrastructure/
-│   ├── mattermost/
-│   ├── sqlite/
-│   ├── mcp/
-│   ├── llm/
-│   └── observability/
-└── config/
+├── application/           # composition root、消息编排、Context、Delivery
+├── agent_system/          # Agent 请求、Registry、Router、handoff
+├── agent_packages/        # Agent Loader、Factory、运行时契约
+├── skill_packages/        # Skill Loader、Registry、Resolver、运行时契约
+├── capabilities/          # 单一 Capability Catalog、bindings、Executor
+├── runtimes/              # LangGraph 默认 Runtime、SDK Adapter
+├── control_plane/         # Inbox/Outbox、Lifecycle、Approval、DLQ
+├── governance/            # Policy、Model Policy、Quota、Secret、审计原语
+└── infrastructure/        # SQLite migration 与 Repository
 ```
 
 依赖方向应保持：

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from ..governance import ModelPolicyRegistry, PolicyRegistry
+    from ..skill_packages import SkillPackageRegistry
     from .models import AgentPackage
 
 
@@ -23,17 +24,19 @@ class AgentPackageRegistry:
         *,
         policy_registry: PolicyRegistry | None = None,
         model_policy_registry: ModelPolicyRegistry | None = None,
+        skill_registry: SkillPackageRegistry | None = None,
     ) -> None:
         self.loader = loader or AgentPackageLoader()
         self.policy_registry = policy_registry
         self.model_policy_registry = model_policy_registry
+        self.skill_registry = skill_registry
         self._packages: dict[str, AgentPackage] = {}
 
     def load_directory(self, root: Path) -> tuple[AgentPackage, ...]:
         staged_packages: dict[str, AgentPackage] = {}
         loaded: list[AgentPackage] = []
         for agent_root in sorted(path for path in root.iterdir() if path.is_dir()):
-            package = self._resolve_governance(self.loader.load(agent_root))
+            package = self.loader.load(agent_root)
             name = package.manifest.metadata.name
             if name != agent_root.name:
                 raise ManifestValidationError(
@@ -41,6 +44,7 @@ class AgentPackageRegistry:
                 )
             if name in staged_packages:
                 raise ManifestValidationError(f"duplicate Agent Package {name!r}")
+            package = self._resolve_governance(package)
             staged_packages[name] = package
             loaded.append(package)
         self._packages = staged_packages
@@ -68,20 +72,74 @@ class AgentPackageRegistry:
                     f"Agent route {package.manifest.runtime.route!r} conflicts with "
                     f"model policy route {model_policy.route!r}"
                 )
+        skills = self._resolve_skills(package)
+        skill_set_hash = self._skill_set_hash(skills)
         if (
             package.snapshot.policy_hash == policy_hash
             and package.snapshot.model_policy_hash == model_policy_hash
+            and package.snapshot.skill_set_hash == skill_set_hash
         ):
             return package
-        if not policy_hash and not model_policy_hash:
+        if not policy_hash and not model_policy_hash and not skill_set_hash:
             return package
         digest = hashlib.sha256(package.snapshot.package_hash.encode())
         digest.update(policy_hash.encode())
         digest.update(model_policy_hash.encode())
+        digest.update(skill_set_hash.encode())
         snapshot = replace(
             package.snapshot,
             package_hash=digest.hexdigest(),
             policy_hash=policy_hash,
             model_policy_hash=model_policy_hash,
+            skill_set_hash=skill_set_hash,
         )
-        return replace(package, snapshot=snapshot)
+        return replace(package, snapshot=snapshot, skills=skills)
+
+    def _resolve_skills(self, package: AgentPackage):
+        from types import MappingProxyType
+
+        declaration = package.manifest.skills
+        overlap = set(declaration.allow) & set(declaration.deny)
+        if overlap:
+            raise ManifestValidationError(
+                f"Skills cannot be both allowed and denied: {', '.join(sorted(overlap))}"
+            )
+        active_refs = tuple(ref for ref in declaration.allow if ref not in declaration.deny)
+        if not active_refs:
+            return MappingProxyType({})
+        if self.skill_registry is None:
+            raise ManifestValidationError("Agent declares Skills but no Skill registry is configured")
+        try:
+            skills = {ref: self.skill_registry.get(ref) for ref in active_refs}
+        except LookupError as error:
+            raise ManifestValidationError(str(error)) from error
+        self._validate_skill_capabilities(package, skills)
+        return MappingProxyType(skills)
+
+    @staticmethod
+    def _validate_skill_capabilities(package: AgentPackage, skills) -> None:
+        from fnmatch import fnmatch
+
+        capabilities = package.manifest.capabilities
+        for ref, skill in skills.items():
+            missing = {
+                name
+                for name in skill.manifest.capabilities.required
+                if not any(fnmatch(name, pattern) for pattern in capabilities.allow)
+                or any(fnmatch(name, pattern) for pattern in capabilities.deny)
+            }
+            if missing:
+                raise ManifestValidationError(
+                    f"Agent {package.manifest.metadata.name!r} cannot grant Skill {ref!r} "
+                    f"required capabilities: {', '.join(sorted(missing))}"
+                )
+
+    @staticmethod
+    def _skill_set_hash(skills) -> str:
+        if not skills:
+            return ""
+        digest = hashlib.sha256()
+        for ref in sorted(skills):
+            digest.update(ref.encode())
+            digest.update(skills[ref].snapshot.package_hash.encode())
+        return digest.hexdigest()

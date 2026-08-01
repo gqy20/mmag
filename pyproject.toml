@@ -32,6 +32,7 @@ packages = ["src/mmag"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "agents" = "mmag/agents"
+"skills" = "mmag/skills"
 "policies" = "mmag/policies"
 "model-policies" = "mmag/model-policies"
 

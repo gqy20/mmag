@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/agents/report/output/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "agent", "result", "artifacts", "sources", "warnings", "usage", "provenance"],
+  "properties": {
+    "status": {"const": "succeeded"},
+    "agent": {"const": "report"},
+    "result": {"$ref": "#/$defs/result"},
+    "artifacts": {"type": "array", "items": {"type": "object"}},
+    "sources": {"type": "array"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "usage": {"$ref": "#/$defs/usage"},
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "executive_summary",
+        "findings",
+        "limitations",
+        "recommendations",
+        "sources"
+      ],
+      "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "executive_summary": {"type": "string", "minLength": 1},
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["claim", "evidence", "confidence"],
+            "properties": {
+              "claim": {"type": "string", "minLength": 1},
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["source_id", "support"],
+                  "properties": {
+                    "source_id": {"type": "string", "minLength": 1},
+                    "support": {"type": "string", "minLength": 1}
+                  }
+                }
+              },
+              "confidence": {"enum": ["high", "medium", "low"]}
+            }
+          }
+        },
+        "limitations": {"type": "array", "items": {"type": "string"}},
+        "recommendations": {"type": "array", "items": {"type": "string"}},
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "ref", "source_type"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "title": {"type": "string", "minLength": 1},
+              "ref": {"type": "string", "minLength": 1},
+              "source_type": {"enum": ["web", "knowledge", "message", "artifact"]},
+              "observed_at": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_calls", "tool_calls", "cost_usd"],
+      "properties": {
+        "model_calls": {"type": "integer", "minimum": 0},
+        "tool_calls": {"type": "integer", "minimum": 0},
+        "cost_usd": {"type": "number", "minimum": 0}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "required": [
+        "agent_name",
+        "agent_spec_version",
+        "package_hash",
+        "prompt_id",
+        "prompt_version",
+        "prompt_hash",
+        "input_schema_version",
+        "output_schema_version",
+        "policy_version",
+        "model_policy_version"
+      ]
+    }
+  }
+}

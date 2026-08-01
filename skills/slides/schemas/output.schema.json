@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/skills/slides/output/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "audience", "objective", "narrative", "slides", "delivery"],
+  "properties": {
+    "title": {"type": "string", "minLength": 1},
+    "audience": {"type": "string", "minLength": 1},
+    "objective": {"type": "string", "minLength": 1},
+    "narrative": {"type": "string", "minLength": 1},
+    "slides": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["number", "title", "purpose", "body", "visual", "source_refs", "notes"],
+        "properties": {
+          "number": {"type": "integer", "minimum": 1},
+          "title": {"type": "string", "minLength": 1},
+          "purpose": {"type": "string", "minLength": 1},
+          "body": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "visual": {"type": ["string", "null"]},
+          "source_refs": {"type": "array", "items": {"type": "string"}},
+          "notes": {"type": "string"}
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "filename", "status"],
+      "properties": {
+        "format": {"enum": ["markdown", "json"]},
+        "filename": {"type": ["string", "null"]},
+        "status": {"enum": ["not_requested", "pending_approval", "delivered"]}
+      }
+    }
+  }
+}

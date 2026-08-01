@@ -1,0 +1,72 @@
+api_version: mmag.ai/v1
+kind: ManagedAgent
+
+metadata:
+  name: ppt
+  version: 1.0.0
+  description: Design structured presentation decks and deliver editable slide source on request.
+
+spec:
+  execution:
+    kind: langgraph
+    provider: json-v1
+
+  routing:
+    default: false
+    priority: 70
+    keywords: [PPT, ppt, 幻灯片, 演示文稿, 路演, slide-deck, slides]
+    requires_url: false
+    scopes: ["mattermost:*"]
+
+  accepted_intents: [presentation, ppt, slides]
+  prompt:
+    system_ref: prompts/system.md
+    task_ref: prompts/task.md
+    output_repair_ref: prompts/output_repair.md
+    required_variables:
+      - current_time
+      - actor_name
+      - project_context
+      - conversation_id
+      - task_goal
+      - parameters_json
+      - context_refs_json
+      - artifact_refs_json
+      - invalid_output
+      - validation_error
+
+  input_schema_ref: schemas/input.schema.json
+  result_schema_ref: schemas/output.schema.json
+
+  runtime:
+    route: default
+    max_turns: 10
+    timeout_seconds: 300
+    retry:
+      max_attempts: 2
+
+  capabilities:
+    allow: [load_skill_resource, search_knowledge, send_file]
+    deny: []
+
+  skills:
+    allow:
+      - slides@1.0.0
+    deny: []
+
+  context:
+    read_scopes: [conversation, project]
+    write_scopes: [task]
+
+  policy_ref: ppt@1.0.0
+  model_policy_ref: reasoning-medium@1.0.0
+
+  budget:
+    max_model_calls: 10
+    max_tool_calls: 15
+    max_cost_usd: 1.0
+
+  artifacts:
+    produces:
+      - kind: slide_deck
+        schema_ref: schemas/artifact.schema.json

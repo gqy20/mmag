@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/skills/web-research/input/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["intent", "goal", "parameters"],
+  "properties": {
+    "intent": {"type": "string", "minLength": 1},
+    "goal": {"type": "string", "minLength": 1},
+    "parameters": {"type": "object"}
+  }
+}

@@ -33,17 +33,24 @@ from mmag.governance import (
     RegistryPolicyAuthorizer,
 )
 from mmag.runtimes import AgentResult, RunContext, RunRequest
+from mmag.skill_packages import SkillPackageRegistry
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "agents" / "link"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _skill_registry() -> SkillPackageRegistry:
+    registry = SkillPackageRegistry()
+    registry.load_directory(REPOSITORY_ROOT / "skills")
+    return registry
 
 
 def test_loader_compiles_flat_manifest_execution_prompts_schemas_and_version():
     package = AgentPackageLoader().load(PACKAGE_ROOT)
 
     assert package.manifest.metadata.name == "link"
-    assert package.snapshot.agent_spec_version == "1.0.0"
-    assert package.snapshot.prompt_version == "1.0.0"
+    assert package.snapshot.agent_spec_version == "1.2.0"
+    assert package.snapshot.prompt_version == "1.2.0"
     assert package.snapshot.input_schema_version == "1.0.0"
     assert len(package.snapshot.package_hash) == 64
     assert len(package.snapshot.eval_hash) == 64
@@ -79,20 +86,28 @@ def test_registry_loads_flat_packages_and_resolves_governance_hashes():
     registry = AgentPackageRegistry(
         policy_registry=policies,
         model_policy_registry=model_policies,
+        skill_registry=_skill_registry(),
     )
 
     loaded = registry.load_directory(REPOSITORY_ROOT / "agents")
 
     assert {(item.manifest.metadata.name, item.manifest.metadata.version) for item in loaded} == {
-        ("link", "1.0.0"),
-        ("mmchat", "1.0.0"),
+        ("link", "1.2.0"),
+        ("mmchat", "1.1.0"),
+        ("ppt", "1.0.0"),
+        ("project", "1.0.0"),
+        ("report", "1.0.0"),
     }
     snapshot = registry.get("mmchat").snapshot
     assert len(snapshot.policy_hash) == 64
     assert len(snapshot.model_policy_hash) == 64
+    assert len(snapshot.skill_set_hash) == 64
     assert tuple(package.manifest.metadata.name for package in registry.list()) == (
         "link",
         "mmchat",
+        "ppt",
+        "project",
+        "report",
     )
 
 
@@ -105,6 +120,7 @@ async def test_mmchat_runtime_is_enforced_by_its_package():
     registry = AgentPackageRegistry(
         policy_registry=policies,
         model_policy_registry=model_policies,
+        skill_registry=_skill_registry(),
     )
     registry.load_directory(REPOSITORY_ROOT / "agents")
     package = registry.get("mmchat")
@@ -191,6 +207,7 @@ def test_factory_auto_constructs_every_declared_agent():
     packages = AgentPackageRegistry(
         policy_registry=policies,
         model_policy_registry=model_policies,
+        skill_registry=_skill_registry(),
     )
     packages.load_directory(REPOSITORY_ROOT / "agents")
     executor = CapabilityExecutor(RegistryPolicyAuthorizer(policies))
@@ -205,7 +222,13 @@ def test_factory_auto_constructs_every_declared_agent():
 
     registry = AgentRegistry(AgentFactory(providers).create_all(packages.list()))
 
-    assert {agent.descriptor.name for agent in registry.list()} == {"mmchat", "link"}
+    assert {agent.descriptor.name for agent in registry.list()} == {
+        "link",
+        "mmchat",
+        "ppt",
+        "project",
+        "report",
+    }
     assert registry.default().descriptor.name == "mmchat"
 
 

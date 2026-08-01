@@ -6,9 +6,9 @@
 
 ## P0：企业运行闭环
 
-### TD-01 — Package provenance 和 usage 未完整持久化
+### TD-01 — Package provenance 尚未原子进入 AgentRun
 
-当前 Package Hash、Prompt/Schema/Policy/Model Policy/eval Hash 已进入输出 Envelope，并在路由日志中记录 Package Hash；消息主链为了保留 LangGraph interrupt 状态会继续使用底层 `AgentResult`，尚未把完整 Envelope 原子写入 AgentRun/AuditEvent。
+当前 Agent 与 Skill 的 Package/Instruction/Prompt/Schema/Policy/Model Policy/eval Hash 已进入输出 Envelope；成功消息运行也会写入 `agent.run` AuditEvent。它还没有与 AgentRun 终态、失败结果、审批 resume 和 DLQ replay 在同一事务中持久化。
 
 完成标准：AgentRun 保存完整 provenance、token/tool/cost usage 和终态；审批 resume、DLQ replay 和离线回放仍可定位原 Package 版本。
 
@@ -32,11 +32,14 @@ Loader 已拒绝无 eval、重复 case、非法字段和模糊期望，但启动
 
 ## P1：多 Agent 业务闭环
 
-### TD-05 — Research / Presentation 尚未实现
+### TD-05 — Report → PPT Artifact handoff 尚未闭环
 
-旧代码中的三个硬编码 Runtime Agent 只是占位，已经删除。当前只有 `mmchat` 和 `link` 两个真实 Package。
+`report`、`ppt` 和 `project` 已有真实 Agent/Skill Package、默认拒绝 Policy 和结构化结果契约；
+当前结果仍直接返回消息链，没有原子写入 Artifact Repository。`ppt` 也只有可编辑 deck source，
+尚无受管 PPTX/PDF 渲染 Capability。
 
-完成标准：Research 产生版本化 `research-report` Artifact；Presentation 只消费通过 Schema 的 Artifact；handoff 的每一步、失败和返工可持久恢复。
+完成标准：Report 产生版本化 `research_report` Artifact；PPT 只消费通过 Schema、版本和 scope
+校验的 Artifact ref；受控执行平面生成文件/预览 Artifact；每一步失败、审批、重试和返工可恢复。
 
 ### TD-06 — Artifact Repository 未进入默认消息链
 
@@ -54,7 +57,7 @@ Loader 已拒绝无 eval、重复 case、非法字段和模糊期望，但启动
 
 ### TD-08 — 日志是可关联文本，不是完整结构化 telemetry
 
-trace、Agent route、Package Hash、Runtime 和 Artifact 数量已经贯穿主链；指标尚未统一输出 Agent/Capability/approval/delivery 的 duration、status 和 error code。
+trace、Agent route、Skill ref、Package Hash、Runtime 和 Artifact 数量已经贯穿主链；指标尚未统一输出 Agent/Skill/Capability/approval/delivery 的 duration、status 和 error code。
 
 完成标准：结构化日志字段稳定；OpenTelemetry trace 可选接入；指标基数受控；Secret 和消息正文默认不进入 telemetry。
 

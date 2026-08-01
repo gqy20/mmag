@@ -15,6 +15,7 @@ from .catalog import (
 from .context import CapabilityContext, get_capability_context
 from .file import create_send_file_capability
 from .link import create_analyze_link_capability
+from .skill_resource import create_load_skill_resource_capability
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -38,6 +39,7 @@ def create_builtin_capabilities(
         create_save_knowledge_capability(memory),
         create_get_user_profile_capability(mm_client, memory),
         create_analyze_link_capability(memory),
+        create_load_skill_resource_capability(),
         create_send_file_capability(mm_client, context_provider=context_provider),
     ]
 

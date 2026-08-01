@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/agents/project/artifact/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "schema_version", "content"],
+  "properties": {
+    "kind": {"const": "project_brief"},
+    "schema_version": {"const": "1.0.0"},
+    "content": {
+      "type": "object",
+      "required": [
+        "name",
+        "summary",
+        "status",
+        "milestones",
+        "tasks",
+        "risks",
+        "decisions",
+        "open_questions",
+        "next_actions"
+      ]
+    }
+  }
+}

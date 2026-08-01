@@ -1,0 +1,17 @@
+version: 1
+cases:
+  - id: selects-for-competitive-research
+    input:
+      intent: mention
+      goal: 调研三家竞品并比较核心能力
+      parameters: {}
+    expect:
+      selected: true
+      capability_subset: [analyze_link, load_skill_resource, search_knowledge]
+
+  - id: rejects-empty-goal
+    input:
+      intent: research
+      goal: ""
+      parameters: {}
+    expect_error: INVALID_CONTRACT

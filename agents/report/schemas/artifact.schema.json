@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/agents/report/artifact/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "schema_version", "content"],
+  "properties": {
+    "kind": {"const": "research_report"},
+    "schema_version": {"const": "1.0.0"},
+    "content": {
+      "type": "object",
+      "required": ["title", "executive_summary", "findings", "limitations", "recommendations", "sources"]
+    }
+  }
+}

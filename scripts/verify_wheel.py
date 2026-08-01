@@ -26,6 +26,7 @@ def verify_wheel(wheel: Path) -> None:
         environment = os.environ.copy()
         environment["PYTHONPATH"] = str(extracted)
         environment.pop("AGENT_PACKAGES_PATH", None)
+        environment.pop("SKILL_PACKAGES_PATH", None)
         environment.pop("POLICIES_PATH", None)
         environment.pop("MODEL_POLICIES_PATH", None)
         subprocess.run(
@@ -37,17 +38,20 @@ def verify_wheel(wheel: Path) -> None:
                     "from mmag.cli import main; "
                     "from pathlib import Path; "
                     "from mmag.agent_packages import AgentPackageRegistry; "
+                    "from mmag.skill_packages import SkillPackageRegistry; "
                     "from mmag.config import config; "
                     "from mmag.governance import ModelPolicyRegistry, PolicyRegistry; "
                     "policies = PolicyRegistry(); "
                     "policies.load_directory(Path(config.policies_path)); "
                     "models = ModelPolicyRegistry(); "
                     "models.load_directory(Path(config.model_policies_path)); "
-                    "agents = AgentPackageRegistry(policy_registry=policies, model_policy_registry=models); "
+                    "skills = SkillPackageRegistry(); "
+                    "skills.load_directory(Path(config.skill_packages_path)); "
+                    "agents = AgentPackageRegistry(policy_registry=policies, model_policy_registry=models, skill_registry=skills); "
                     "agents.load_directory(Path(config.agent_packages_path)); "
                     "mmchat = agents.get('mmchat'); "
                     "link = agents.get('link'); "
-                    "assert __version__ and main and mmchat.prompts and link.snapshot.policy_hash; "
+                    "assert __version__ and main and mmchat.skills and link.snapshot.policy_hash; "
                     "print('wheel import and package resource load: ok')"
                 ),
             ],

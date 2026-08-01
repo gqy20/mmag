@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/schemas/skill-manifest-v1.schema.json",
+  "title": "MMAG Skill Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "kind", "metadata", "spec"],
+  "properties": {
+    "api_version": {"const": "mmag.ai/v1"},
+    "kind": {"const": "Skill"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "description"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "description": {"type": "string", "minLength": 1}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instruction_ref", "input_schema_ref", "output_schema_ref", "activation",
+        "required_capabilities", "optional_capabilities", "resources", "disclosure"
+      ],
+      "properties": {
+        "instruction_ref": {"$ref": "#/$defs/safeRef"},
+        "input_schema_ref": {"$ref": "#/$defs/safeRef"},
+        "output_schema_ref": {"$ref": "#/$defs/safeRef"},
+        "activation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["intents", "keywords", "priority"],
+          "properties": {
+            "intents": {"$ref": "#/$defs/stringArray"},
+            "keywords": {"$ref": "#/$defs/stringArray"},
+            "priority": {"type": "integer", "minimum": -1000, "maximum": 1000}
+          },
+          "anyOf": [
+            {"properties": {"intents": {"minItems": 1}}},
+            {"properties": {"keywords": {"minItems": 1}}}
+          ]
+        },
+        "required_capabilities": {"$ref": "#/$defs/stringArray"},
+        "optional_capabilities": {"$ref": "#/$defs/stringArray"},
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["templates", "references", "scripts"],
+          "properties": {
+            "templates": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/safeRef"}},
+            "references": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/safeRef"}},
+            "scripts": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/safeRef"}}
+          }
+        },
+        "disclosure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_resources", "max_resource_bytes", "max_total_bytes", "max_estimated_tokens"],
+          "properties": {
+            "max_resources": {"type": "integer", "minimum": 1, "maximum": 16},
+            "max_resource_bytes": {"type": "integer", "minimum": 1, "maximum": 65536},
+            "max_total_bytes": {"type": "integer", "minimum": 1, "maximum": 262144},
+            "max_estimated_tokens": {"type": "integer", "minimum": 1, "maximum": 50000}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "safeRef": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+    "stringArray": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+  }
+}

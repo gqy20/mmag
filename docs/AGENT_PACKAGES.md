@@ -7,6 +7,7 @@ Agent Manifest
   + Prompt Registry
   + Schema Registry
   + Eval assets
+  + Skill Package references
   + Policy Registry
   + Model Policy Registry
   + Runtime Enforcement
@@ -23,6 +24,7 @@ agents/<agent-name>/
 
 policies/<policy>.yml
 model-policies/<model-policy>.yml
+skills/<skill>/skill.yml
 ```
 
 目录名必须与 Manifest `metadata.name` 完全一致。版本只存在于 `metadata.version`；Git 保存源码历史，构建制品和 Package Hash 保存发布历史，不在源码树复制版本目录。
@@ -37,6 +39,7 @@ model-policies/<model-policy>.yml
 - 输入、结果和 Artifact Schema；
 - Runtime route、轮次、deadline、重试；
 - Capability allow/deny；
+- Skill allow/deny 精确版本引用；
 - Context 读写 scope；
 - Policy 和 Model Policy 引用；
 - 模型调用、能力调用和成本预算；
@@ -62,8 +65,9 @@ model-policies/<model-policy>.yml
 2. 解析 `policy_ref` 和 `model_policy_ref`；
 3. 校验 Package route 与 Model Policy route 一致；
 4. 把 Policy/Model Policy Hash 合入 Package Hash；
-5. `AgentFactory` 根据可信 Provider 创建 Agent；
-6. 校验唯一默认 Agent 和重复路由后一次性建立 Registry。
+5. 解析 Skill 精确版本，校验 Required Capability 不会扩权，并把 Skill Set Hash 合入 Package Hash；
+6. `AgentFactory` 根据可信 Provider 创建 Agent；
+7. 校验唯一默认 Agent 和重复路由后一次性建立 Registry。
 
 任何 Package 或 Provider 失败，整批 Agent 都不会注册。
 
@@ -100,6 +104,8 @@ routing:
 
 - 执行前校验统一输入 Envelope；
 - Manifest allowlist 决定 Agent 可见的 Capability，支持显式 `mcp_*` 模式；
+- `SkillResolver` 只能从当前 Agent 的 Skill allowlist 选择，并进一步收窄模型可见工具与执行上下文；
+- Skill 被选中后只注入 `SKILL.md` 和资源目录；模板/参考资料通过 `load_skill_resource` 按步骤披露，scripts 永不进入 Runtime；
 - Capability 执行前由当前 Package 的 `policy_ref` 根据 actor、scope、role 和动态资源参数再次裁决；
 - 返回后校验 result、Artifact 和统一输出 Envelope；
 - 预算超限直接失败；
@@ -119,19 +125,28 @@ provenance 当前记录：
 - Policy version/hash；
 - Model Policy version/hash；
 - eval hash。
+- Skill set hash；选中 Skill 时还记录 Skill version、Package/Instruction/Schema/eval Hash；
+- 实际披露 Skill Resource 的 ref、Hash、字节、估算 token 和聚合 Hash。
 
 ## 当前 Package
 
-- `mmchat@1.0.0`：Mattermost 默认对话 Agent；使用 `langgraph/text-v1`、`mmchat@1.0.0` Policy 和 `reasoning-medium@1.0.0`；
-- `link@1.0.0`：确定性链接分析 Agent；使用专属只读 Policy、结构化 `link_analysis` Artifact 和低推理 Model Policy。
+- `mmchat@1.1.0`：Mattermost 默认对话 Agent；使用 `langgraph/text-v1`，允许 `web-research@1.0.0`；
+- `link@1.2.0`：确定性链接分析 Agent；绑定 `link-read@1.0.0` 和专属只读 Policy；
+- `report@1.0.0`：结构化研报 Agent；绑定只读 `report@1.0.0` Skill；
+- `ppt@1.0.0`：演示文稿 Agent；绑定 `slides@1.0.0`，文件交付需要审批；
+- `project@1.0.0`：项目助理 Agent；绑定 `project@1.0.0`，共享知识写入需要审批。
 
-旧的 Python 假专家注册已删除。Research 和 Presentation 只有在 Manifest、Prompt、Schema、Policy、eval 和真实执行器全部具备时才允许注册。
+这些 Package 都具备 Manifest、Prompt、输入/输出与 Artifact Schema、Policy、预算、eval 和
+provenance。当前能力边界及下一步见 [数字员工清单](WORKERS.md)。
 
 ## 尚未完成的生产门禁
 
 - eval 目前做静态契约校验，尚未在发布时执行质量 case；
-- Package provenance/usage 尚未完整持久化到 AgentRun/AuditEvent；
+- 成功运行的完整 provenance 已写入 AuditEvent；失败阶段和细粒度 usage 仍需归一化；
 - Model Policy 已严格加载并参与 Hash，但 `model_class` 与 temperature 还没有驱动多模型路由；
-- Research → Presentation 的 Artifact handoff 尚未实现。
+- Report → PPT 的 Artifact Repository 持久化与严格 ref handoff 尚未实现；
+- 受管 PPTX/PDF 渲染执行平面尚未实现。
 
 这些缺口不会通过兼容层或假实现掩盖，统一记录在 [TECH_DEBT.md](TECH_DEBT.md) 和 [ROADMAP.md](ROADMAP.md)。
+
+Skill 的包结构、选择规则和安全边界见 [Skill Package 指南](SKILL_PACKAGES.md)。

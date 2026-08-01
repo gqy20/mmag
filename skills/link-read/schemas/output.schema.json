@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/skills/link-read/output/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "required": ["url", "kind", "status", "title", "summary", "cached"],
+  "properties": {
+    "url": {"type": "string", "minLength": 1},
+    "kind": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "minLength": 1},
+    "title": {"type": "string"},
+    "summary": {"type": "string"},
+    "cached": {"type": "boolean"}
+  }
+}

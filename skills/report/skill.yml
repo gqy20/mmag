@@ -1,0 +1,37 @@
+api_version: mmag.ai/v1
+kind: Skill
+
+metadata:
+  name: report
+  version: 1.0.0
+  description: Build a structured research report with an explicit evidence ledger.
+
+spec:
+  instruction_ref: SKILL.md
+  input_schema_ref: schemas/input.schema.json
+  output_schema_ref: schemas/output.schema.json
+
+  activation:
+    intents: [report, research, 研报]
+    keywords: [研报, 研究报告, 行业报告, 竞品报告, 调研报告]
+    priority: 80
+
+  required_capabilities:
+    - load_skill_resource
+    - search_knowledge
+  optional_capabilities:
+    - search_messages
+    - analyze_link
+
+  resources:
+    templates:
+      - templates/report.md
+    references:
+      - references/evidence.md
+    scripts: []
+
+  disclosure:
+    max_resources: 2
+    max_resource_bytes: 16384
+    max_total_bytes: 24576
+    max_estimated_tokens: 6000

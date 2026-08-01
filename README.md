@@ -10,6 +10,7 @@ Mattermost WebSocket
   → application.MessageHandler
   → agent_system.AgentRouter
   → Agent Package contract
+  → SkillResolver（Agent 白名单内）
   → LangGraph Runtime（默认）
   → CapabilityRegistry → Policy → Executor
   → Outbox / Delivery
@@ -21,15 +22,20 @@ Mattermost WebSocket
 - WebSocket 只负责接收；同会话串行、跨会话并发；
 - `mmchat` 和 Link Agent 都必须经过 `AgentRouter`，不存在绕过 Router 的全局 Bot 路径；
 - `agents/*/agent.yml` 通过可信 Provider 自动构造并原子注册，Application 不感知具体 Agent 名称；
+- `skills/*/skill.yml` 注册可复用工作方法；路由先选 Agent，再从该 Agent 白名单选择 Skill；
+- Skill 使用三级渐进式披露：先注册 Manifest，选中后加载 `SKILL.md`，模板/参考资料只在 Capability 请求时按 ref 加载；
 - LangGraph 是默认 Runtime，使用 SQLite checkpoint 和原生 interrupt/resume；
 - `CapabilityRegistry` 是内置能力与 MCP 能力的唯一运行时注册表；
-- Manifest 约束能力可见性，当前 Package 的 Policy 根据 actor/scope/resource 动态裁决，Executor 在副作用前强制执行；
-- Prompt、输入/输出 Schema、eval、Policy 和 Model Policy 都进入版本化 Package 快照；
+- 本次能力集合是 Agent 权限、Skill 能力声明和当前请求 Policy 的交集；
+- Prompt、输入/输出 Schema、eval、Skill、Policy 和 Model Policy 都进入版本化 Package 快照；
 - Delivery 与 Agent 执行状态独立，投递重试不会重复调用模型；
 - 全局 Policy 默认拒绝，文件外发和 MCP 副作用进入审批；
 - 失败 Inbox 支持 DLQ 查询和幂等 replay。
 
-更完整的 Package 契约见 [Agent Package 指南](docs/AGENT_PACKAGES.md)，实施状态见 [Roadmap](docs/ROADMAP.md)。
+更完整的契约见 [Agent Package 指南](docs/AGENT_PACKAGES.md) 与 [Skill Package 指南](docs/SKILL_PACKAGES.md)，实施状态见 [Roadmap](docs/ROADMAP.md)。
+
+当前数字员工包括默认协同 Bot、链接解析、研报、PPT 和项目助理；职责、Skill、权限与交付边界见
+[数字员工清单](docs/WORKERS.md)。
 
 ## 快速开始
 
@@ -59,6 +65,7 @@ MODEL_BUDGET_USD=100
 USE_SDK_LLM=false
 MCP_ALLOWED_TOOLS=
 AGENT_PACKAGES_PATH=./agents
+SKILL_PACKAGES_PATH=./skills
 POLICIES_PATH=./policies
 MODEL_POLICIES_PATH=./model-policies
 ```
@@ -84,7 +91,7 @@ make test       # 默认离线测试
 make verify     # Ruff、coverage、mypy、wheel smoke
 ```
 
-默认测试不访问真实 Mattermost、LLM 或公网。wheel smoke 会验证 Agent Prompt、Policy 和 Model Policy 能脱离源码树加载。
+默认测试不访问真实 Mattermost、LLM 或公网。wheel smoke 会验证 Agent、Skill、Policy 和 Model Policy 能脱离源码树加载。
 
 ## 项目结构
 
@@ -101,6 +108,14 @@ agents/
     schemas/
     evals/
 
+skills/
+  web-research/
+    skill.yml
+    SKILL.md
+    schemas/
+    templates/
+    evals/
+
 policies/                  # 默认拒绝的 Policy-as-Code
 model-policies/            # 模型路由、输出预算和采样策略
 
@@ -108,6 +123,7 @@ src/mmag/
   application/             # Composition root、消息编排、上下文/附件、Delivery
   agent_system/            # Agent 契约、Registry、Router、通用 Capability Agent
   agent_packages/          # Manifest、Provider Factory、契约加载与运行时强制
+  skill_packages/          # Skill Manifest、Registry、Resolver 与契约校验
   capabilities/            # Capability Spec、Registry、bindings、Executor
   runtimes/                # LangGraph 默认 Runtime、可选 Claude SDK Adapter
   control_plane/           # Inbox/Outbox、Lifecycle、Approval、DLQ/replay
@@ -138,11 +154,14 @@ agents/<name>/evals/...
 1. 扫描 `agents/*/agent.yml`，校验目录名与 Manifest name 一致；
 2. 严格校验 Prompt 变量、JSON Schema 和 eval case；
 3. 解析并校验 `policy_ref`、`model_policy_ref`；
-4. 将 Prompt/Schema/eval/Policy/Model Policy Hash 写入 Package 快照；
-5. 根据 `execution.kind/provider` 选择可信 Provider 并构造 Agent；
-6. 校验唯一默认 Agent、路由冲突和 Capability allowlist 后原子注册。
+4. 解析 `skills.allow` 精确版本，并校验 Skill Required Capability 不会扩权；
+5. 将 Prompt/Schema/eval/Skill/Policy/Model Policy Hash 写入 Package 快照；
+6. 根据 `execution.kind/provider` 选择可信 Provider 并构造 Agent；
+7. 校验唯一默认 Agent、路由冲突和 Capability allowlist 后原子注册。
 
 版本保留在 `metadata.version`；源码历史交给 Git，发布历史交给制品仓库。CI 比较目标分支，Package 任意内容变化都必须提升 SemVer 并产生新的 Hash。
+
+Skill 同样使用扁平目录和 Manifest 内版本。`SKILL.md` 只描述工作方法，资源读取通过受预算约束的 `load_skill_resource` Capability；`scripts/` 在 v1 不可读取或执行。
 
 ## 安全边界
 
@@ -157,6 +176,8 @@ agents/<name>/evals/...
 ## 文档
 
 - [Agent Package](docs/AGENT_PACKAGES.md)
+- [Skill Package](docs/SKILL_PACKAGES.md)
+- [数字员工清单](docs/WORKERS.md)
 - [AI Native 架构](docs/AI_NATIVE_REFACTORING.md)
 - [Roadmap](docs/ROADMAP.md)
 - [技术债](docs/TECH_DEBT.md)

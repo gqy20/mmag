@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: link
-  version: 1.0.0
+  version: 1.2.0
   description: Analyze one URL and return a source-preserving structured artifact.
 
 spec:
@@ -45,6 +45,11 @@ spec:
 
   capabilities:
     allow: [analyze_link]
+    deny: []
+
+  skills:
+    allow:
+      - link-read@1.0.0
     deny: []
 
   context:

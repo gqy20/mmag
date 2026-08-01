@@ -30,6 +30,7 @@ from .context import (
 from .file import create_send_file_capability
 from .link import create_analyze_link_capability
 from .mcp import create_mcp_capability
+from .skill_resource import create_load_skill_resource_capability
 from .registry import CapabilityBinding, CapabilityRegistry
 
 __all__ = [
@@ -57,6 +58,7 @@ __all__ = [
     "create_get_posts_capability",
     "create_get_user_profile_capability",
     "create_mcp_capability",
+    "create_load_skill_resource_capability",
     "create_search_knowledge_capability",
     "create_search_messages_capability",
     "create_save_knowledge_capability",

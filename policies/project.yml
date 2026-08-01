@@ -1,0 +1,30 @@
+id: project
+version: 1.0.0
+default_effect: deny
+
+rules:
+  - id: read-skill-resource
+    effect: allow
+    actions: [load_skill_resource]
+    permissions: [skill:resource:read]
+    reason: Project may load only resources declared by its active Skill.
+
+  - id: read-current-channel
+    effect: allow
+    actions: [get_channel_info, get_posts, search_messages, search_knowledge]
+    permissions:
+      - mattermost:channel:read
+      - mattermost:post:read
+      - memory:messages:read
+      - memory:knowledge:read
+    resource_arguments:
+      channel_id: conversation_id
+    reason: Project context reads are restricted to the originating channel.
+
+  - id: approve-project-memory
+    effect: require_approval
+    actions: [save_knowledge]
+    permissions: [memory:knowledge:write]
+    resource_arguments:
+      channel_id: conversation_id
+    reason: Persisting a project decision changes shared enterprise memory.

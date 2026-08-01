@@ -1,8 +1,14 @@
 id: mmchat
-version: 1.0.0
+version: 1.1.0
 default_effect: deny
 
 rules:
+  - id: read-active-skill-resource
+    effect: allow
+    actions: [load_skill_resource]
+    permissions: [skill:resource:read]
+    reason: Only the active Skill session can resolve a declared immutable resource.
+
   - id: read-current-channel
     effect: allow
     actions: [get_channel_info, get_posts, search_messages, search_knowledge]

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/agents/project/output/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "agent", "result", "artifacts", "sources", "warnings", "usage", "provenance"],
+  "properties": {
+    "status": {"const": "succeeded"},
+    "agent": {"const": "project"},
+    "result": {"$ref": "#/$defs/result"},
+    "artifacts": {"type": "array", "items": {"type": "object"}},
+    "sources": {"type": "array"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "usage": {"$ref": "#/$defs/usage"},
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "summary",
+        "status",
+        "milestones",
+        "tasks",
+        "risks",
+        "decisions",
+        "open_questions",
+        "next_actions"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "summary": {"type": "string", "minLength": 1},
+        "status": {"enum": ["planning", "on_track", "at_risk", "blocked", "unknown"]},
+        "milestones": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "due", "status", "exit_criteria"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "due": {"type": ["string", "null"]},
+              "status": {"enum": ["not_started", "in_progress", "done", "blocked", "unknown"]},
+              "exit_criteria": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "owner", "due", "status", "dependencies"],
+            "properties": {
+              "title": {"type": "string", "minLength": 1},
+              "owner": {"type": ["string", "null"]},
+              "due": {"type": ["string", "null"]},
+              "status": {"enum": ["todo", "doing", "done", "blocked", "unknown"]},
+              "dependencies": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["risk", "impact", "mitigation", "owner"],
+            "properties": {
+              "risk": {"type": "string", "minLength": 1},
+              "impact": {"enum": ["high", "medium", "low"]},
+              "mitigation": {"type": "string"},
+              "owner": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "decisions": {"type": "array", "items": {"type": "string"}},
+        "open_questions": {"type": "array", "items": {"type": "string"}},
+        "next_actions": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_calls", "tool_calls", "cost_usd"],
+      "properties": {
+        "model_calls": {"type": "integer", "minimum": 0},
+        "tool_calls": {"type": "integer", "minimum": 0},
+        "cost_usd": {"type": "number", "minimum": 0}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "required": [
+        "agent_name",
+        "agent_spec_version",
+        "package_hash",
+        "prompt_id",
+        "prompt_version",
+        "prompt_hash",
+        "input_schema_version",
+        "output_schema_version",
+        "policy_version",
+        "model_policy_version"
+      ]
+    }
+  }
+}

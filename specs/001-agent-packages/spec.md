@@ -2,7 +2,7 @@
 
 ## 目标
 
-把 Managed Agent 从运行时 Python 骨架升级为可版本化、可校验、可发布和可回放的配置单元，同时保持 Manifest、Prompt、Schema、Policy 与执行器职责分离。
+把 Managed Agent 从运行时 Python 骨架升级为可版本化、可校验、可发布和可回放的配置单元，同时保持 Agent、Skill、Capability、Policy 与执行器职责分离。
 
 ## 用户故事
 
@@ -12,11 +12,11 @@
 
 ### US2：执行有契约的 Agent
 
-作为协同中枢，我在 Agent 执行前校验统一输入 Envelope，只向 Runtime 暴露 Manifest allowlist 中的能力；执行后校验 Artifact 和输出 Envelope，不合格模型输出最多修复一次，仍失败返回稳定的 `INVALID_OUTPUT`。
+作为协同中枢，我先选择 Agent，再从该 Agent 的 Skill allowlist 选择工作方法；Runtime 只看到 Agent、Skill 和 Policy 共同允许的能力。执行后依次校验 Skill、Artifact 和 Agent 输出契约。
 
 ### US3：复现历史运行
 
-作为审计人员，我可以从输出 provenance 获取 Agent Spec、Prompt、输入/输出 Schema、Policy、Model Policy 版本及 Package/Prompt Hash，定位一次运行使用的准确配置。
+作为审计人员，我可以从输出 provenance 获取 Agent、Skill、Prompt、输入/输出 Schema、Policy、Model Policy 版本及内容 Hash，定位一次运行使用的准确配置。
 
 ### US4：执行权限边界
 
@@ -36,6 +36,13 @@
 - FR-010：每个成功输出携带版本 provenance 和 usage。
 - FR-011：Manifest 必须声明 execution Provider 和 routing；未知 Provider、多个默认 Agent 或重复路由拒绝注册。
 - FR-012：Capability 根据当前 Package `policy_ref` 动态裁决，缺失 Package Policy Context 默认拒绝。
+- FR-013：Agent Manifest 必须以精确版本 allow/deny Skill；未知 Skill 或 Required Capability 超出 Agent allowlist 时原子注册失败。
+- FR-014：Skill Manifest、SKILL.md、Schema、资源与 eval 必须形成不可变 Package；Skill script 在 v1 不可直接执行。
+- FR-015：SkillResolver 只在已选 Agent 内路由；模型 Tool Schema、CapabilityContext 与 GovernanceContext 同时收窄到 Skill 能力集合。
+- FR-016：Skill 输入输出必须通过独立 Schema，Skill version/Package/Instruction/Schema/eval Hash 进入 provenance 与成功运行审计。
+- FR-017：Skill 资源采用三级渐进式披露；选中时只注入目录，只有显式 `load_skill_resource` 调用才能读取一个已声明 template/reference。
+- FR-018：资源加载必须校验 Package 边界、发布 Hash、UTF-8、数量、单项/总字节与估算 token；scripts 不可读取或执行。
+- FR-019：provenance 只记录实际披露资源；LangGraph interrupt/resume 必须保存并恢复资源会话，不能扩大资源集合。
 
 ## 非目标
 
@@ -48,5 +55,5 @@
 
 - `mmchat` 与 Link Agent 通过 Package Loader、AgentFactory、Router、输入/输出/Artifact 契约与默认拒绝 Policy 执行；
 - 非法 Manifest、未知 Provider、路由冲突、非法输入、非法输出与二次修复失败都有离线测试；
-- wheel 包含 Agent、Policy 与 Model Policy 声明资源；
+- wheel 包含 Agent、Skill、Policy 与 Model Policy 声明资源；
 - 全量 `make verify` 通过。

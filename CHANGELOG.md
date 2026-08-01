@@ -4,6 +4,16 @@
 
 **工程能力**
 
+- 新增 Skill Package v1：严格 `skill.yml`、按需加载 `SKILL.md`、输入/输出 Schema、资源/eval Hash 与扁平版本目录
+- 新增 Skill Registry/Resolver；消息主链先选 Agent 再选 Skill，并将模型工具、CapabilityContext 与 Policy 能力集合收窄到交集
+- Agent Manifest 支持版本化 Skill allow/deny；Skill Required Capability 不能扩权，Skill/Instruction/Schema/eval provenance 写入成功运行审计
+- 新增 `web-research@1.0.0`，由 `mmchat@1.1.0` 绑定；Skill scripts 在 v1 仅作为不可执行的哈希资源
+- 新增 `report`、`ppt`、`project` 三个 LangGraph JSON Agent Package，以及 `report`、`slides`、
+  `project` Skill；链接 Agent 升级为 `link@1.2.0` 并绑定 `link-read` 契约
+- 三个新 Agent 分别使用独立默认拒绝 Policy：研报只读，PPT 文件交付和项目共享知识写入进入审批
+- 结构化 Agent Prompt 可使用 parameters、context refs、artifact refs 和可信 conversation id
+- Skill 资源实现三级渐进式披露：选中后只注入目录，模板/参考资料通过受 Policy 与预算约束的 `load_skill_resource` 按需读取
+- 记录实际披露资源的 ref/Hash/字节/token provenance；LangGraph 审批暂停与恢复保留原资源会话
 - 收紧企业执行闭环：过期、重复或 resume token 异常的审批不再恢复 LangGraph，非请求人必须具备 Mattermost 频道管理员或系统管理员身份
 - Outbox Delivery 使用持久 delivery id 作为 Mattermost 幂等键，跨进程重试不再生成新 pending post id
 - Inbox 新增持久 attempts/next_attempt_at 与瞬时错误有界重试；Task 终态延后到实际 Delivery 成功或失败
