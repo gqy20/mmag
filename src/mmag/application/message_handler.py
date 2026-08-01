@@ -15,7 +15,7 @@ from ..capabilities import CapabilityContext, bind_capability_context
 from ..config import config
 from ..control_plane import InboundEvent, MessagePipeline, OutboundMessage
 from ..governance import GovernanceContext, bind_governance_context
-from ..logger import get_logger, trace
+from ..logger import get_logger, log_context, log_event
 from ..runtimes import (
     AgentResult,
     AgentRuntimeError,
@@ -147,8 +147,25 @@ class MessageHandler:
             return
         post_id = str(post.get("id") or "")
         if self.pipeline is None and post_id and self.memory.has_message(post_id):
-            log.info("⏭️ 跳过重复消息: %s", post_id[:12])
+            log_event(log, "message.duplicate", status="skipped")
             return
+
+        with log_context.bind(
+            trace_id=log_context.new_trace_id(),
+            conversation_id=channel_id,
+            actor_id=str(post.get("user_id") or ""),
+            run_id=self._run_id(post),
+        ):
+            await self._process_accepted_post(post, message, file_metas, post_id)
+
+    async def _process_accepted_post(
+        self,
+        post: dict,
+        message: str,
+        file_metas: list,
+        post_id: str,
+    ) -> None:
+        channel_id = str(post["channel_id"])
 
         status_post_id = self._ingress_status_posts.pop(post_id, "")
         if not status_post_id:
@@ -169,32 +186,25 @@ class MessageHandler:
         window.append(post)
         del window[: -config.max_context_messages]
         self.memory.update_profile_from_message(user_id, post["username"], post)
-
-        trace.new()
-        trace.set_context(channel=channel_id[:12], user=post["username"], msg_type="mention")
-        log.info("%s [%s] %s", trace.prefix(), post["username"], message[:80])
+        log_event(log, "message.accepted", status="accepted", attachment_count=len(file_metas))
         approval = self.approval_command(message)
         if approval is not None:
-            trace.set_context(msg_type="approval")
-            await self._handle_approval_command(post, approval)
-            trace.clear()
+            with log_context.bind(operation="approval"):
+                await self._handle_approval_command(post, approval)
             return
 
         if self.is_explicit_invocation(post):
-            trace.set_context(msg_type="mention")
             typing_task = asyncio.create_task(self.delivery.typing_loop(channel_id))
             try:
                 await self.respond(post, tag="mention", status_post_id=status_post_id)
             finally:
                 typing_task.cancel()
-            trace.clear()
             return
 
-        trace.set_context(msg_type="decide")
-        response = await self.decide_and_respond(post)
-        trace.clear()
+        with log_context.bind(operation="decide"):
+            response = await self.decide_and_respond(post)
         if self.is_silent(response):
-            log.info("🤐 LLM 决定沉默: %s", message[:60])
+            log_event(log, "agent.silent", status="completed")
             return
         await self.delivery.reply(post, response)
 
@@ -264,12 +274,12 @@ class MessageHandler:
         system_prompt = prompt_context["system"]
         return RunRequest(
             context=RunContext(
-                trace_id=trace.current,
+                trace_id=log_context.get("trace_id", "----"),
                 actor_id=post.get("user_id", ""),
                 conversation_id=channel_id,
                 scope=f"mattermost:{team_id}/{channel_id}",
                 deadline=datetime.now(UTC) + timedelta(seconds=config.runtime_deadline_seconds),
-                run_id=f"mattermost:{post.get('id', trace.current)}",
+                run_id=self._run_id(post),
             ),
             messages=tuple(prompt_context["messages"]),
             system_prompt=system_prompt,
@@ -303,7 +313,7 @@ class MessageHandler:
             if self._should_stream(selection.agent):
                 stream = self.delivery.stream(
                     post,
-                    f"mattermost:{post.get('id', trace.current)}",
+                    self._run_id(post),
                     post_id=status_post_id,
                 )
             request = replace(request, intent=selection.intent)
@@ -336,22 +346,29 @@ class MessageHandler:
                 if runtime_result.status is RuntimeStatus.WAITING_APPROVAL
                 else self.presenter.present(
                     output,
-                    run_id=f"mattermost:{post.get('id', trace.current)}",
+                    run_id=self._run_id(post),
                 )
             )
         except (AgentPackageError, AgentRuntimeError, SkillPackageError) as error:
-            log.error("%s [%s] Agent 执行失败: %s", trace.prefix(), tag, error, exc_info=True)
+            log_event(
+                log,
+                "request.failed",
+                level=40,
+                status="failed",
+                error_code=type(error).__name__,
+            )
             response_view = self._error_view(
                 error,
-                run_id=f"mattermost:{post.get('id', trace.current)}",
+                run_id=self._run_id(post),
             )
         response_length = len(response_view.summary)
-        log.info(
-            "%s [%s] Agent 返回 (%.1fs, %d 字符)",
-            trace.prefix(),
-            tag,
-            time.monotonic() - started,
-            response_length,
+        log_event(
+            log,
+            "agent.response_ready",
+            status="completed",
+            duration_ms=round((time.monotonic() - started) * 1000),
+            output_size=response_length,
+            invocation=tag,
         )
         update_post_id = status_post_id or (stream.post_id if stream is not None else "")
         await self.delivery.reply_view(
@@ -402,7 +419,8 @@ class MessageHandler:
             permissions=frozenset({"web:read"}),
             budget_usd=config.model_budget_usd,
             actor_id=str(post.get("user_id") or ""),
-            run_id=f"mattermost:{post.get('id', trace.current)}",
+            task_id=f"task:{post.get('id') or ''}",
+            run_id=self._run_id(post),
         )
 
     def _register_approval_interrupt(
@@ -427,14 +445,14 @@ class MessageHandler:
             requested_by=post.get("user_id", ""),
             scope_id=scope,
             capability_context=CapabilityContext(
-                trace_id=trace.current,
+                trace_id=log_context.get("trace_id", "----"),
                 actor_id=post.get("user_id", ""),
                 conversation_id=post.get("channel_id", ""),
                 message_id=post.get("id", ""),
                 message=post.get("message", ""),
                 scope=scope,
                 allowed_capabilities=frozenset(allowed_capabilities),
-                run_id=f"mattermost:{post.get('id', trace.current)}",
+                run_id=self._run_id(post),
                 allowed_execution_profiles=frozenset(allowed_execution_profiles),
             ),
         )
@@ -442,7 +460,7 @@ class MessageHandler:
         return self.presenter.approval(
             capability=approval.capability_name,
             approval_id=approval.id,
-            run_id=f"mattermost:{post.get('id', trace.current)}",
+            run_id=self._run_id(post),
             actions=actions,
         )
 
@@ -451,7 +469,7 @@ class MessageHandler:
     ) -> tuple[ResponseAction, ...]:
         if self.action_tokens is None:
             return ()
-        run_id = f"mattermost:{post.get('id', trace.current)}"
+        run_id = self._run_id(post)
         shared = {
             "target": approval_id,
             "scope_id": self.post_scope(post),
@@ -583,6 +601,11 @@ class MessageHandler:
         team_id = self.mm.get_channel(channel_id).get("team_id") or "-"
         return f"mattermost:{team_id}/{channel_id}"
 
+    @staticmethod
+    def _run_id(post: dict) -> str:
+        post_id = str(post.get("id") or log_context.get("trace_id", "unknown"))
+        return f"mattermost:{post_id}"
+
     async def _handle_approval_command(self, post: dict, command: tuple[bool, str]) -> None:
         approved, request_id = command
         try:
@@ -591,7 +614,7 @@ class MessageHandler:
                 approved=approved,
                 actor_id=post.get("user_id", ""),
                 scope_id=self.post_scope(post),
-                trace_id=trace.current,
+                trace_id=log_context.get("trace_id", "----"),
                 reason="",
             )
             response_view = (
@@ -604,14 +627,14 @@ class MessageHandler:
                         artifacts=tuple(dict(item) for item in result.artifacts),
                         runtime_result=result,
                     ),
-                    run_id=f"mattermost:{post.get('id', trace.current)}",
+                    run_id=self._run_id(post),
                 )
             )
         except (KeyError, PermissionError, ValueError) as error:
             response_view = self.presenter.error(
                 title="审批失败",
                 summary="当前审批无法处理，请确认审批 ID、权限和状态。",
-                run_id=f"mattermost:{post.get('id', trace.current)}",
+                run_id=self._run_id(post),
             )
             log.warning("审批处理失败: %s", error)
         await self.delivery.reply_view(post, response_view)
@@ -638,6 +661,7 @@ class MessageHandler:
             raise TypeError("Mattermost execution requires a prepared RunRequest")
         allowed_capabilities = self._effective_capabilities(request, agent)
         package = getattr(agent, "package", None)
+        started = time.monotonic()
         capability_context = CapabilityContext(
             trace_id=runtime_request.context.trace_id,
             actor_id=runtime_request.context.actor_id,
@@ -664,16 +688,47 @@ class MessageHandler:
                 )
             ),
         ):
-            log.info(
-                "%s Agent route intent=%s agent=%s skill=%s package=%s",
-                trace.prefix(),
-                request.intent,
-                agent.descriptor.name,
-                request.skill.ref if request.skill is not None else "none",
-                package.snapshot.package_hash[:12] if package is not None else "unpackaged",
+            log_event(
+                log,
+                "agent.started",
+                status="running",
+                intent=request.intent,
+                agent_ref=agent.descriptor.name,
+                skill_ref=request.skill.ref if request.skill is not None else "",
+                package_hash=(package.snapshot.package_hash if package is not None else ""),
             )
-            output = await agent.run(request)
-            provenance = self._output_provenance(output, request, package)
+            try:
+                output = await agent.run(request)
+            except Exception as error:
+                duration_ms = round((time.monotonic() - started) * 1000)
+                self.audit_store.append_audit(
+                    "agent.run",
+                    actor_id=capability_context.actor_id,
+                    scope_id=capability_context.scope,
+                    trace_id=capability_context.trace_id,
+                    target=agent.descriptor.name,
+                    decision="failed",
+                    details={
+                        "schema_version": "1.0",
+                        "run_id": capability_context.run_id,
+                        "intent": request.intent,
+                        "skill_ref": request.skill.ref if request.skill is not None else "",
+                        "duration_ms": duration_ms,
+                        "error_code": type(error).__name__,
+                        "provenance": self._request_provenance(request, package, agent),
+                    },
+                )
+                log_event(
+                    log,
+                    "agent.failed",
+                    level=40,
+                    status="failed",
+                    duration_ms=duration_ms,
+                    error_code=type(error).__name__,
+                    agent_ref=agent.descriptor.name,
+                )
+                raise
+            provenance = self._output_provenance(output, request, package, agent)
             runtime_status = getattr(
                 output.runtime_result,
                 "status",
@@ -687,6 +742,7 @@ class MessageHandler:
                 target=agent.descriptor.name,
                 decision=runtime_status.value,
                 details={
+                    "schema_version": "1.0",
                     "run_id": capability_context.run_id,
                     "message_id": capability_context.message_id,
                     "intent": request.intent,
@@ -694,17 +750,32 @@ class MessageHandler:
                     "capabilities": list(allowed_capabilities),
                     "provenance": dict(provenance),
                     "skill_context": self._interrupted_skill_context(output),
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                    "usage": self._safe_usage(output),
                 },
             )
-            log.info(
-                "%s Agent complete agent=%s skill=%s artifacts=%d runtime=%s",
-                trace.prefix(),
-                output.agent_name,
-                request.skill.ref if request.skill is not None else "none",
-                len(output.artifacts),
-                getattr(output.runtime_result, "runtime", "deterministic"),
+            log_event(
+                log,
+                "agent.completed",
+                status=runtime_status.value,
+                agent_ref=output.agent_name,
+                skill_ref=request.skill.ref if request.skill is not None else "",
+                artifact_count=len(output.artifacts),
+                runtime=getattr(output.runtime_result, "runtime", "deterministic"),
             )
         return output
+
+    @staticmethod
+    def _safe_usage(output: AgentOutput) -> dict[str, int | float]:
+        runtime_result = output.runtime_result
+        if runtime_result is None:
+            return {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+        usage = runtime_result.usage
+        return {
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "cost_usd": usage.cost_usd,
+        }
 
     def _error_view(self, error: Exception, *, run_id: str) -> ResponseView:
         if isinstance(error, RuntimeTimeoutError):
@@ -744,10 +815,15 @@ class MessageHandler:
         )
 
     @staticmethod
-    def _output_provenance(output, request: AgentRequest, package) -> dict:
+    def _output_provenance(output, request: AgentRequest, package, agent) -> dict:
         if output.envelope:
             return dict(output.envelope.get("provenance", {}))
+        return MessageHandler._request_provenance(request, package, agent)
+
+    @staticmethod
+    def _request_provenance(request: AgentRequest, package, agent) -> dict:
         provenance = package.snapshot.to_dict() if package is not None else {}
+        provenance.update(dict(getattr(agent, "platform_provenance", {})))
         if request.skill is not None:
             provenance.update(request.skill.provenance)
         return provenance

@@ -91,6 +91,7 @@ class RunRequest:
     skill_files: Mapping[str, Mapping[str, str]] = field(
         default_factory=lambda: MappingProxyType({})
     )
+    metadata: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     event_sink: RunEventSink | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -111,6 +112,7 @@ class RunRequest:
         if self.response_schema is not None:
             object.__setattr__(self, "response_schema", _freeze(self.response_schema))
         object.__setattr__(self, "skill_files", _freeze(self.skill_files))
+        object.__setattr__(self, "metadata", _freeze(self.metadata))
 
 
 class RuntimeStatus(StrEnum):

@@ -92,8 +92,11 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 
 ## 可观测与告警
 
-所有 Task、AgentRun、CapabilityCall、ApprovalRequest 和 Delivery 都有版本化状态历史；成功的 `agent.run` 审计还记录 Agent/Skill provenance 与本次 Capability 集合。
-Policy 决策、配额和审计事件使用 actor/scope/trace 关联。部署层应至少告警：
+普通运行日志使用稳定 `event`、`status`、UTC timestamp 和 `trace_id/run_id/thread_id/agent_ref/skill_ref/capability` 等关联字段。`LOG_FORMAT=json` 输出 JSON Lines；开发环境可保留 `text`。本地文件按大小轮转并带 PID，`LOG_DIR=` 可完全关闭文件输出。中心化 Filter 会遮蔽 Secret、Authorization、URL query 和异常正文，但业务代码仍不得主动记录 Prompt、消息正文、完整参数或结果。
+
+Deep Agents 通过 LangChain 原生 Callback 记录 model/tool started、completed、failed，模型和工具正文不会进入日志或 AuditEvent。RunnableConfig 同时携带低基数 tags、动态 run name 和受控 metadata，可供后续 LangSmith/OpenTelemetry exporter 复用；生产环境不得启用会输出完整状态的 `debug` stream。
+
+Agent 成功/失败、模型调用、Capability 调用、受控执行、审批、Inbox replay 和 Delivery 已进入 AuditEvent。查询支持 event、target、trace、actor、scope、decision、run 和时间游标。Policy 决策的完整事件目录、归档/导出和防篡改仍是后续治理项。部署层应至少告警：
 
 - Inbox `failed` 或 Outbox `failed` 增长；
 - Runtime timeout/rate-limit 连续发生；

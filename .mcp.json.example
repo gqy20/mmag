@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "crawl-mcp": {
-      "command": "uvx",
-      "args": ["crawl-mcp"]
-    }
-  }
-}

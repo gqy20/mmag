@@ -534,6 +534,12 @@ class SQLiteControlPlane:
         *,
         event_type: str = "",
         target: str = "",
+        trace_id: str = "",
+        actor_id: str = "",
+        scope_id: str = "",
+        decision: str = "",
+        run_id: str = "",
+        before: float | None = None,
         limit: int = 100,
     ) -> list[AuditEvent]:
         if limit < 1:
@@ -546,6 +552,21 @@ class SQLiteControlPlane:
         if target:
             filters.append("target=?")
             parameters.append(target)
+        for column, value in (
+            ("trace_id", trace_id),
+            ("actor_id", actor_id),
+            ("scope_id", scope_id),
+            ("decision", decision),
+        ):
+            if value:
+                filters.append(f"{column}=?")
+                parameters.append(value)
+        if run_id:
+            filters.append("json_extract(details, '$.run_id')=?")
+            parameters.append(run_id)
+        if before is not None:
+            filters.append("created_at<?")
+            parameters.append(before)
         where = f" WHERE {' AND '.join(filters)}" if filters else ""
         rows = self._connection.execute(
             f"SELECT * FROM audit_events{where} ORDER BY created_at DESC LIMIT ?",
@@ -561,6 +582,7 @@ class SQLiteControlPlane:
                 row["decision"],
                 row["trace_id"],
                 json.loads(row["details"]),
+                row["created_at"],
             )
             for row in rows
         ]

@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from .client import PROP_FROM_BOT, PROP_SUMMARY, PROP_TRUE
-from .logger import get_logger, trace
+from .logger import get_logger, log_context, log_event
 from .runtimes import AgentRuntime, RunContext, RunRequest
 
 if TYPE_CHECKING:
@@ -91,11 +91,12 @@ class MemoryCompactor:
         # 摘要批次大小 = context_window (一次 LLM 处理的合理上限)
         summary_batch = self.config.memory_context_window
 
-        log.info(
-            "%s [摘要] channel=%s 第 %d 条 → 触发定期摘要",
-            trace.prefix(),
-            channel_id[:12],
-            count,
+        log_event(
+            log,
+            "memory.compaction_started",
+            status="running",
+            conversation_id=channel_id,
+            message_count=count,
         )
 
         t0 = time.monotonic()
@@ -144,11 +145,12 @@ class MemoryCompactor:
         )
 
         elapsed = time.monotonic() - t0
-        log.info(
-            "%s [摘要] 完成 | %d 批 | %.1fs",
-            trace.prefix(),
-            len(all_summaries),
-            elapsed,
+        log_event(
+            log,
+            "memory.compaction_completed",
+            status="succeeded",
+            batch_count=len(all_summaries),
+            duration_ms=round(elapsed * 1000),
         )
 
     # ============================================================
@@ -219,7 +221,7 @@ class MemoryCompactor:
             result = await self.runtime.run(
                 RunRequest(
                     context=RunContext(
-                        trace_id=trace.current,
+                        trace_id=log_context.get("trace_id", log_context.new_trace_id()),
                         actor_id="mmag:memory-compactor",
                         conversation_id=channel_id,
                         scope=f"mattermost:channel/{channel_id}",
@@ -239,12 +241,14 @@ class MemoryCompactor:
         except Exception as e:
             # 失败时返回 None — 调用方 (._periodic_summary) 会跳过此批次,
             # 避免把错误字符串当合法摘要写入 conversation_segments 污染长期记忆
-            log.error(
-                "%s [压缩] LLM 摘要失败 (channel=%s batch_size=%d): %s",
-                trace.prefix(),
-                channel_id[:12],
-                len(messages),
-                e,
+            log_event(
+                log,
+                "memory.compaction_failed",
+                level=40,
+                status="failed",
+                conversation_id=channel_id,
+                batch_size=len(messages),
+                error_code=type(e).__name__,
             )
             return None
 
@@ -274,13 +278,19 @@ class MemoryCompactor:
                 props={PROP_FROM_BOT: PROP_TRUE, PROP_SUMMARY: PROP_TRUE},
             )
             if post_id:
-                log.info(
-                    "%s [摘要线程] 已发送 → %s (root=%s)",
-                    trace.prefix(),
-                    post_id[:12],
-                    root_id[:12] if root_id else "(主流)",
+                log_event(
+                    log,
+                    "memory.compaction_delivered",
+                    status="succeeded",
+                    delivery_id=post_id,
                 )
             else:
-                log.warning("%s [摘要线程] send_post 返回 None", trace.prefix())
+                log_event(log, "memory.compaction_delivery_failed", level=30, status="failed")
         except Exception as e:
-            log.error("%s [摘要线程] 发送失败: %s", trace.prefix(), e)
+            log_event(
+                log,
+                "memory.compaction_delivery_failed",
+                level=40,
+                status="failed",
+                error_code=type(e).__name__,
+            )

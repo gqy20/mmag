@@ -1,14 +1,8 @@
 id: mmchat
-version: 1.2.0
+version: 1.3.0
 default_effect: deny
 
 rules:
-  - id: read-active-skill-resource
-    effect: allow
-    actions: [load_skill_resource]
-    permissions: [skill:resource:read]
-    reason: Only the active Skill session can resolve a declared immutable resource.
-
   - id: read-current-channel
     effect: allow
     actions: [get_channel_info, get_posts, search_messages, search_knowledge]
@@ -45,6 +39,6 @@ rules:
 
   - id: approve-allowlisted-mcp
     effect: require_approval
-    actions: [mcp_*]
-    permissions: [mcp:*:invoke]
+    actions: [mcp_crawl_search_*]
+    permissions: [mcp:crawl:*:invoke]
     reason: MCP resource semantics are server-defined, so every invocation requires approval.

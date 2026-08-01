@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import time
+from importlib.metadata import version
 from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -22,7 +23,7 @@ from ..capabilities import (
     create_ppt_capabilities,
 )
 from ..client import MMClient
-from ..config import _log_config_loading, _secret_status, config
+from ..config import _log_config_loading, config
 from ..control_plane import (
     ApprovalService,
     LangGraphApprovalCoordinator,
@@ -45,8 +46,8 @@ from ..governance import (
     QuotaLedger,
     RegistryPolicyAuthorizer,
 )
-from ..logger import get_logger
-from ..mcp_bridge import MCPClientBridge
+from ..logger import get_logger, log_event
+from ..mcp_bridge import MCPClientBridge, load_mcp_config
 from ..memory import Memory
 from ..memory_compactor import MemoryCompactor
 from ..runtimes import DeepAgentRuntime
@@ -125,9 +126,11 @@ class Agent:
         )
         for binding in builtin_bindings:
             self.capability_registry.register(binding)
+        self.mcp_config = load_mcp_config(config.mcp_config_path)
         self.deep_agent_runtime = DeepAgentRuntime(
             capability_registry=self.capability_registry,
             checkpoint_path=config.checkpoint_db_path,
+            audit_sink=self.control_store,
         )
         self.runtime = ModelGateway(
             {"default": self.deep_agent_runtime},
@@ -146,7 +149,13 @@ class Agent:
                 self.runtime,
                 self.capability_registry,
                 self.model_policy_registry,
-                additional_capabilities=config.mcp_allowed_tools,
+                additional_capabilities=self.mcp_config.capability_names,
+                platform_provenance={
+                    "deepagents_version": version("deepagents"),
+                    "langgraph_version": version("langgraph"),
+                    "mcp_config_version": str(self.mcp_config.version),
+                    "mcp_config_hash": self.mcp_config.sha256,
+                },
             ),
             DirectAgentProvider(
                 self.capability_registry,
@@ -166,7 +175,7 @@ class Agent:
 
         self.mcp_bridge = MCPClientBridge(
             self.capability_registry,
-            allowed_tools=config.mcp_allowed_tools,
+            config=self.mcp_config,
             executor=self.capability_executor,
         )
         self.approval_coordinator = LangGraphApprovalCoordinator(
@@ -241,15 +250,19 @@ class Agent:
 
     async def start(self) -> None:
         _log_config_loading()
-        log.info("🤖 Agent 启动中...")
+        log_event(log, "application.starting", status="starting")
         me = await self.mm.get_me_async()
         self.identity.user_id = me["id"]
         self.identity.username = me["username"]
-        log.info("Bot: @%s (%s)", self.identity.username, self.identity.user_id)
+        log_event(log, "mattermost.identity_loaded", status="ready")
         await self._probe_mattermost()
 
-        log.info(
-            "模型: %s | Key: %s", config.anthropic_model, _secret_status(config.anthropic_api_key)
+        log_event(
+            log,
+            "model.configured",
+            status="ready" if config.anthropic_api_key else "missing_secret",
+            model=config.anthropic_model,
+            api_key_configured=bool(config.anthropic_api_key),
         )
         if not config.anthropic_api_key:
             log.error("ANTHROPIC_API_KEY 未设置")

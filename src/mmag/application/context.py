@@ -11,7 +11,7 @@ from typing import Any
 
 from ..agent_packages.assets import render_prompt
 from ..config import config
-from ..logger import get_logger, trace
+from ..logger import get_logger, log_event
 
 log = get_logger(__name__)
 
@@ -218,7 +218,13 @@ class AttachmentProcessor:
                     },
                 }
             )
-            log.info("%s 已加载图片附件: %s (%d bytes)", trace.prefix(), name, len(data))
+            log_event(
+                log,
+                "attachment.loaded",
+                status="completed",
+                attachment_type="image",
+                output_size=len(data),
+            )
 
         offset = len(image_downloads)
         for index, (file_id, name, mime) in enumerate(text_downloads, start=offset):
@@ -233,8 +239,13 @@ class AttachmentProcessor:
                 original_length = len(text)
                 text = text[:max_text_chars] + f"\n\n[... 已截断, 原文 {original_length} 字符 ...]"
             blocks.append({"type": "text", "text": f"[附件: {name}]\n{text}"})
-            log.info(
-                "%s 已加载文本附件: %s (%d bytes, mime=%s)", trace.prefix(), name, len(data), mime
+            log_event(
+                log,
+                "attachment.loaded",
+                status="completed",
+                attachment_type="text",
+                media_type=mime,
+                output_size=len(data),
             )
 
         if not blocks:

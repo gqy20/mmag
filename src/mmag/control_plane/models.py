@@ -210,3 +210,4 @@ class AuditEvent:
     decision: str
     trace_id: str = ""
     details: Mapping[str, Any] = field(default_factory=dict)
+    created_at: float = 0.0

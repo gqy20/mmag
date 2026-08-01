@@ -11,6 +11,7 @@ from mmag.capabilities import (
     CapabilitySpec,
     bind_langgraph_capability,
 )
+from mmag.control_plane import SQLiteControlPlane
 from mmag.governance import (
     GovernanceContext,
     PolicyCapabilityAuthorizer,
@@ -54,6 +55,7 @@ def _runtime(
     calls: list[str],
     *responses: AIMessage,
     checkpointer=None,
+    audit_sink=None,
 ) -> DeepAgentRuntime:
     async def publish(value: str):
         calls.append(value)
@@ -87,6 +89,7 @@ def _runtime(
         registry,
         checkpointer=checkpointer,
         model_factory=ModelFactory(*responses),
+        audit_sink=audit_sink,
     )
 
 
@@ -154,3 +157,41 @@ async def test_deep_agent_rebuilds_graph_from_approval_snapshot():
 
     assert completed.text == "resumed"
     assert calls == ["approved"]
+
+
+@pytest.mark.asyncio
+async def test_native_callbacks_write_content_free_model_and_tool_audits(tmp_path):
+    store = SQLiteControlPlane(str(tmp_path / "telemetry.db"))
+    calls: list[str] = []
+    runtime = _runtime(
+        calls,
+        _tool_call(),
+        AIMessage(content="done"),
+        audit_sink=store,
+    )
+    request = _request(runtime, "observed-run")
+    request = RunRequest(
+        request.context,
+        request.messages,
+        capabilities=request.capabilities,
+        metadata={"agent_ref": "report@2.1.0", "skill_ref": "report@1.3.0"},
+    )
+
+    with bind_governance_context(GovernanceContext("user-1", "scope-1")):
+        paused = await runtime.run(request)
+        await runtime.resume(
+            "observed-run",
+            {
+                "decisions": [{"type": "approve"}],
+                "runtime_snapshot": paused.interruptions[0]["value"]["runtime_snapshot"],
+            },
+        )
+
+    model_audits = store.list_audits(event_type="model.call")
+    tool_audits = store.list_audits(event_type="capability.call", target="publish")
+    policy_audits = store.list_audits(event_type="policy.decision", target="publish")
+    assert {item.decision for item in model_audits} >= {"running", "succeeded"}
+    assert {item.decision for item in tool_audits} == {"running", "succeeded"}
+    assert {item.decision for item in policy_audits} == {"require_approval"}
+    assert all("publish" not in str(item.details) for item in model_audits)
+    assert all("approved" not in str(item.details) for item in tool_audits)

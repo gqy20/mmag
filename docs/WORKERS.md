@@ -10,11 +10,11 @@ Capability 调用再由当前 Package Policy 动态裁决。
 
 | Agent | Skill | 路由职责 | 当前可执行能力 | 结构化结果 |
 |---|---|---|---|---|
-| `mmchat@1.3.0` | `web-research@1.1.0` | 默认群聊/私聊协同入口 | 对话上下文、知识、链接与受控 MCP | 文本答复 |
-| `link@1.3.0` | — | 单 URL 解析 | 确定性 `analyze_link`，无模型循环 | `link_analysis` |
-| `report@1.1.0` | `report@1.1.0` | 研报、行业/竞品研究 | 当前频道知识/消息、公开链接、按需模板 | 证据账本式 research report |
-| `ppt@2.3.0` | `slides@2.3.0` | PPT、幻灯片、路演结构与文件生成 | 当前频道知识、受控 Markdown/主题、可编辑 PPTX/PNG 预览、Demo Shell、审批后 Artifact 交付 | Presentation Bundle 与 Artifact refs |
-| `project@1.1.0` | `project@1.1.0` | 项目计划、状态和任务拆解 | 当前频道消息/知识、审批后写入共享知识 | project brief |
+| `mmchat@2.1.0` | `web-research@1.2.0` | 默认群聊/私聊协同入口 | 对话上下文、知识、链接与 crawl 搜索子集 | 文本答复 |
+| `link@2.0.0` | — | 单 URL 解析 | 确定性 `analyze_link`，无模型循环 | `link_analysis` |
+| `report@2.1.0` | `report@1.3.0` | 研报、行业/竞品研究 | 当前频道知识/消息、公开链接与完整 crawl 工具集 | 证据账本式 research report |
+| `ppt@3.0.0` | `slides@3.0.0` | PPT、幻灯片、路演结构与文件生成 | 当前频道知识、受控 Markdown/主题、可编辑 PPTX/PNG 预览、Demo Shell、审批后 Artifact 交付 | Presentation Bundle 与 Artifact refs |
+| `project@2.0.0` | `project@1.2.0` | 项目计划、状态和任务拆解 | 当前频道消息/知识、审批后写入共享知识 | project brief |
 
 `link` 直接执行确定性 Capability，因为单 URL 提取不需要模型和 Skill；输入、输出与版本
 provenance 由 Agent Package 契约负责。
@@ -26,6 +26,7 @@ provenance 由 Agent Package 契约负责。
 ```text
 Agent Manifest allowlist
 ∩ Active Skill required/available optional
+∩ .mcp.json enabled tools
 ∩ Current Package Policy
 ∩ Execution Profile command
 ```

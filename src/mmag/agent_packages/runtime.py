@@ -9,6 +9,7 @@ from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from fnmatch import fnmatch
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from jsonschema import Draft202012Validator
@@ -21,6 +22,7 @@ from ..capabilities import (
     get_capability_context,
 )
 from ..governance import GovernanceContext, bind_governance_context, get_governance_context
+from ..logger import log_context
 from ..runtimes import RunRequest, RuntimeStatus
 from ..skill_packages import (
     SkillContext,
@@ -123,8 +125,10 @@ def _output_envelope(
     model_calls: int,
     tool_calls: int,
     cost_usd: float,
+    platform_provenance: Mapping[str, str],
 ) -> dict[str, Any]:
     provenance = package.snapshot.to_dict()
+    provenance.update(platform_provenance)
     if request.skill is not None:
         provenance.update(request.skill.provenance)
     return {
@@ -313,6 +317,8 @@ class ContractAgentDecorator:
         self,
         package: AgentPackage,
         delegate: ManagedAgent,
+        *,
+        platform_provenance: Mapping[str, str] | None = None,
     ):
         allowed = package.manifest.capabilities.allow
         denied_patterns = package.manifest.capabilities.deny
@@ -331,6 +337,7 @@ class ContractAgentDecorator:
             raise AgentPackageError(f"delegate exposes capabilities outside its manifest: {names}")
         self.package = package
         self.delegate = delegate
+        self.platform_provenance = MappingProxyType(dict(platform_provenance or {}))
         self.descriptor = build_agent_descriptor(package, delegate.descriptor)
 
     async def run(self, request: AgentRequest) -> AgentOutput:
@@ -364,6 +371,36 @@ class ContractAgentDecorator:
             else self.descriptor.capabilities
         )
         with (
+            log_context.bind(
+                trace_id=(
+                    constrained.runtime_request.context.trace_id
+                    if constrained.runtime_request is not None
+                    else request.run_id
+                ),
+                task_id=request.task_id,
+                run_id=(
+                    constrained.runtime_request.context.run_id
+                    if constrained.runtime_request is not None
+                    else request.run_id
+                ),
+                actor_id=request.actor_id,
+                conversation_id=(
+                    constrained.runtime_request.context.conversation_id
+                    if constrained.runtime_request is not None
+                    else ""
+                ),
+                thread_id=(
+                    constrained.runtime_request.context.run_id
+                    if constrained.runtime_request is not None
+                    else request.run_id
+                ),
+                agent_ref=(
+                    f"{self.package.manifest.metadata.name}@"
+                    f"{self.package.manifest.metadata.version}"
+                ),
+                skill_ref=request.skill.ref if request.skill is not None else "",
+                policy_ref=self.package.manifest.policy_ref,
+            ),
             skill_scope,
             bind_capability_context(
                 _package_capability_context(
@@ -399,6 +436,7 @@ class ContractAgentDecorator:
             model_calls=1 if runtime_result is not None else 0,
             tool_calls=tool_calls,
             cost_usd=cost_usd,
+            platform_provenance=self.platform_provenance,
         )
         _validate(
             self.package.schemas[self.package.manifest.result_schema_ref],

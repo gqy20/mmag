@@ -1,25 +1,18 @@
-"""
-MCP Client Bridge — 读取 .mcp.json，连接外部 MCP Server，注入 CapabilityRegistry
-
-和 Claude Code 的 .mcp.json 格式完全兼容，可直接复用 cc_plugins 等项目的配置。
-
-支持的传输方式:
-  - stdio: 本地进程 (npx / uvx / python)
-  - http / streamable-http: 远程服务 (SSE / Streamable HTTP)
-
-配置文件位置（按优先级）:
-  1. .env 中 MCP_CONFIG_PATH 指定的路径
-  2. 项目根目录的 .mcp.json（CC 标准位置）
-"""
+"""Governed MCP configuration, discovery, and Capability registration."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, NamedTuple
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 from .capabilities import (
     CapabilityExecutor,
@@ -30,12 +23,14 @@ from .capabilities import (
 from .logger import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from .capabilities import CapabilityRegistry
 
 log = get_logger(__name__)
 
-# 项目根目录（src/mmag 上两级）
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "mcp-config.schema.json"
 _MCP_RUNTIME_ENVIRONMENT = frozenset(
     {
         "COMSPEC",
@@ -54,41 +49,129 @@ _MCP_RUNTIME_ENVIRONMENT = frozenset(
 )
 
 
-@dataclass
-class McpConfigItem:
-    """解析后的单个 MCP Server 配置"""
+class MCPConfigError(ValueError):
+    """Raised when the unified MCP configuration is invalid."""
+
+
+@dataclass(frozen=True)
+class MCPServerConfig:
+    """Immutable server declaration from the startup configuration snapshot."""
 
     name: str
-    type: str  # "stdio" | "http" | "streamable-http"
-    endpoint: str  # command+args 或 url
-    raw_config: dict[str, Any] = field(default_factory=dict)
+    transport: str
+    enabled: bool
+    tools: tuple[str, ...]
+    raw_config: Mapping[str, Any]
+
+    def capability_name(self, tool_name: str) -> str:
+        return f"mcp_{self.name}_{tool_name}"
 
 
-class _McpConn(NamedTuple):
-    """一对 MCP 连接资源 — close_all / 异常清理都要按反向关两层
+@dataclass(frozen=True)
+class MCPConfigSnapshot:
+    """Validated MCP configuration captured once for one application process."""
 
-    transport: stdio_client 或 sse_client 上下文 (管子进程 / HTTP 连接)
-    session:   ClientSession (管 MCP 协议握手 + list_tools / call_tool)
-    """
+    path: Path
+    version: int
+    sha256: str
+    servers: tuple[MCPServerConfig, ...]
 
+    @classmethod
+    def empty(cls, path: str | Path = ".mcp.json") -> MCPConfigSnapshot:
+        return cls(path=Path(path), version=1, sha256="", servers=())
+
+    @property
+    def enabled_servers(self) -> tuple[MCPServerConfig, ...]:
+        return tuple(server for server in self.servers if server.enabled)
+
+    @property
+    def capability_names(self) -> tuple[str, ...]:
+        return tuple(
+            server.capability_name(tool)
+            for server in self.enabled_servers
+            for tool in server.tools
+        )
+
+    def get(self, name: str) -> MCPServerConfig | None:
+        return next((server for server in self.servers if server.name == name), None)
+
+
+class _MCPConn(NamedTuple):
     transport: Any
     session: Any
 
 
-def _resolve_env_vars(value: Any, env: dict[str, str] | None = None) -> Any:
-    """将 ${VAR_NAME} 替换为环境变量值"""
-    env = env or dict(os.environ)
+def _schema() -> dict[str, Any]:
+    return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def _config_error(path: Path, error: ValidationError) -> MCPConfigError:
+    location = ".".join(str(part) for part in error.absolute_path) or "root"
+    return MCPConfigError(f"invalid MCP config {path} at {location}: {error.message}")
+
+
+def load_mcp_config(config_path: str | Path) -> MCPConfigSnapshot:
+    """Load one strict platform MCP snapshot; invalid configuration fails startup."""
+    path = Path(config_path).expanduser().resolve()
+    if not path.is_file():
+        log.info("MCP 配置不存在，外部能力保持关闭: %s", path)
+        return MCPConfigSnapshot.empty(path)
+
+    try:
+        encoded = path.read_bytes()
+        raw = json.loads(encoded)
+    except (OSError, json.JSONDecodeError) as error:
+        raise MCPConfigError(f"cannot load MCP config {path}: {error}") from error
+
+    try:
+        Draft202012Validator(_schema()).validate(raw)
+    except ValidationError as error:
+        raise _config_error(path, error) from error
+
+    servers = tuple(
+        MCPServerConfig(
+            name=name,
+            transport=config["type"],
+            enabled=config["enabled"],
+            tools=tuple(config["tools"]),
+            raw_config=MappingProxyType(dict(config)),
+        )
+        for name, config in raw["mcpServers"].items()
+    )
+    snapshot = MCPConfigSnapshot(
+        path=path,
+        version=raw["version"],
+        sha256=hashlib.sha256(encoded).hexdigest(),
+        servers=servers,
+    )
+    log.info(
+        "MCP 配置已加载: path=%s version=%d hash=%s servers=%d enabled=%d tools=%d",
+        path,
+        snapshot.version,
+        snapshot.sha256[:16],
+        len(snapshot.servers),
+        len(snapshot.enabled_servers),
+        len(snapshot.capability_names),
+    )
+    return snapshot
+
+
+def _resolve_env_vars(value: Any, env: Mapping[str, str] | None = None) -> Any:
+    """Resolve explicit ${NAME} references without inheriting arbitrary secrets."""
+    variables = os.environ if env is None else env
     if isinstance(value, str):
 
-        def replacer(m: re.Match) -> str:
-            var_name = m.group(1)
-            return env.get(var_name, m.group(0))
+        def replacer(match: re.Match[str]) -> str:
+            name = match.group(1)
+            if name not in variables:
+                raise MCPConfigError(f"MCP environment variable {name!r} is not set")
+            return variables[name]
 
-        return re.sub(r"\$\{([A-Z0-9_]+)\}", replacer, value)
-    elif isinstance(value, list):
-        return [_resolve_env_vars(v, env) for v in value]
-    elif isinstance(value, dict):
-        return {k: _resolve_env_vars(v, env) for k, v in value.items()}
+        return re.sub(r"\$\{([A-Z][A-Z0-9_]*)\}", replacer, value)
+    if isinstance(value, list):
+        return [_resolve_env_vars(item, variables) for item in value]
+    if isinstance(value, dict):
+        return {key: _resolve_env_vars(item, variables) for key, item in value.items()}
     return value
 
 
@@ -97,294 +180,152 @@ def _stdio_environment(configured: Any) -> dict[str, str]:
     inherited = {
         name: value for name, value in os.environ.items() if name in _MCP_RUNTIME_ENVIRONMENT
     }
-    if not isinstance(configured, dict):
-        return inherited
-    inherited.update(
-        {
-            name: value
-            for name, value in configured.items()
-            if isinstance(name, str) and isinstance(value, str)
-        }
-    )
+    if isinstance(configured, dict):
+        inherited.update(
+            {
+                name: value
+                for name, value in configured.items()
+                if isinstance(name, str) and isinstance(value, str)
+            }
+        )
     return inherited
 
 
-def read_mcp_config(config_path: str | Path | None = None) -> list[McpConfigItem]:
-    """读取并解析 .mcp.json 配置文件
-
-    Args:
-        config_path: 配置文件路径，None 则自动查找项目根目录
-
-    Returns:
-        解析后的 Server 配置列表
-    """
-    if config_path:
-        path = Path(config_path)
-    else:
-        # 按优先级查找: 环境变量 → 项目根目录 .mcp.json
-        env_path = os.getenv("MCP_CONFIG_PATH")
-        path = Path(env_path) if env_path else _PROJECT_ROOT / ".mcp.json"
-
-    if not path.exists():
-        log.info("未找到 MCP 配置文件: %s（跳过 MCP 加载）", path)
-        return []
-
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
-        log.warning("MCP 配置文件解析失败 %s: %s", path, e)
-        return []
-
-    servers_raw = raw.get("mcpServers", {})
-    if not servers_raw or not isinstance(servers_raw, dict):
-        log.info("MCP 配置文件无 mcpServers 段: %s", path)
-        return []
-
-    items: list[McpConfigItem] = []
-    for name, raw_cfg in servers_raw.items():
-        if not isinstance(raw_cfg, dict):
-            continue
-        cfg = _resolve_env_vars(raw_cfg)
-
-        server_type = str(cfg.get("type", "")).strip() or ("stdio" if "command" in cfg else "http")
-
-        endpoint = ""
-        if server_type == "stdio":
-            cmd = str(cfg.get("command", "")).strip()
-            args = cfg.get("args", [])
-            if isinstance(args, list):
-                args_str = " ".join(str(a) for a in args if isinstance(a, str))
-            else:
-                args_str = ""
-            endpoint = f"{cmd} {args_str}".strip()
-        else:
-            endpoint = str(cfg.get("url", "")).strip()
-
-        items.append(
-            McpConfigItem(
-                name=name,
-                type=server_type,
-                endpoint=endpoint,
-                raw_config=cfg,
-            )
-        )
-
-    log.info(
-        "MCP 配置已加载: %s (%d 个 Server)",
-        path.relative_to(_PROJECT_ROOT),
-        len(items),
-    )
-    for item in items:
-        log.debug("  - [%s] type=%s", item.name, item.type)
-    return items
-
-
 class MCPClientBridge:
-    """MCP 客户端桥接器 — 连接外部 MCP Server，注册能力到 CapabilityRegistry
-
-    用法::
-
-        bridge = MCPClientBridge(registry)
-        await bridge.load_and_connect()   # 读 .mcp.json + 连接所有 Server
-        # 之后 registry 中就有了 mcp_xxx_yyy 形式的工具，LLM 可直接调用
-    """
+    """Connect enabled servers and project exact configured tools as Capabilities."""
 
     def __init__(
         self,
         registry: CapabilityRegistry,
         *,
-        allowed_tools: set[str] | frozenset[str] | tuple[str, ...] = (),
+        config: MCPConfigSnapshot,
         executor: CapabilityExecutor | None = None,
-    ):
+    ) -> None:
         self.registry = registry
-        self.allowed_tools = frozenset(allowed_tools)
+        self.config = config
         self.executor = executor or CapabilityExecutor()
-        self._sessions: dict[str, _McpConn] = {}  # name → (transport, session)
+        self._sessions: dict[str, _MCPConn] = {}
         self._capabilities: dict[str, CapabilitySpec] = {}
 
     def is_tool_allowed(self, server_name: str, tool_name: str) -> bool:
-        """Return whether an external MCP tool is explicitly enabled."""
-        return f"mcp_{server_name}_{tool_name}" in self.allowed_tools
+        server = self.config.get(server_name)
+        return bool(server and server.enabled and tool_name in server.tools)
 
     def get_capabilities(self) -> tuple[CapabilitySpec, ...]:
-        """Return the allowlisted external capabilities in discovery order."""
         return tuple(self._capabilities.values())
 
     async def load_and_connect(self) -> int:
-        """读取 .mcp.json 并连接所有配置的 Server
-
-        Returns:
-            成功连接并注册工具的 Server 数量
-        """
-        if not self.allowed_tools:
-            log.info("外部 MCP 工具未配置白名单，跳过连接")
-            return 0
-
-        items = read_mcp_config()
-        if not items:
+        if not self.config.enabled_servers:
+            log.info("MCP 配置中没有启用的 Server，跳过连接")
             return 0
 
         success_count = 0
-        for item in items:
+        for server in self.config.enabled_servers:
             try:
-                tool_count = await self._connect_one(item)
-                if tool_count > 0:
+                tool_count = await self._connect_one(server)
+                if tool_count:
                     success_count += 1
-                    log.info(
-                        "MCP Server '%s' 已就绪: %d 个工具",
-                        item.name,
-                        tool_count,
-                    )
-            except Exception as e:
+                    log.info("MCP Server '%s' 已就绪: %d 个工具", server.name, tool_count)
+            except Exception as error:
                 log.warning(
                     "MCP Server '%s' 连接失败: %s [%s]",
-                    item.name,
-                    e,
-                    type(e).__name__,
+                    server.name,
+                    error,
+                    type(error).__name__,
                 )
-
-        if success_count > 0:
-            log.info("MCP Bridge 就绪: %d/%d 个 Server 在线", success_count, len(items))
+        log.info(
+            "MCP Bridge 就绪: %d/%d 个启用 Server 在线",
+            success_count,
+            len(self.config.enabled_servers),
+        )
         return success_count
 
-    async def _connect_one(self, item: McpConfigItem) -> int:
-        """连接单个 MCP Server 并注册其所有工具
-
-        MCP SDK 的 stdio_client / sse_client 实际是 async context manager,
-        yield 的是 (read_stream, write_stream) tuple, 不是 session。
-        需要再包一层 ClientSession(read, write) 才能拿到 list_tools / call_tool。
-
-        资源管理: transport 和 session 是两层独立的 context manager,
-        任一异常都需要按反向顺序 (session → transport) 关闭, 否则 stdio
-        子进程 / HTTP 连接会泄漏。
-
-        Returns:
-            注册的工具数量
-        """
+    async def _connect_one(self, server: MCPServerConfig) -> int:
         from mcp.client.session import ClientSession
         from mcp.client.sse import sse_client
         from mcp.client.stdio import StdioServerParameters, stdio_client
+        from mcp.client.streamable_http import streamablehttp_client
 
+        config = _resolve_env_vars(dict(server.raw_config))
         transport: Any | None = None
         session: Any | None = None
         try:
-            # 1) 建 transport (stdio_client / sse_client 是 async context manager)
-            if item.type == "stdio":
-                cfg = item.raw_config
+            if server.transport == "stdio":
                 params = StdioServerParameters(
-                    command=cfg.get("command", ""),
-                    args=[str(a) for a in cfg.get("args", []) if isinstance(a, str)],
-                    env=_stdio_environment(cfg.get("env", {})),
+                    command=config["command"],
+                    args=list(config.get("args", [])),
+                    env=_stdio_environment(config.get("env", {})),
                 )
                 transport = stdio_client(params)
-                streams = await transport.__aenter__()
-
-            elif item.type in ("http", "streamable-http"):
-                url = item.raw_config.get("url", "")
-                headers = item.raw_config.get("headers", {})
-                resolved_headers = {
-                    k: v for k, v in headers.items() if isinstance(k, str) and isinstance(v, str)
-                }
-                transport = sse_client(url, headers=resolved_headers)
-                streams = await transport.__aenter__()
-
+            elif server.transport == "sse":
+                transport = sse_client(config["url"], headers=config.get("headers", {}))
             else:
-                log.warning("MCP Server '%s': 不支持的传输类型 '%s'", item.name, item.type)
-                return 0
+                transport = streamablehttp_client(
+                    config["url"], headers=config.get("headers", {})
+                )
 
-            # 2) 包 ClientSession 拿到真正的 MCP 协议句柄
-            session = ClientSession(*streams)
+            streams = await transport.__aenter__()
+            session = ClientSession(*streams[:2])
             await session.__aenter__()
-            # 2.5) MCP 协议握手: 必须先 initialize() 才能调 list_tools / call_tool,
-            #      否则服务端会报 "Received request before initialization was complete"
-            try:
-                await session.initialize()
-            except Exception as e:
-                log.warning("MCP Server '%s' initialize 失败: %s", item.name, e)
-                await self._close_conn(item.name, transport, session)
-                self._sessions.pop(item.name, None)
-                return 0
-            self._sessions[item.name] = _McpConn(transport=transport, session=session)
-
-            # 3) 拉取工具列表
-            try:
-                result = await session.list_tools()
-                tools = result.tools
-            except Exception as e:
-                log.warning("MCP Server '%s' 获取工具列表失败: %s", item.name, e)
-                # 失败也要把 session/transport 关掉
-                await self._close_conn(item.name, transport, session)
-                self._sessions.pop(item.name, None)
-                return 0
-
-            # 4) 发现结果先进入 Capability，再派生 LangGraph/SDK bindings。
-            registered = self._register_discovered_tools(item.name, session, tools)
-            if registered == 0:
-                await self._close_conn(item.name, transport, session)
-                self._sessions.pop(item.name, None)
+            await session.initialize()
+            self._sessions[server.name] = _MCPConn(transport=transport, session=session)
+            result = await session.list_tools()
+            registered = self._register_discovered_tools(server, session, result.tools)
+            if not registered:
+                await self._close_conn(server.name, transport, session)
+                self._sessions.pop(server.name, None)
             return registered
-
         except BaseException:
-            # __aenter__ 成功但 list_tools / register 之前任意步骤失败:
-            # 反向关闭两层 (session → transport)
-            await self._close_conn(item.name, transport, session)
-            self._sessions.pop(item.name, None)
+            await self._close_conn(server.name, transport, session)
+            self._sessions.pop(server.name, None)
             raise
 
     @staticmethod
     async def _close_conn(name: str, transport: Any, session: Any) -> None:
-        """反向关闭 MCP 连接的两层 (session → transport),吞所有异常
-
-        用于异常路径和 list_tools 失败时的局部清理。
-        """
         if session is not None:
             try:
                 await session.__aexit__(None, None, None)
-            except Exception as e:
-                log.warning("MCP Server '%s' session 关闭异常: %s", name, e)
+            except Exception as error:
+                log.warning("MCP Server '%s' session 关闭异常: %s", name, error)
         if transport is not None:
             try:
                 await transport.__aexit__(None, None, None)
-            except Exception as e:
-                log.warning("MCP Server '%s' transport 关闭异常: %s", name, e)
+            except Exception as error:
+                log.warning("MCP Server '%s' transport 关闭异常: %s", name, error)
 
     def _register_discovered_tools(
         self,
-        server_name: str,
+        server: MCPServerConfig,
         session: Any,
         tools: list[Any],
     ) -> int:
-        """Register allowlisted discovery results through the Capability policy path."""
         registered = 0
+        discovered = {tool.name for tool in tools}
+        missing = set(server.tools) - discovered
+        if missing:
+            log.warning(
+                "MCP Server '%s' 未暴露配置中的工具: %s",
+                server.name,
+                ", ".join(sorted(missing)),
+            )
         for tool in tools:
-            capability_name = f"mcp_{server_name}_{tool.name}"
-            if not self.is_tool_allowed(server_name, tool.name):
-                log.warning("MCP 工具未在白名单中，跳过注册: %s", capability_name)
+            capability_name = server.capability_name(tool.name)
+            if tool.name not in server.tools:
+                log.debug("MCP 工具未启用，跳过注册: %s", capability_name)
                 continue
-            spec = create_mcp_capability(server_name, tool, session)
+            spec = create_mcp_capability(server.name, tool, session)
             self._capabilities[spec.name] = spec
             self.registry.register(bind_langgraph_capability(spec, executor=self.executor))
             registered += 1
         return registered
 
-    async def close_all(self):
-        """关闭所有 MCP 连接，并同步注销注入到 CapabilityRegistry 的 mcp_* 能力
-
-        避免 session 关闭后 LLM 仍可调用死 session 的工具（会抛连接错误）。
-
-        关闭顺序: session → transport (反向建立顺序)
-        """
+    async def close_all(self) -> None:
         for name, conn in list(self._sessions.items()):
             await self._close_conn(name, conn.transport, conn.session)
-            # 注销该 Server 注入的全部工具（mcp_<name>_*）
             removed = self.registry.unregister_prefix(f"mcp_{name}_")
-            capability_names = [
-                capability_name
-                for capability_name in self._capabilities
-                if capability_name.startswith(f"mcp_{name}_")
-            ]
-            for capability_name in capability_names:
-                del self._capabilities[capability_name]
+            for capability_name in tuple(self._capabilities):
+                if capability_name.startswith(f"mcp_{name}_"):
+                    del self._capabilities[capability_name]
             if removed:
                 log.debug("MCP Server '%s': 已注销 %d 个工具", name, removed)
         self._sessions.clear()

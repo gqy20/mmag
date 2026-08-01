@@ -55,11 +55,11 @@ Loader 已拒绝无 eval、重复 case、非法字段和模糊期望，但启动
 
 ## P1：可观测性与运维
 
-### TD-08 — 日志是可关联文本，不是完整结构化 telemetry
+### TD-08 — 结构化日志已落地，Metrics 与外部 Trace 尚未接入
 
-trace、Agent route、Skill ref、Package Hash、Runtime 和 Artifact 数量已经贯穿主链；指标尚未统一输出 Agent/Skill/Capability/approval/delivery 的 duration、status 和 error code。
+日志已经使用版本化事件、自动恢复的 `LogContext`、JSON Lines、中心脱敏和安全异常格式；Deep Agents 原生 Callback 也已记录模型/工具生命周期并写入内容无关的审计。当前仍没有统一 Metrics、OpenTelemetry/LangSmith exporter、Policy 决策全量事件、告警规则和目标日志平台验收。
 
-完成标准：结构化日志字段稳定；OpenTelemetry trace 可选接入；指标基数受控；Secret 和消息正文默认不进入 telemetry。
+完成标准：指标基数受控；可选 Trace exporter 默认不采集正文；Policy/Approval/Artifact/Delivery 事件目录完整；在目标平台验证查询、采样、保留和权限。
 
 ### TD-09 — SQLite 高可用边界需要部署验收
 

@@ -3,7 +3,7 @@ kind: Skill
 
 metadata:
   name: web-research
-  version: 1.1.0
+  version: 1.2.0
   description: Plan, verify, and synthesize web research with source-aware evidence.
 
 spec:
@@ -20,6 +20,10 @@ spec:
     - analyze_link
   optional_capabilities:
     - search_knowledge
+    - mcp_crawl_crawl_single
+    - mcp_crawl_search_text
+    - mcp_crawl_search_news
+    - mcp_crawl_search_books
 
   resources:
     templates: []

@@ -1,7 +1,9 @@
 """外部 MCP 必须与内置能力共享 Catalog、Policy 和 Runtime 可见性。"""
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+import json
+from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -13,7 +15,14 @@ from mmag.capabilities import (
     CapabilityStatus,
     SourcePolicy,
 )
-from mmag.mcp_bridge import MCPClientBridge, _stdio_environment
+from mmag.mcp_bridge import (
+    MCPClientBridge,
+    MCPConfigError,
+    MCPConfigSnapshot,
+    MCPServerConfig,
+    _stdio_environment,
+    load_mcp_config,
+)
 
 
 def _mcp_tool(name: str, *, read_only: bool | None = True):
@@ -43,8 +52,36 @@ def _mcp_result(payload: str):
     )
 
 
+def _mcp_config(
+    *,
+    server: str = "docs",
+    tools: tuple[str, ...] = ("search",),
+    enabled: bool = True,
+) -> MCPConfigSnapshot:
+    declaration = MCPServerConfig(
+        name=server,
+        transport="stdio",
+        enabled=enabled,
+        tools=tools,
+        raw_config=MappingProxyType(
+            {
+                "enabled": enabled,
+                "type": "stdio",
+                "command": "mcp-server",
+                "tools": list(tools),
+            }
+        ),
+    )
+    return MCPConfigSnapshot(
+        path=Path(".mcp.json"),
+        version=1,
+        sha256="test",
+        servers=(declaration,),
+    )
+
+
 def test_external_mcp_tools_are_denied_by_default():
-    bridge = MCPClientBridge(CapabilityRegistry())
+    bridge = MCPClientBridge(CapabilityRegistry(), config=MCPConfigSnapshot.empty())
 
     assert bridge.is_tool_allowed("docs", "search") is False
 
@@ -52,7 +89,7 @@ def test_external_mcp_tools_are_denied_by_default():
 def test_external_mcp_allowlist_matches_exact_tool_name():
     bridge = MCPClientBridge(
         CapabilityRegistry(),
-        allowed_tools={"mcp_docs_search"},
+        config=_mcp_config(),
     )
 
     assert bridge.is_tool_allowed("docs", "search") is True
@@ -77,14 +114,62 @@ def test_stdio_environment_only_inherits_runtime_basics_and_explicit_server_valu
 
 
 @pytest.mark.asyncio
-async def test_empty_allowlist_skips_external_mcp_connections():
-    bridge = MCPClientBridge(CapabilityRegistry())
+async def test_disabled_servers_skip_external_mcp_connections():
+    bridge = MCPClientBridge(
+        CapabilityRegistry(),
+        config=_mcp_config(enabled=False),
+    )
 
-    with patch("mmag.mcp_bridge.read_mcp_config") as read_config:
-        connected = await bridge.load_and_connect()
-
+    connected = await bridge.load_and_connect()
     assert connected == 0
-    read_config.assert_not_called()
+
+
+def test_unified_config_loads_exact_enabled_capabilities(tmp_path):
+    path = tmp_path / ".mcp.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "mcpServers": {
+                    "docs": {
+                        "enabled": True,
+                        "type": "stdio",
+                        "command": "docs-mcp",
+                        "tools": ["search", "read"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_mcp_config(path)
+
+    assert config.capability_names == ("mcp_docs_search", "mcp_docs_read")
+    assert len(config.sha256) == 64
+
+
+def test_unified_config_rejects_enabled_server_without_tools(tmp_path):
+    path = tmp_path / ".mcp.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "mcpServers": {
+                    "docs": {
+                        "enabled": True,
+                        "type": "stdio",
+                        "command": "docs-mcp",
+                        "tools": [],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MCPConfigError, match="should be non-empty"):
+        load_mcp_config(path)
 
 
 @pytest.mark.asyncio
@@ -94,7 +179,7 @@ async def test_discovered_mcp_tool_uses_one_governed_capability_binding():
     authorizer.authorize.return_value = CapabilityAuthorization.allow()
     bridge = MCPClientBridge(
         registry,
-        allowed_tools={"mcp_docs_search"},
+        config=_mcp_config(),
         executor=CapabilityExecutor(authorizer),
     )
     session = SimpleNamespace(
@@ -105,7 +190,9 @@ async def test_discovered_mcp_tool_uses_one_governed_capability_binding():
         )
     )
 
-    registered = bridge._register_discovered_tools("docs", session, [_mcp_tool("search")])
+    server = bridge.config.get("docs")
+    assert server is not None
+    registered = bridge._register_discovered_tools(server, session, [_mcp_tool("search")])
     spec = bridge.get_capabilities()[0]
     result = await registry.execute(spec.name, {"query": "architecture"})
 
@@ -126,12 +213,14 @@ async def test_mcp_policy_denial_stops_the_canonical_binding():
     authorizer.authorize.return_value = CapabilityAuthorization.deny("disabled")
     bridge = MCPClientBridge(
         registry,
-        allowed_tools={"mcp_ops_deploy"},
+        config=_mcp_config(server="ops", tools=("deploy",)),
         executor=CapabilityExecutor(authorizer),
     )
     session = SimpleNamespace(call_tool=AsyncMock())
 
-    bridge._register_discovered_tools("ops", session, [_mcp_tool("deploy", read_only=None)])
+    server = bridge.config.get("ops")
+    assert server is not None
+    bridge._register_discovered_tools(server, session, [_mcp_tool("deploy", read_only=None)])
     spec = bridge.get_capabilities()[0]
     result = await registry.execute(spec.name, {"query": "release"})
 
@@ -144,11 +233,13 @@ def test_only_allowlisted_discovered_tools_are_visible():
     registry = CapabilityRegistry()
     bridge = MCPClientBridge(
         registry,
-        allowed_tools={"mcp_docs_search"},
+        config=_mcp_config(),
     )
 
+    server = bridge.config.get("docs")
+    assert server is not None
     registered = bridge._register_discovered_tools(
-        "docs",
+        server,
         SimpleNamespace(call_tool=AsyncMock()),
         [_mcp_tool("search"), _mcp_tool("delete", read_only=False)],
     )

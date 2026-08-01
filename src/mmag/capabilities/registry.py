@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
 import time
@@ -15,7 +14,7 @@ if TYPE_CHECKING:
 
     from .base import CapabilityAuthorization, CapabilityExecutor, CapabilitySpec
 
-from ..logger import get_logger, trace
+from ..logger import get_logger, log_event, safe_hash
 from .sources import enrich_with_sources
 
 log = get_logger(__name__)
@@ -131,24 +130,25 @@ class CapabilityRegistry:
         """
         binding = self._bindings.get(name)
         if not binding:
-            log.warning("%s 未知工具: %s", trace.prefix(), name)
+            log_event(
+                log,
+                "capability.unknown",
+                level=30,
+                status="rejected",
+                capability=name,
+                error_code="UNKNOWN_CAPABILITY",
+            )
             return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
 
         t0 = time.monotonic()
-        log.info(
-            "%s 调用工具: %s keys=%s input_sha256=%s",
-            trace.prefix(),
-            name,
-            sorted(input_data),
-            hashlib.sha256(
-                json.dumps(
-                    input_data,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
-                ).encode()
-            ).hexdigest()[:16],
+        input_sha256 = safe_hash(input_data)
+        log_event(
+            log,
+            "capability.started",
+            status="running",
+            capability=name,
+            input_keys=sorted(input_data),
+            input_sha256=input_sha256,
         )
 
         try:
@@ -178,19 +178,28 @@ class CapabilityRegistry:
                 result_str = json.dumps({"result": result}, ensure_ascii=False, default=str)
 
             elapsed = time.monotonic() - t0
-            log.info(
-                "%s 工具完成: %s (%.3fs, 结果 %d 字符)",
-                trace.prefix(),
-                name,
-                elapsed,
-                len(result_str),
+            log_event(
+                log,
+                "capability.completed",
+                status="succeeded",
+                capability=name,
+                duration_ms=round(elapsed * 1000),
+                input_sha256=input_sha256,
+                output_size=len(result_str),
             )
             return result_str
 
         except Exception as e:
             elapsed = time.monotonic() - t0
-            log.error(
-                "%s 工具 '%s' 执行失败 (%.3fs): %s", trace.prefix(), name, elapsed, e, exc_info=True
+            log_event(
+                log,
+                "capability.failed",
+                level=40,
+                status="failed",
+                capability=name,
+                duration_ms=round(elapsed * 1000),
+                input_sha256=input_sha256,
+                error_code=type(e).__name__,
             )
             return json.dumps(
                 {"error": f"工具执行错误: {type(e).__name__}: {e}"},

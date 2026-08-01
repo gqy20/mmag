@@ -16,16 +16,23 @@ from deepagents import (
     register_harness_profile,
 )
 from deepagents.backends import StateBackend
+from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.structured_output import ToolStrategy
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
+from pydantic import SecretStr
 
-from ..capabilities import AuthorizationDecision, get_capability_context
+from ..capabilities import (
+    AuthorizationDecision,
+    CapabilityAuthorization,
+    get_capability_context,
+)
 from ..config import config
 from ..governance import get_governance_context
+from ..logger import get_logger, log_event, safe_hash
 from ..model_artifacts import strip_model_artifacts
 from ..skill_packages import get_skill_context
 from .base import (
@@ -42,11 +49,13 @@ from .base import (
     thaw,
     translate_runtime_error,
 )
+from .telemetry import AuditSink, DeepAgentTelemetry
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from langchain_core.language_models import BaseChatModel
+    from langchain_core.runnables import RunnableConfig
     from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph.state import CompiledStateGraph
 
@@ -54,6 +63,7 @@ if TYPE_CHECKING:
 
 
 _PROFILE_REGISTERED = False
+log = get_logger(__name__)
 
 
 def _register_mmag_profile() -> None:
@@ -82,11 +92,13 @@ class ManagedChatModelFactory:
         if model is None:
             model = ChatAnthropic(
                 model_name=config.anthropic_model,
-                api_key=config.anthropic_api_key,
+                api_key=SecretStr(config.anthropic_api_key),
                 base_url=config.anthropic_base_url,
                 max_tokens_to_sample=max_tokens,
                 temperature=temperature,
+                timeout=None,
                 max_retries=0,
+                stop=None,
                 streaming=True,
             )
             self._models[key] = model
@@ -114,11 +126,13 @@ class DeepAgentRuntime:
         checkpoint_path: str | None = None,
         checkpointer: BaseCheckpointSaver[Any] | None = None,
         model_factory: ManagedChatModelFactory | None = None,
+        audit_sink: AuditSink | None = None,
     ) -> None:
         _register_mmag_profile()
         self.capability_registry = capability_registry
         self.checkpoint_path = checkpoint_path
         self.model_factory = model_factory or ManagedChatModelFactory()
+        self.audit_sink = audit_sink
         self._checkpointer = checkpointer
         self._checkpoint_context: AbstractAsyncContextManager[Any] | None = None
         self._sessions: dict[str, _RunSession] = {}
@@ -201,8 +215,8 @@ class DeepAgentRuntime:
             )
             self._sessions[thread_id] = session
         result = await session.graph.ainvoke(
-            Command(resume=thaw(command)),
-            {"configurable": {"thread_id": thread_id}},
+            Command[Any](resume=thaw(command)),
+            self._config(thread_id, session.request),
         )
         converted = await self._to_result(result, session, thread_id, None, session.request)
         if converted.status is not RuntimeStatus.WAITING_APPROVAL:
@@ -260,6 +274,7 @@ class DeepAgentRuntime:
         async def invoke(**arguments: Any) -> str:
             await self._emit(request, RunEventKind.TOOL_STARTED, name=name)
             authorization = self.capability_registry.authorization(name, arguments)
+            self._record_policy_decision(request, name, arguments, authorization)
             approved = bool(
                 authorization
                 and authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL
@@ -284,10 +299,54 @@ class DeepAgentRuntime:
             args_schema=thaw(schema.get("input_schema") or {"type": "object"}),
         )
 
+    def _record_policy_decision(
+        self,
+        request: RunRequest,
+        capability: str,
+        arguments: Mapping[str, Any],
+        authorization: CapabilityAuthorization | None,
+    ) -> None:
+        decision = (
+            authorization.decision.value if authorization is not None else "unavailable"
+        )
+        log_event(
+            log,
+            "policy.decided",
+            status=decision,
+            capability=capability,
+            input_sha256=safe_hash(arguments),
+        )
+        if self.audit_sink is None:
+            return
+        try:
+            self.audit_sink.append_audit(
+                "policy.decision",
+                actor_id=request.context.actor_id,
+                scope_id=request.context.scope,
+                trace_id=request.context.trace_id,
+                target=capability,
+                decision=decision,
+                details={
+                    "schema_version": "1.0",
+                    "run_id": request.context.run_id,
+                    "policy_ref": request.metadata.get("policy_ref", ""),
+                    "input_sha256": safe_hash(arguments),
+                },
+            )
+        except Exception as error:
+            log_event(
+                log,
+                "audit.write_failed",
+                level=40,
+                status="degraded",
+                capability=capability,
+                error_code=type(error).__name__,
+            )
+
     def _interrupt_rules(
         self, capabilities: tuple[Mapping[str, Any], ...]
-    ) -> dict[str, dict[str, Any]]:
-        rules: dict[str, dict[str, Any]] = {}
+    ) -> dict[str, bool | InterruptOnConfig]:
+        rules: dict[str, bool | InterruptOnConfig] = {}
         for schema in capabilities:
             name = str(schema["name"])
             binding = self.capability_registry.get(name)
@@ -304,10 +363,10 @@ class DeepAgentRuntime:
                     and authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL
                 )
 
-            rules[name] = {
-                "allowed_decisions": ["approve", "reject"],
-                "when": requires_approval,
-            }
+            rules[name] = InterruptOnConfig(
+                allowed_decisions=["approve", "reject"],
+                when=requires_approval,
+            )
         return rules
 
     async def _invoke(self, graph, state, graph_config, request: RunRequest) -> dict[str, Any]:
@@ -361,7 +420,7 @@ class DeepAgentRuntime:
                 interruptions=interruptions,
             )
         output = state.get("structured_response")
-        if hasattr(output, "model_dump"):
+        if output is not None and hasattr(output, "model_dump"):
             output = output.model_dump()
         structured = dict(output) if isinstance(output, Mapping) else None
         messages = list(state.get("messages") or ())
@@ -377,16 +436,27 @@ class DeepAgentRuntime:
             output=structured,
         )
 
-    @staticmethod
-    def _config(thread_id: str, request: RunRequest) -> dict[str, Any]:
+    def _config(self, thread_id: str, request: RunRequest) -> RunnableConfig:
+        agent_ref = request.metadata.get("agent_ref", "mmag-agent")
+        skill_ref = request.metadata.get("skill_ref", "")
         return {
             "configurable": {"thread_id": thread_id},
             "recursion_limit": max(20, request.max_rounds * 8),
+            "run_name": agent_ref,
+            "tags": [
+                "mmag",
+                "deepagents",
+                f"agent:{agent_ref}",
+                *([f"skill:{skill_ref}"] if skill_ref else []),
+            ],
+            "callbacks": [DeepAgentTelemetry(request, self.audit_sink)],
             "metadata": {
                 "trace_id": request.context.trace_id,
                 "run_id": request.context.run_id,
+                "thread_id": thread_id,
                 "actor_id": request.context.actor_id,
                 "scope": request.context.scope,
+                **dict(request.metadata),
             },
         }
 
@@ -522,6 +592,7 @@ def _runtime_snapshot(request: RunRequest, session: _RunSession) -> Mapping[str,
         "temperature": request.temperature,
         "response_schema": thaw(request.response_schema),
         "skill_files": thaw(request.skill_files),
+        "metadata": thaw(request.metadata),
         "calls": thaw(session.calls),
         "artifacts": thaw(session.artifacts),
         "deliveries": thaw(session.deliveries),
@@ -558,6 +629,7 @@ def _restore_runtime_snapshot(
         temperature=float(snapshot.get("temperature") or 0.0),
         response_schema=snapshot.get("response_schema"),
         skill_files=snapshot.get("skill_files") or {},
+        metadata=snapshot.get("metadata") or {},
     )
     return (
         request,

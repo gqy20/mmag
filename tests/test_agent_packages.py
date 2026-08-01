@@ -87,10 +87,10 @@ def test_registry_loads_current_agent_packages():
 
     assert {(item.manifest.metadata.name, item.manifest.metadata.version) for item in registry.list()} == {
         ("link", "2.0.0"),
-        ("mmchat", "2.0.0"),
+        ("mmchat", "2.1.0"),
         ("ppt", "3.0.0"),
         ("project", "2.0.0"),
-        ("report", "2.0.0"),
+        ("report", "2.1.0"),
     }
     assert len(registry.get("mmchat").snapshot.skill_set_hash) == 64
 

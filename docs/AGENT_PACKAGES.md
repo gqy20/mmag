@@ -94,9 +94,9 @@ AgentRouter
 
 ## 当前 Package
 
-- `mmchat@2.0.0`：默认 Mattermost 会话 Agent，允许 `web-research@1.1.0`；
+- `mmchat@2.1.0`：默认 Mattermost 会话 Agent，允许 `web-research@1.2.0` 和 crawl 搜索子集；
 - `link@2.0.0`：`direct` 链接分析；
-- `report@2.0.0`：绑定 `report@1.2.0`；
+- `report@2.1.0`：绑定 `report@1.3.0` 和完整 crawl 工具集；
 - `ppt@3.0.0`：绑定 `slides@3.0.0` 与 `ppt@2.1.0` Execution Profile；
 - `project@2.0.0`：绑定 `project@1.2.0`。
 
@@ -108,6 +108,8 @@ AgentRouter
 4. 需要执行平面时同时允许精确 Execution Profile；
 5. 添加真实 eval 时才创建 `evals.yml`；
 6. 运行 Package 定向加载测试并发布。
+
+MCP Server 与平台工具清单统一放在根目录 `.mcp.json`；Agent 只在 `capabilities.allow` 中分配 `mcp_<server>_<tool>` 或受控模式，不复制连接、Secret 和启停配置。
 
 Skill 规则见 [SKILL_PACKAGES.md](SKILL_PACKAGES.md)，Deep Agents 实现边界见
 [DEEP_AGENTS_REFACTORING.md](DEEP_AGENTS_REFACTORING.md)。

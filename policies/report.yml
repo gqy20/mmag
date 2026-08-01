@@ -1,14 +1,8 @@
 id: report
-version: 1.0.0
+version: 1.1.0
 default_effect: deny
 
 rules:
-  - id: read-skill-resource
-    effect: allow
-    actions: [load_skill_resource]
-    permissions: [skill:resource:read]
-    reason: Report may load only resources declared by its active Skill.
-
   - id: read-current-knowledge
     effect: allow
     actions: [search_knowledge]
@@ -30,3 +24,9 @@ rules:
     actions: [analyze_link]
     permissions: [web:read]
     reason: Public link analysis remains behind the shared SSRF controls.
+
+  - id: approve-crawl-mcp
+    effect: require_approval
+    actions: [mcp_crawl_*]
+    permissions: [mcp:crawl:*:invoke]
+    reason: External MCP resources remain approval-gated until resource semantics are trusted.

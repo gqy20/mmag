@@ -5,16 +5,17 @@
 import os
 import sys
 import tempfile
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .logger import get_logger
+from .logger import get_logger, log_event
 
 log = get_logger(__name__)
 
 _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+_DEFAULT_MCP_CONFIG = Path(__file__).resolve().parents[2] / ".mcp.json"
 _SOURCE_AGENT_PACKAGES = Path(__file__).resolve().parents[2] / "agents"
 _INSTALLED_AGENT_PACKAGES = Path(__file__).resolve().parent / "agents"
 _DEFAULT_AGENT_PACKAGES = (
@@ -75,13 +76,16 @@ _FIELD_TO_ENV: dict[str, str] = {
     "log_level": "LOG_LEVEL",
     "log_dir": "LOG_DIR",
     "log_retention_days": "LOG_RETENTION_DAYS",
+    "log_format": "LOG_FORMAT",
+    "log_max_bytes": "LOG_MAX_BYTES",
+    "log_backup_count": "LOG_BACKUP_COUNT",
     "memory_summary_interval": "MEMORY_SUMMARY_INTERVAL",
     "memory_context_window": "MEMORY_CONTEXT_WINDOW",
     "max_images_per_msg": "MAX_IMAGES_PER_MSG",
     "max_image_bytes": "MAX_IMAGE_BYTES",
     "max_text_attachment_chars": "MAX_TEXT_ATTACHMENT_CHARS",
     "max_tool_rounds": "MAX_TOOL_ROUNDS",
-    "mcp_allowed_tools": "MCP_ALLOWED_TOOLS",
+    "mcp_config_path": "MCP_CONFIG_PATH",
     "pipeline_max_concurrency": "PIPELINE_MAX_CONCURRENCY",
     "pipeline_max_pending": "PIPELINE_MAX_PENDING",
     "runtime_deadline_seconds": "RUNTIME_DEADLINE_SECONDS",
@@ -96,36 +100,21 @@ _FIELD_TO_ENV: dict[str, str] = {
     "execution_workspace_retention_seconds": "EXECUTION_WORKSPACE_RETENTION_SECONDS",
     "artifact_store_path": "ARTIFACT_STORE_PATH",
 }
-# 敏感字段（日志只记录是否配置，不输出任何值片段）
-_SECRET_FIELD_NAMES: frozenset[str] = frozenset(
-    {"mm_token", "anthropic_api_key", "mm_action_signing_secret"}
-)
-
-
 def _text_env(name: str, default: str) -> str:
     """Return a non-empty optional override while preserving a code default."""
     return os.getenv(name, "").strip() or default
 
 
-def _secret_status(value: str | None) -> str:
-    """Return presence-only status so logs never contain secret fragments."""
-    return "(已设置)" if value else "(未设置)"
-
-
-def _log_config_loading():
-    """遍历 Config 字段打印加载结果，新增/删除配置项时无需改这里"""
-    log.info("═══ 配置加载 ═══")
-    for f in fields(Config):
-        env_key = _FIELD_TO_ENV.get(f.name)
-        if env_key is None:
-            # 反射到的字段不在映射表里，跳过（可能是新加字段忘了登记）
-            continue
-        v = os.getenv(env_key, "")
-        if f.name in _SECRET_FIELD_NAMES:
-            v = _secret_status(v)
-        log.info("  %s = %s", env_key, v)
-    log.info("  .env path = %s (%s)", _ENV_PATH, "✅ 存在" if _ENV_PATH.exists() else "❌ 不存在")
-    log.info("═══════════════")
+def _log_config_loading() -> None:
+    """Log configuration presence only; values never enter ordinary telemetry."""
+    configured = sorted(env_name for env_name in _FIELD_TO_ENV.values() if os.getenv(env_name))
+    log_event(
+        log,
+        "config.loaded",
+        status="ready",
+        configured_fields=configured,
+        env_file_present=_ENV_PATH.is_file(),
+    )
 
 
 @dataclass
@@ -173,6 +162,9 @@ class Config:
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     log_dir: str = os.getenv("LOG_DIR", "logs")  # 日志目录（空则不写文件）
     log_retention_days: int = int(os.getenv("LOG_RETENTION_DAYS", "30"))  # 日志保留天数
+    log_format: str = os.getenv("LOG_FORMAT", "text")
+    log_max_bytes: int = int(os.getenv("LOG_MAX_BYTES", str(20 * 1024 * 1024)))
+    log_backup_count: int = int(os.getenv("LOG_BACKUP_COUNT", "5"))
     # ── 记忆系统 (Layer 1 + Layer 2) ──
     # message_log 永久存储,无容量上限;摘要按消息条数触发
     memory_summary_interval: int = int(
@@ -195,12 +187,8 @@ class Config:
     # 调高 → 复杂任务可拆更多步,但单次请求耗时和 token 都线性增加;
     # 调低 → 快速失败,长任务会被强制收尾(返回最后一轮文本)。
     max_tool_rounds: int = int(os.getenv("MAX_TOOL_ROUNDS", "10"))  # 默认 10
-    # Deep Agents Runtime 的外部 MCP 工具白名单，名称格式为 mcp_<server>_<tool>
-    mcp_allowed_tools: tuple[str, ...] = tuple(
-        dict.fromkeys(
-            name.strip() for name in os.getenv("MCP_ALLOWED_TOOLS", "").split(",") if name.strip()
-        )
-    )
+    # MCP Server 与平台级工具开关统一由一个严格 JSON 文件声明。
+    mcp_config_path: str = os.getenv("MCP_CONFIG_PATH", str(_DEFAULT_MCP_CONFIG))
     pipeline_max_concurrency: int = int(os.getenv("PIPELINE_MAX_CONCURRENCY", "8"))
     pipeline_max_pending: int = int(os.getenv("PIPELINE_MAX_PENDING", "256"))
     runtime_deadline_seconds: float = float(os.getenv("RUNTIME_DEADLINE_SECONDS", "120"))

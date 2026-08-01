@@ -48,7 +48,7 @@
 - [x] Prompt/Schema/eval/Policy/Model Policy 进入 Package Hash 和 provenance；
 - [x] Agent Manifest 绑定 Skill 精确版本，Skill Set Hash 进入 Agent 快照；
 - [x] 运行时能力收窄为 Agent、Skill 与 Policy 的交集；
-- [x] `web-research@1.1.0` 作为可复用 Skill，由 `mmchat@2.0.0` 激活；
+- [x] `web-research@1.2.0` 作为可复用 Skill，由 `mmchat@2.1.0` 激活；
 - [x] 选中 Skill 投影到 StateBackend，由 Deep Agents SkillsMiddleware 原生渐进披露并随 checkpoint 恢复；
 - [x] strict Prompt render、输入/输出/Artifact Schema 和预算强制；
 - [x] Model Policy Registry 严格加载并校验 route。
@@ -181,7 +181,7 @@
 优先级：P1。
 
 - [x] 定义 `report` Manifest、只读 Policy、Prompt 和输入/输出 Schema；
-- [x] 新增 `report@1.0.0` Skill，将结果升级为证据账本式结构化输出；
+- [x] `report@1.3.0` Skill 将结果升级为证据账本式结构化输出，并按需使用受治理 MCP；
 - [x] 定义 `research_report` Artifact Schema；
 - [ ] 接入来源去重、时效性和证据覆盖 eval；
 - [ ] 将报告持久化到 Artifact Repository；
@@ -248,45 +248,38 @@
   脚本、可执行文件、argv、输入和 Artifact Hash；
 - [x] 已有独立 `AuditEvent` 存储，覆盖 Agent 成功运行、受控执行、审批、Inbox 重试/replay、Delivery
   终态和 Mattermost 能力探测；
-- [x] 已确认敏感数据风险：用户消息片段进入 INFO，URL 和附件名称可能进入日志，第三方异常正文未经
-  统一脱敏；当前没有中心化 Redaction Filter；
-- [x] 已确认关联性缺口：Trace 仍通过人工拼接文本前缀，异步 Pipeline、Delivery、审批恢复及部分审计
-  没有稳定携带同一组 task/run/trace 标识，异常路径也不能保证自动恢复 Context；
-- [x] 已确认结构化缺口：普通日志没有稳定事件名和 JSON 字段；CapabilityCall 生命周期未逐次持久化，
-  通用 Policy、模型调用和 Agent 失败审计不完整；
-- [x] 已确认审计查询缺口：AuditEvent 没有事件 Schema 版本，Python 模型未暴露 `created_at`，查询缺少
-  trace/run/actor/scope/时间区间和分页能力，也没有归档、保留及防篡改策略；
-- [x] 已确认运维缺口：空 `LOG_DIR` 不能真正关闭文件输出，文件没有大小轮转，过期清理只在启动时执行，
-  时间戳没有时区，多实例可能竞争同一启动日志文件；
-- [x] 已确认测试缺口：当前只覆盖 TraceContext 并发隔离，没有日志脱敏、Context 异常恢复、结构化字段、
-  Handler 生命周期和审计完整性负向测试。
+- [x] 中心化 Redaction Filter、安全异常格式和内容无关的 Deep Agents Callback 已落地，普通日志不再记录消息片段、附件名、URL query、完整 Tool 参数和 Provider 异常正文；
+- [x] 可嵌套、自动 reset 的 `LogContext` 已取代手工 trace 前缀，并贯穿 Agent、Deep Agents、模型和 Capability 主链；Delivery/后台任务的全链验收继续保留；
+- [x] 普通日志已有版本化事件名与 JSON Lines；Agent 成功/失败、模型调用和 LangGraph Tool 调用已写入 AuditEvent；Policy 全量决策仍待补齐；
+- [x] AuditEvent Python 模型已暴露 `created_at`，查询支持 trace/run/actor/scope/decision/时间游标；事件 Schema 全覆盖、归档、导出、访问控制和防篡改仍待完成；
+- [x] 空 `LOG_DIR`、大小轮转、UTC、PID 文件隔离和 Handler 关闭已修复；过期清理仍只在启动执行，多进程聚合交给部署日志平台；
+- [x] 已覆盖 LogContext 并发隔离/恢复、Secret/URL/异常脱敏，以及 Deep Agents model/tool 内容无关审计；完整部署验收继续保留。
 
 ### 实施批次
 
 1. 日志安全基线（P0）：
-   - [ ] 删除消息正文、URL query、敏感文件名和未经分类的异常正文日志；正文只允许进入受保护、显式授权的
+   - [x] 删除消息正文、URL query、敏感文件名和未经分类的异常正文日志；正文只允许进入受保护、显式授权的
      业务存储，不能进入普通 telemetry；
-   - [ ] 实现中心化 Redaction Filter 和安全异常序列化，默认只输出稳定 `error_code`、异常类型和允许公开的
+   - [x] 实现中心化 Redaction Filter 和安全异常序列化，默认只输出稳定 `error_code`、异常类型和允许公开的
      摘要；
-   - [ ] 配置日志改为非敏感字段 allowlist 或带敏感元数据的声明式过滤；新增 Secret 不得依赖手工维护
+   - [x] 配置日志改为非敏感字段 allowlist 或带敏感元数据的声明式过滤；新增 Secret 不得依赖手工维护
      denylist 才能避免泄漏；
-   - [ ] 为正文、Token、Authorization header、签名 URL、Tool 参数和 Provider 异常增加负向泄漏测试。
+   - [x] 为正文、Token、Authorization header、签名 URL、Tool 参数和 Provider 异常增加负向泄漏测试。
 
 2. 结构化上下文与运行日志（P1）：
-   - [ ] 用可绑定、可嵌套并通过 ContextVar token 自动 reset 的 `LogContext` 取代人工 `trace.prefix()`；
+   - [x] 用可绑定、可嵌套并通过 ContextVar token 自动 reset 的 `LogContext` 取代人工 `trace.prefix()`；
    - [ ] 统一传播 `trace_id`、`task_id`、`run_id`、`conversation_id`、`agent_ref`、`skill_ref`、
      `capability`、`policy_ref` 和 `delivery_id`，包括分区 worker、流式投影、Outbox、审批 interrupt/resume
      与后台任务；
-   - [ ] 定义版本化运行事件契约，至少包含 UTC timestamp、event、level、status、duration_ms、error_code、
+   - [x] 定义版本化运行事件契约，至少包含 UTC timestamp、event、level、status、duration_ms、error_code、
      attempt 和受控 provenance 字段；
-   - [ ] 生产环境输出 JSON Lines，开发环境保留人类可读 Formatter；业务代码使用稳定事件名，不依赖中文
+   - [x] 生产环境输出 JSON Lines，开发环境保留人类可读 Formatter；业务代码使用稳定事件名，不依赖中文
      自由文本和 Emoji 作为机器查询条件。
 
 3. 审计闭环（P1）：
    - [ ] 为 Agent 成功/失败/超时、Runtime、每次 CapabilityCall、Policy allow/deny/approval、模型调用、
      Approval、Execution、Artifact、Inbox 和 Delivery 建立统一事件目录与 details Schema；
-   - [ ] 将 LangGraph 工具调用接入持久 `CapabilityCall` 生命周期，记录调用 ID、run/trace、能力名、授权
-     决策、状态、耗时和安全输入摘要，不记录完整输入输出；
+   - [ ] 当前 LangGraph Callback 已持久记录调用 ID、run/trace、能力名、Policy 决策、状态、耗时和安全输入摘要；后续将分阶段 AuditEvent 收敛为具有状态约束的 `CapabilityCall` 实体生命周期；
    - [ ] 所有审计事件记录 `schema_version`、`created_at`、actor/scope/trace/run 和 Package/Prompt/Skill/
      Policy/Model Policy provenance；失败分支与恢复分支不得漏记终态；
    - [ ] 扩展审计查询，支持 trace/run/actor/scope/event/time/status、游标分页和企业导出；定义保留、归档、

@@ -1,215 +1,306 @@
-"""
-统一日志系统 — 分层 Logger + 时间戳分文件 + 自动清理 + 交互追踪
-
-设计原则:
-  - 每个模块用自己的 logger 名 (mmag.application, mmag.runtimes, mmag.capabilities ...)
-  - 统一初始化，不再依赖 cli.py 的 if __name__
-  - 控制台 + 文件双输出
-  - 日志文件按**启动时间戳**命名: logs/mmag-2026-06-11_103549.log
-    → 每次启动独立文件，快速迭代时互不干扰，排查一目了然
-  - 超期日志自动清理 (默认保留 30 天)
-  - 每次用户交互带 trace_id，贯穿全链路
-
-目录结构:
-  ./logs/
-  ├── mmag-2026-06-09_082301.log   ← 9 号的某次启动
-  ├── mmag-2026-06-10_143022.log   ← 10 号的某次启动
-  ├── mmag-2026-06-11_103549.log   ← 今天这次启动（当前写入）
-  └── ...                          ← 超过 retain_days 的自动删除
-"""
+"""Safe structured logging and request-scoped correlation context."""
 
 from __future__ import annotations
 
 import glob
+import json
 import logging
+import os
+import re
 import sys
+import time
+import traceback
 import uuid
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
-# 包根名
 PKG_NAME = "mmag"
-
-# 全局标志：是否已初始化
-_initialized = False
-
-# 默认值
 _DEFAULT_LOG_DIR = "logs"
 _DEFAULT_RETAIN_DAYS = 30
+_CONTEXT_FIELDS = (
+    "trace_id",
+    "task_id",
+    "run_id",
+    "thread_id",
+    "conversation_id",
+    "actor_id",
+    "agent_ref",
+    "skill_ref",
+    "capability",
+    "policy_ref",
+    "delivery_id",
+)
+_EVENT_FIELDS = (
+    "schema_version",
+    "event",
+    "status",
+    "duration_ms",
+    "error_code",
+    "attempt",
+    "input_sha256",
+    "output_size",
+)
+_SECRET_KEY = re.compile(
+    r"(?i)(authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|password|secret|signature)"
+)
+_SECRET_VALUE = re.compile(
+    r"(?i)(bearer\s+)[^\s,;]+|((?:api[-_]?key|token|password|secret)\s*[=:]\s*)[^\s,;]+"
+)
+_URL_QUERY = re.compile(r"(https?://[^\s?#]+)\?[^\s#]*(#[^\s]*)?")
+_initialized = False
+
+
+def _utc_time(seconds: float | None = None) -> time.struct_time:
+    return time.gmtime(seconds)
+
+
+class LogContext:
+    """Immutable, nestable logging fields propagated through async ContextVars."""
+
+    def __init__(self) -> None:
+        self._values: ContextVar[Mapping[str, str] | None] = ContextVar(
+            "mmag_log_context", default=None
+        )
+
+    @contextmanager
+    def bind(self, **fields: Any) -> Iterator[None]:
+        values = {
+            **(self._values.get() or {}),
+            **{
+                key: str(value)
+                for key, value in fields.items()
+                if value not in (None, "")
+            },
+        }
+        token = self._values.set(values)
+        try:
+            yield
+        finally:
+            self._values.reset(token)
+
+    def snapshot(self) -> dict[str, str]:
+        return dict(self._values.get() or {})
+
+    def get(self, name: str, default: str = "") -> str:
+        return (self._values.get() or {}).get(name, default)
+
+    @staticmethod
+    def new_trace_id() -> str:
+        return uuid.uuid4().hex[:16]
+
+
+log_context = LogContext()
 
 
 def get_logger(name: str) -> logging.Logger:
-    """获取分层 Logger
+    if name == PKG_NAME or name.startswith(f"{PKG_NAME}."):
+        return logging.getLogger(name)
+    return logging.getLogger(f"{PKG_NAME}.{name}")
 
-    用法:
-        from mmag.logger import get_logger
-        log = get_logger(__name__)   # → "mmag.application" 或 "mmag.capabilities" 等
-    """
-    if name.startswith(PKG_NAME + "."):
-        full_name = name
-    elif name == PKG_NAME:
-        full_name = PKG_NAME
-    else:
-        full_name = f"{PKG_NAME}.{name}"
-    return logging.getLogger(full_name)
+
+def log_event(
+    logger: logging.Logger,
+    event: str,
+    *,
+    level: int = logging.INFO,
+    status: str = "",
+    **fields: Any,
+) -> None:
+    """Emit one machine-queryable event without putting business content in the message."""
+    reserved = set((*_CONTEXT_FIELDS, *_EVENT_FIELDS))
+    extra = {
+        "schema_version": "1.0",
+        "event": event,
+        "status": status,
+        **{key: value for key, value in fields.items() if key in reserved},
+        "details": {key: value for key, value in fields.items() if key not in reserved},
+    }
+    logger.log(level, event, extra=extra)
+
+
+def safe_hash(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode()
+    import hashlib
+
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _redact(value: Any, *, key: str = "") -> Any:
+    if key and _SECRET_KEY.search(key):
+        return "[REDACTED]"
+    if isinstance(value, BaseException):
+        return type(value).__name__
+    if isinstance(value, Mapping):
+        return {str(item_key): _redact(item, key=str(item_key)) for item_key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_redact(item) for item in value)
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    redacted = _SECRET_VALUE.sub(lambda match: f"{match.group(1) or match.group(2)}[REDACTED]", value)
+    return _URL_QUERY.sub(r"\1?[REDACTED]\2", redacted)
+
+
+class ContextFilter(logging.Filter):
+    """Attach correlation fields and redact every record before any handler sees it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        context = log_context.snapshot()
+        for name in _CONTEXT_FIELDS:
+            current = getattr(record, name, "")
+            setattr(record, name, _redact(current or context.get(name, ""), key=name))
+        for name in _EVENT_FIELDS:
+            setattr(record, name, _redact(getattr(record, name, ""), key=name))
+        record.details = _redact(getattr(record, "details", {}))
+        record.msg = _redact(record.msg)
+        record.args = _redact(record.args)
+        if record.exc_info and record.exc_info[0] is not None:
+            record.error_type = record.exc_info[0].__name__
+        else:
+            record.error_type = str(getattr(record, "error_type", ""))
+        return True
+
+
+class SafeTextFormatter(logging.Formatter):
+    converter = staticmethod(_utc_time)
+
+    def formatException(self, exc_info) -> str:  # noqa: N802 - logging API
+        frames = traceback.extract_tb(exc_info[2])
+        locations = " <- ".join(
+            f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}" for frame in frames[-8:]
+        )
+        error_type = exc_info[0].__name__ if exc_info[0] is not None else "Exception"
+        return f"{error_type} at {locations}" if locations else error_type
+
+
+class JSONFormatter(logging.Formatter):
+    converter = staticmethod(_utc_time)
+
+    def format(self, record: logging.LogRecord) -> str:
+        timestamp = datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds")
+        payload: dict[str, Any] = {
+            "timestamp": timestamp,
+            "level": record.levelname.lower(),
+            "logger": record.name,
+            "event": getattr(record, "event", "") or "log.message",
+            "message": record.getMessage(),
+        }
+        for name in (*_CONTEXT_FIELDS, *_EVENT_FIELDS, "error_type"):
+            value = getattr(record, name, "")
+            if value not in (None, ""):
+                payload[name] = value
+        details = getattr(record, "details", {})
+        if details:
+            payload["details"] = details
+        if record.exc_info and record.exc_info[0] is not None:
+            payload["error_type"] = record.exc_info[0].__name__
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 def init_logging(
     level: str = "INFO",
-    log_dir: str | None = None,
+    log_dir: str | None = _DEFAULT_LOG_DIR,
     retain_days: int = _DEFAULT_RETAIN_DAYS,
-    fmt: str | None = None,
-    datefmt: str | None = None,
+    *,
+    log_format: str = "text",
+    max_bytes: int = 20 * 1024 * 1024,
+    backup_count: int = 5,
 ) -> None:
-    """统一初始化日志系统（幂等，多次调用只生效一次）
-
-    Args:
-        level: 日志级别 (DEBUG/INFO/WARNING/ERROR)
-        log_dir: 日志目录路径（None 则不写文件，默认 "./logs"）
-        retain_days: 日志保留天数（0 = 不清理）
-        fmt: 自定义格式串
-        datefmt: 时间格式
-    """
+    """Initialize stdout and optional rotating files exactly once."""
     global _initialized
     if _initialized:
         return
     _initialized = True
 
-    _fmt = fmt or "%(asctime)s [%(levelname)-5s] %(name)s: %(message)s"
-    _datefmt = datefmt or "%H:%M:%S"
-
     root_logger = logging.getLogger(PKG_NAME)
     root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
-
-    # 清除已有 handler（防止重复）
-    root_logger.handlers.clear()
-
-    # ---- 控制台 handler ----
+    _close_handlers(root_logger)
+    formatter: logging.Formatter = (
+        JSONFormatter()
+        if log_format.lower() == "json"
+        else SafeTextFormatter(
+            "%(asctime)sZ [%(levelname)s] %(name)s event=%(event)s "
+            "trace=%(trace_id)s run=%(run_id)s agent=%(agent_ref)s %(message)s details=%(details)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+    )
+    context_filter = ContextFilter()
     console = logging.StreamHandler(sys.stdout)
-    console.setLevel(logging.DEBUG)
-    console.setFormatter(logging.Formatter(_fmt, datefmt=_datefmt))
+    _configure_handler(console, formatter, context_filter)
     root_logger.addHandler(console)
 
-    # ---- 文件 handler（按日期分割）----
-    effective_dir = log_dir or _DEFAULT_LOG_DIR
+    effective_dir = log_dir.strip() if isinstance(log_dir, str) else ""
     if effective_dir:
-        log_path = _get_session_log_path(effective_dir)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-
-        file_handler = logging.FileHandler(log_path, encoding="utf-8")
-        file_handler.setLevel(logging.DEBUG)
-
-        # 文件用更详细的格式（含毫秒 + 完整日期）
-        file_fmt = "%(asctime)s.%(msecs)03d [%(levelname)-5s] [%(name)s] %(message)s"
-        file_handler.setFormatter(logging.Formatter(file_fmt, datefmt="%Y-%m-%d %H:%M:%S"))
+        path = _session_log_path(effective_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            path,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+        _configure_handler(file_handler, JSONFormatter(), context_filter)
         root_logger.addHandler(file_handler)
-
-        # 异步清理过期日志（不阻塞启动）
-        if retain_days > 0:
-            _cleanup_old_logs(effective_dir, retain_days)
-
-    # 防止传播到 root logger（避免重复输出）
+        _cleanup_old_logs(effective_dir, retain_days)
     root_logger.propagate = False
-
-    log = get_logger(__name__)
-    log.info(
-        "日志系统就绪 | 级别=%s | 目录=%s | 保留%d天", level, effective_dir or "(无)", retain_days
+    log_event(
+        get_logger(__name__),
+        "logging.started",
+        status="ready",
+        log_format=log_format,
+        file_output=bool(effective_dir),
+        retention_days=retain_days,
     )
 
 
-def _get_session_log_path(log_dir: str) -> Path:
-    """生成本次启动的日志文件路径: {log_dir}/mmag-YYYY-MM-DD_HHMMSS.log
+def shutdown_logging() -> None:
+    global _initialized
+    _close_handlers(logging.getLogger(PKG_NAME))
+    _initialized = False
 
-    用时间戳而非纯日期，确保每次重启生成独立文件，
-    开发阶段快速迭代时各次运行互不干扰。
-    """
-    dir_path = Path(log_dir)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    return dir_path / f"{PKG_NAME}-{timestamp}.log"
+
+def _configure_handler(
+    handler: logging.Handler,
+    formatter: logging.Formatter,
+    context_filter: logging.Filter,
+) -> None:
+    handler.setLevel(logging.DEBUG)
+    handler.addFilter(context_filter)
+    handler.setFormatter(formatter)
+
+
+def _close_handlers(logger: logging.Logger) -> None:
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
+
+
+def _session_log_path(log_dir: str) -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return Path(log_dir) / f"{PKG_NAME}-{timestamp}-{os.getpid()}.log"
 
 
 def _cleanup_old_logs(log_dir: str, retain_days: int) -> None:
-    """清理超过 retain_days 的旧日志文件（retain_days=0 表示不清理）
-
-    时间戳命名模式下，从文件名解析日期，精确判断是否超期。
-    """
     if retain_days <= 0:
         return
-
-    from datetime import timedelta
-
-    dir_path = Path(log_dir)
-    pattern = str(dir_path / f"{PKG_NAME}-*.log")
-    cutoff = datetime.now() - timedelta(days=retain_days)
-    cutoff_str = cutoff.strftime("%Y-%m-%d")
-
-    removed = 0
-    for f in glob.glob(pattern):
-        # 从文件名提取日期部分: mmag-2026-06-11_103549.log → 2026-06-11
-        fname = Path(f).stem  # mmag-2026-06-11_103549
-        # 完整日期: 取 stem 中 PKG_NAME- 后面的全部
-        date_part = fname[len(PKG_NAME) + 1 :]  # "2026-06-11_103549"
-        file_date = date_part.split("_")[0]  # "2026-06-11"
-
-        if file_date < cutoff_str:
-            try:
-                Path(f).unlink()
-                removed += 1
-            except OSError:
-                pass
-
-    if removed:
-        log = get_logger(__name__)
-        log.debug(
-            "已清理 %d 个过期日志文件 (保留 %d 天, 截止 %s)", removed, retain_days, cutoff_str
-        )
-
-
-# ============================================================
-# 交互追踪上下文
-# ============================================================
-
-
-class TraceContext:
-    """线程安全的交互追踪上下文
-
-    每次用户消息触发一个 trace_id，贯穿：
-      触发 → Agent Router → LangGraph/Capability → Outbox 发送
-    """
-
-    def __init__(self):
-        self._current: ContextVar[dict[str, str] | None] = ContextVar(
-            "mmag_trace_context", default=None
-        )
-
-    def new(self) -> str:
-        """生成新的追踪 ID 并设为当前"""
-        trace_id = uuid.uuid4().hex[:12]
-        self._current.set({"trace_id": trace_id})
-        return trace_id
-
-    @property
-    def current(self) -> str:
-        """当前追踪 ID"""
-        return (self._current.get() or {}).get("trace_id", "----")
-
-    def set_context(self, **kwargs):
-        """设置额外上下文字段（如 channel_id, user_id）"""
-        self._current.set({**(self._current.get() or {}), **kwargs})
-
-    def clear(self):
-        """清除当前上下文"""
-        self._current.set({})
-
-    def prefix(self) -> str:
-        """生成日志前缀字符串，用于嵌入消息中"""
-        parts = [f"trace={self.current}"]
-        for k, v in (self._current.get() or {}).items():
-            if k != "trace_id":
-                parts.append(f"{k}={v}")
-        return "[" + " ".join(parts) + "]"
-
-
-# 全局单例
-trace = TraceContext()
+    cutoff = datetime.now(UTC) - timedelta(days=retain_days)
+    for filename in glob.glob(str(Path(log_dir) / f"{PKG_NAME}-*.log*")):
+        path = Path(filename)
+        try:
+            modified = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+            if modified < cutoff:
+                path.unlink()
+        except OSError:
+            continue

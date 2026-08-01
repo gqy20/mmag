@@ -1,8 +1,23 @@
 {
+  "$schema": "./src/mmag/schemas/mcp-config.schema.json",
+  "version": 1,
   "mcpServers": {
-    "crawl-mcp": {
+    "crawl": {
+      "enabled": false,
+      "type": "stdio",
       "command": "uvx",
-      "args": ["crawl-mcp"]
+      "args": ["crawl-mcp"],
+      "env": {},
+      "tools": [
+        "crawl_single",
+        "crawl_site",
+        "crawl_batch",
+        "search_text",
+        "search_news",
+        "search_books",
+        "search_videos",
+        "search_images"
+      ]
     }
   }
 }

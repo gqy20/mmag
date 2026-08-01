@@ -15,9 +15,7 @@
 ## 项目事实
 
 - Python 3.12+，使用 `uv` 管理 Python 依赖。
-- LangGraph 是默认 Agent Runtime，负责图状态、工具调度、checkpoint 和人工审批恢复。
-- Claude Agent SDK 是显式可选 Runtime，不得把 SDK 内置 Bash、文件或命令工具暴露给普通 Bot。
-- Deep Agents Runtime 与自主 Sandbox 当前是 Proposed/Roadmap 能力，尚未实现。
+- Deep Agents/LangGraph 是默认且唯一的模型 Agent Runtime，负责图状态、Skill 渐进披露、工具调度、checkpoint 和人工审批恢复。
 - Agent、Skill、Policy、Model Policy、Capability 和 Execution Profile 均采用显式注册、严格 Schema、
   版本和 provenance。
 - Mattermost 是当前主要入口与交付平台；control plane、Outbox、审批和 Artifact 有独立业务状态。
@@ -152,7 +150,7 @@
 
 - MUST 通过 `AgentRuntime`、`RunRequest` 和 `AgentResult` 契约接入新 Runtime。
 - MUST 保持 `CapabilitySpec` 为业务能力的单一事实来源。
-- MUST 让 LangGraph、Claude SDK 和 MCP 适配层复用 `CapabilityExecutor`，不得复制业务授权实现。
+- MUST 让 Deep Agents、LangGraph 和 MCP 薄适配层复用 `CapabilityExecutor`，不得复制业务授权实现。
 - MUST 在副作用前完成 Agent/Skill allowlist、Package Policy、actor、scope、permission、动态资源和
   审批检查。
 - MUST 保持 Agent/Skill Manifest 只能引用和缩小平台已注册权限，不能创建权限、runner、挂载、
@@ -185,8 +183,9 @@
 - 为 LangGraph、SDK、MCP 只添加薄适配器，不复制 handler。
 - 测试成功、非法输入、未知能力、拒绝、越权、审批和超时。
 
-MCP 默认不连接；工具必须进入精确 allowlist。可见性不等于执行授权。stdio MCP 只继承最小环境，
-不得继承 Mattermost、模型或其他无关 Secret。
+MCP Server、启停状态和平台级精确工具清单统一放在 `.mcp.json`；Agent 在各自 Manifest 中分配能力，
+Skill 只能缩小，Policy 再做逐调用授权。可见性不等于执行授权。stdio MCP 只继承最小环境，不得继承
+Mattermost、模型或其他无关 Secret。
 
 ## Agent Package
 
@@ -235,6 +234,8 @@ MCP 默认不连接；工具必须进入精确 allowlist。可见性不等于执
 - 不在明文 HTTP 连接中使用 Bot Token 做管理级探测。
 - URL 抓取必须保持代理禁用、逐跳重定向检查、DNS/IP SSRF 校验和响应大小限制。
 - 日志不得记录 Token、Secret、完整敏感正文或未脱敏工具参数。
+- 业务生命周期使用稳定 `log_event()` 事件名；关联字段通过可嵌套 `log_context.bind()` 传播，不手工拼接 trace 前缀。
+- Deep Agents/LangChain 原生 Callback 只记录模型与工具的状态、耗时、token 和安全摘要；不得启用会把完整 graph state 写入普通日志的生产 debug stream。
 
 ## 验证预算
 

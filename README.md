@@ -61,12 +61,18 @@ MEMORY_DB_PATH=./agent_memory.db
 CHECKPOINT_DB_PATH=./agent_checkpoints.db
 MEMORY_SUMMARY_INTERVAL=100
 MEMORY_CONTEXT_WINDOW=100
+LOG_LEVEL=INFO
+LOG_DIR=logs
+LOG_FORMAT=text
+LOG_RETENTION_DAYS=30
+LOG_MAX_BYTES=20971520
+LOG_BACKUP_COUNT=5
 PIPELINE_MAX_CONCURRENCY=8
 PIPELINE_MAX_PENDING=256
 RUNTIME_DEADLINE_SECONDS=120
 MODEL_BUDGET_USD=100
 
-MCP_ALLOWED_TOOLS=
+MCP_CONFIG_PATH=./.mcp.json
 AGENT_PACKAGES_PATH=./agents
 SKILL_PACKAGES_PATH=./skills
 POLICIES_PATH=./policies
@@ -77,6 +83,8 @@ EXECUTION_WORKSPACE_PATH=/tmp/mmag-execution
 EXECUTION_WORKSPACE_RETENTION_SECONDS=3600
 ARTIFACT_STORE_PATH=./artifacts
 ```
+
+生产环境建议设置 `LOG_FORMAT=json` 输出版本化 JSON Lines；容器由平台采集 stdout 时设置 `LOG_DIR=` 禁用本地文件。普通日志只记录关联 ID、稳定事件名、状态、耗时、错误类型和安全摘要，不记录 Prompt、消息正文、完整 Tool 参数、Provider 异常正文或 Secret。Deep Agents 的模型和 Tool 生命周期通过 LangChain 原生 Callback 进入同一日志与审计链。
 
 安装和启动：
 
@@ -186,11 +194,17 @@ agents/<name>/evals.yml             # 只有真实质量 case 时才需要
 
 Skill 同样使用扁平目录和 Manifest 内版本。选中 Skill 会投影到 Deep Agents StateBackend，由原生 SkillsMiddleware 渐进读取 `SKILL.md` 和模板；可执行 Renderer 属于平台代码，不属于 Skill 资源。
 
+## MCP 配置
+
+仓库根目录的 `.mcp.json` 是唯一 MCP 配置源，同时声明 Server 连接、启停状态和平台可发现的精确工具清单。`MCP_CONFIG_PATH` 只用于切换这一个文件，不再维护第二份环境变量 allowlist。Agent 在各自 `agent.yml` 中声明可使用的 MCP Capability，Skill 只能进一步缩小，Policy 决定本次调用是否允许或进入审批。
+
+应用启动时严格校验配置并生成不可变快照；Agent 构建、MCP Bridge 与 Run provenance 使用同一个配置 Hash。修改配置后需重启进程，新 Run 才会使用新快照。Secret 只允许通过 `${ENV_NAME}` 显式引用，不能直接写入配置。
+
 ## 安全边界
 
-- MCP 默认不连接；`MCP_ALLOWED_TOOLS` 必须精确列出 `mcp_<server>_<tool>`；
+- MCP 默认不连接；只有 `.mcp.json` 中 `enabled=true` 且列入 `tools` 的工具才会注册；
 - MCP stdio 子进程只继承最小运行环境，不继承 Mattermost/模型 Secret；
-- Claude SDK 只暴露 in-process MMAG Capability，且每次调用再次匹配当前 Package allowlist；SDK CLI 内置文件/命令工具不对 Bot 开放；
+- Deep Agents 只暴露当前 Agent/Skill 交集内的 MMAG Capability，每次调用仍经过动态 Policy；
 - URL 分析禁用环境代理和自动重定向，每次跳转重新执行 DNS/IP SSRF 校验；
 - 频道、用户和文件目标使用可信请求 Context 做资源级匹配；
 - Secret 不得写入 Agent Manifest、Prompt、Policy 或日志；

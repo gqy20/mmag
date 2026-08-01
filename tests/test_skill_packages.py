@@ -47,7 +47,7 @@ def _packages():
 def test_loader_builds_versioned_skill_snapshot():
     package = SkillPackageLoader().load(ROOT / "skills" / "web-research")
 
-    assert package.manifest.metadata.ref == "web-research@1.1.0"
+    assert package.manifest.metadata.ref == "web-research@1.2.0"
     assert package.manifest.capabilities.required == ("analyze_link",)
     assert len(package.snapshot.package_hash) == 64
 
@@ -62,7 +62,7 @@ def test_resolver_projects_agent_and_skill_capability_intersection():
     )
 
     assert invocation is not None
-    assert invocation.ref == "web-research@1.1.0"
+    assert invocation.ref == "web-research@1.2.0"
     assert invocation.capabilities == ("analyze_link", "search_knowledge")
 
 
@@ -103,9 +103,9 @@ class StubRuntime:
 async def test_runtime_rejects_forged_skill_capability_expansion():
     _, agents = _packages()
     package = agents.get("mmchat")
-    skill = package.skills["web-research@1.1.0"]
+    skill = package.skills["web-research@1.2.0"]
     forged = SkillInvocation(
-        "web-research@1.1.0",
+        "web-research@1.2.0",
         ("analyze_link", "save_knowledge"),
         skill.snapshot.to_dict(),
     )

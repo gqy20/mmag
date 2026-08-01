@@ -144,7 +144,7 @@ flowchart LR
 | SDK Agent Loop | Claude Agent SDK | 显式 opt-in 路径，不承担可恢复审批 |
 | 内置能力 | 消息、知识、链接、用户、文件等 | 单一 Spec，经 CapabilityRegistry/SDK 投影 |
 | MCP | Capability Catalog + MCP Bridge | schema、策略和可见性已有单一来源 |
-| 日志追踪 | ContextVar `TraceContext` | 请求隔离，已记录 route/package/runtime |
+| 日志追踪 | 可嵌套 `LogContext` + Deep Agents Callback | 自动恢复上下文，模型/工具生命周期使用安全结构化事件 |
 
 ### 4.3 主要架构问题
 
@@ -183,7 +183,7 @@ WebSocket 事件现在先持久化到 Inbox，由 conversation scheduler 分发�
 #### D. 请求状态仍包含全局可变部分（部分解决）
 
 - 已解决：`ToolContext.current_post` 已替换为请求级不可变 `CapabilityContext`；
-- `TraceContext` 使用全局可变字典；
+- 已解决：日志上下文使用不可变快照和 ContextVar token 自动恢复，不再手工清理；
 - `working_memory` 由 `Agent` 直接维护；
 - 全局 `config` 会在 SDK 初始化失败时被运行期修改。
 

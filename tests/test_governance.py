@@ -88,7 +88,7 @@ def test_versioned_policy_registry_enforces_mmchat_resources_and_writes():
 
     registry = PolicyRegistry()
     registry.load_directory(Path(__file__).resolve().parents[1] / "policies")
-    engine = registry.get("mmchat@1.2.0")
+    engine = registry.get("mmchat@1.3.0")
     get_posts = CapabilitySpec(
         "get_posts",
         "read",
@@ -97,11 +97,11 @@ def test_versioned_policy_registry_enforces_mmchat_resources_and_writes():
         permission="mattermost:post:read",
     )
     external_mcp = CapabilitySpec(
-        "mcp_docs_search",
+        "mcp_crawl_search_text",
         "search",
         {"type": "object"},
         lambda: None,
-        permission="mcp:docs:search:invoke",
+        permission="mcp:crawl:search_text:invoke",
     )
     context = GovernanceContext(
         "u1",
@@ -142,7 +142,7 @@ async def test_registry_authorizer_uses_current_package_policy_and_allowlist():
         "u1",
         "mattermost:team-1/channel-1",
         resources={"conversation_id": "channel-1"},
-        policy_ref="mmchat@1.2.0",
+        policy_ref="mmchat@1.3.0",
         allowed_capabilities=("get_posts",),
     )
 

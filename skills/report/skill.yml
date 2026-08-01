@@ -3,7 +3,7 @@ kind: Skill
 
 metadata:
   name: report
-  version: 1.2.0
+  version: 1.3.0
   description: Build a structured research report with an explicit evidence ledger.
 
 spec:
@@ -21,6 +21,14 @@ spec:
   optional_capabilities:
     - search_messages
     - analyze_link
+    - mcp_crawl_crawl_single
+    - mcp_crawl_crawl_site
+    - mcp_crawl_crawl_batch
+    - mcp_crawl_search_text
+    - mcp_crawl_search_news
+    - mcp_crawl_search_books
+    - mcp_crawl_search_videos
+    - mcp_crawl_search_images
 
   resources:
     templates:

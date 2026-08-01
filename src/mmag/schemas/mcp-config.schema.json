@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/schemas/mcp-config-v1.json",
+  "title": "MMAG MCP Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "mcpServers"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "version": {"const": 1},
+    "mcpServers": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]*$"},
+      "additionalProperties": {"$ref": "#/$defs/server"}
+    }
+  },
+  "$defs": {
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "type", "tools"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "type": {"enum": ["stdio", "sse", "http", "streamable-http"]},
+        "command": {"type": "string", "minLength": 1},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "env": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "url": {"type": "string", "minLength": 1},
+        "headers": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "tools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"enabled": {"const": true}}},
+          "then": {"properties": {"tools": {"minItems": 1}}}
+        },
+        {
+          "if": {"properties": {"type": {"const": "stdio"}}},
+          "then": {"required": ["command"]},
+          "else": {"required": ["url"]}
+        }
+      ]
+    }
+  }
+}

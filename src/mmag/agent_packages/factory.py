@@ -20,6 +20,8 @@ from .runtime import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from ..agent_system import AgentRequest, ManagedAgent
     from ..capabilities import CapabilityExecutor, CapabilityRegistry
     from ..governance import ModelGateway, ModelPolicyRegistry
@@ -57,11 +59,13 @@ class DeepAgentProvider:
         model_policies: ModelPolicyRegistry,
         *,
         additional_capabilities: tuple[str, ...] = (),
+        platform_provenance: Mapping[str, str] | None = None,
     ) -> None:
         self.gateway = gateway
         self.capabilities = capabilities
         self.model_policies = model_policies
         self.additional_capabilities = additional_capabilities
+        self.platform_provenance = dict(platform_provenance or {})
 
     def create(self, package: AgentPackage) -> ManagedAgent:
         names = self.capabilities.resolve_names(
@@ -84,7 +88,11 @@ class DeepAgentProvider:
             request_factory=self._request_factory(package, names),
             use_prepared_request=False,
         )
-        return ContractAgentDecorator(package, delegate)
+        return ContractAgentDecorator(
+            package,
+            delegate,
+            platform_provenance=self.platform_provenance,
+        )
 
     def _request_factory(self, package: AgentPackage, names: tuple[str, ...]):
         model_policy = self.model_policies.get(package.manifest.model_policy_ref)
@@ -117,6 +125,16 @@ class DeepAgentProvider:
             )
             selected_names = request.skill.capabilities if request.skill is not None else names
             capabilities = tuple(self.capabilities.get_schema_list(selected_names))
+            runtime_metadata = {
+                "task_id": request.task_id,
+                "agent_ref": (
+                    f"{package.manifest.metadata.name}@{package.manifest.metadata.version}"
+                ),
+                "skill_ref": request.skill.ref if request.skill is not None else "",
+                "policy_ref": package.manifest.policy_ref,
+                "package_hash": package.snapshot.package_hash,
+                **self.platform_provenance,
+            }
             if prepared is not None:
                 return replace(
                     prepared,
@@ -131,6 +149,7 @@ class DeepAgentProvider:
                     temperature=model_policy.temperature,
                     response_schema=expected_result_schema(package, request),
                     skill_files=project_skill_files(package, request),
+                    metadata={**prepared.metadata, **runtime_metadata},
                 )
             return RunRequest(
                 context=RunContext(
@@ -152,6 +171,7 @@ class DeepAgentProvider:
                 temperature=model_policy.temperature,
                 response_schema=expected_result_schema(package, request),
                 skill_files=project_skill_files(package, request),
+                metadata=runtime_metadata,
             )
 
         return build
