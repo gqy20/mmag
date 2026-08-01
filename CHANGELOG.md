@@ -4,6 +4,10 @@
 
 **工程能力**
 
+- 收紧企业执行闭环：过期、重复或 resume token 异常的审批不再恢复 LangGraph，非请求人必须具备 Mattermost 频道管理员或系统管理员身份
+- Outbox Delivery 使用持久 delivery id 作为 Mattermost 幂等键，跨进程重试不再生成新 pending post id
+- Inbox 新增持久 attempts/next_attempt_at 与瞬时错误有界重试；Task 终态延后到实际 Delivery 成功或失败
+- 审批、Inbox 重试/失败和 Delivery 终态开始写入结构化 AuditEvent
 - 新增 Agent Package v1：严格 Manifest JSON Schema、Prompt/Schema Registry、不可变版本发布与 Package/Prompt Hash
 - 新增统一 Agent 输入/输出 Envelope 强制、Artifact Schema 校验和一次模型输出修复；二次失败返回稳定 `INVALID_OUTPUT`
 - Policy Engine 改为默认拒绝，新增版本化 Policy Registry；Link Agent 接入独立 Package 与只读执行策略

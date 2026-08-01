@@ -1,6 +1,8 @@
 import pytest
 
 from mmag.control_plane import (
+    ApprovalAlreadyDecidedError,
+    ApprovalExpiredError,
     ApprovalService,
     EntityType,
     InvalidTransitionError,
@@ -79,4 +81,26 @@ def test_approval_persists_arguments_and_resume_token(tmp_path):
     assert decided.state.value == "approved"
     assert decided.arguments == {"path": "report.pdf"}
     assert decided.resume_token == request.resume_token
+    store.close()
+
+
+def test_expired_approval_cannot_be_approved_or_decided_twice(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    lifecycle = LifecycleService(store)
+    approvals = ApprovalService(store, lifecycle)
+    expired = approvals.request(
+        "send_file",
+        {"path": "report.pdf"},
+        requested_by="user-1",
+        ttl_seconds=-1,
+    )
+
+    with pytest.raises(ApprovalExpiredError):
+        approvals.decide(expired.id, approved=True, actor_id="user-1")
+    assert store.get_approval_request(expired.id).state.value == "expired"
+
+    decided = approvals.request("send_file", {}, requested_by="user-1")
+    approvals.decide(decided.id, approved=False, actor_id="user-1")
+    with pytest.raises(ApprovalAlreadyDecidedError):
+        approvals.decide(decided.id, approved=True, actor_id="user-1")
     store.close()

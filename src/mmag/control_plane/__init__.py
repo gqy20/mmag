@@ -1,6 +1,17 @@
 """Durable execution and enterprise context control plane."""
 
-from .approval import ApprovalService
+from .approval import (
+    ApprovalAlreadyDecidedError,
+    ApprovalDecisionError,
+    ApprovalExpiredError,
+    ApprovalService,
+)
+from .approval_policy import (
+    ApprovalAuthorizer,
+    MattermostApprovalAuthorizer,
+    RequesterApprovalAuthorizer,
+    StaticApprovalAuthorizer,
+)
 from .context import AssembledContext, ContextAssembler, ScopeResolver
 from .langgraph_approval import LangGraphApprovalCoordinator
 from .lifecycle import (
@@ -36,6 +47,10 @@ from .store import SQLiteControlPlane
 __all__ = [
     "AgentRunState",
     "ApprovalRequest",
+    "ApprovalAlreadyDecidedError",
+    "ApprovalAuthorizer",
+    "ApprovalDecisionError",
+    "ApprovalExpiredError",
     "ApprovalService",
     "Artifact",
     "AuditEvent",
@@ -55,14 +70,17 @@ __all__ = [
     "LifecycleService",
     "LangGraphApprovalCoordinator",
     "MessagePipeline",
+    "MattermostApprovalAuthorizer",
     "OutboundMessage",
     "PartitionedScheduler",
     "SQLiteControlPlane",
     "Scope",
     "ScopeResolver",
+    "RequesterApprovalAuthorizer",
     "StateTransition",
     "Task",
     "TaskState",
     "TaskStep",
+    "StaticApprovalAuthorizer",
     "VersionConflictError",
 ]

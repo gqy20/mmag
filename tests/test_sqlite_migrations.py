@@ -88,6 +88,10 @@ def test_fresh_database_migrates_to_latest_schema():
 
     assert versions == list(range(1, LATEST_SCHEMA_VERSION + 1))
     assert {"message_log", "user_profiles", "team_knowledge", "url_cache"} <= tables
+    inbox_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(inbox_events)").fetchall()
+    }
+    assert {"attempts", "next_attempt_at"} <= inbox_columns
     conn.close()
 
 

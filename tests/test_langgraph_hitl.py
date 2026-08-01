@@ -12,6 +12,7 @@ from mmag.control_plane import (
     LifecycleService,
     SQLiteControlPlane,
 )
+from mmag.control_plane.approval_policy import StaticApprovalAuthorizer
 from mmag.governance import (
     GovernanceContext,
     PolicyCapabilityAuthorizer,
@@ -228,6 +229,7 @@ async def test_approval_coordinator_keeps_business_lifecycle_in_sync(tmp_path: P
         lifecycle,
         ApprovalService(store, lifecycle),
         gateway,
+        authorizer=StaticApprovalAuthorizer(frozenset({"reviewer-1"})),
     )
     paused = AgentResult(
         "",
@@ -270,4 +272,38 @@ async def test_approval_coordinator_keeps_business_lifecycle_in_sync(tmp_path: P
         "mattermost:post-1",
         {"decisions": [{"tool_call_id": "call-1", "decision": "approve"}]},
     )
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_approval_coordinator_rejects_unqualified_actor_without_resuming(tmp_path: Path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    lifecycle = LifecycleService(store)
+    gateway = AsyncMock()
+    coordinator = LangGraphApprovalCoordinator(
+        store,
+        lifecycle,
+        ApprovalService(store, lifecycle),
+        gateway,
+        authorizer=StaticApprovalAuthorizer(frozenset({"reviewer-1"})),
+    )
+    request = ApprovalService(store, lifecycle).request(
+        "publish",
+        {"thread_id": "run-1", "interrupt_id": "token-1", "tool_calls": []},
+        requested_by="user-1",
+        scope_id="scope-1",
+        resume_token="token-1",
+    )
+
+    with pytest.raises(PermissionError, match="not authorized"):
+        await coordinator.resume(
+            request.id,
+            approved=True,
+            actor_id="member-1",
+            scope_id="scope-1",
+            trace_id="trace-1",
+        )
+
+    assert store.get_approval_request(request.id).state.value == "pending"
+    gateway.resume.assert_not_awaited()
     store.close()

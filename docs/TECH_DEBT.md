@@ -8,6 +8,11 @@
 
 > 触发条件: 网络抖动 / Token 过期 / LLM 限流时可能导致消息丢失、Agent 失能、用户体验下降
 
+### 0. 企业闭环剩余 P0
+- 已完成：审批过期/重复/token 守卫、Mattermost 审批资格、Delivery 幂等键、Inbox 有界持久重试、Task/Delivery 终态聚合和基础审计写入
+- 剩余：全局 Bot 仍显式 ALLOW；Policy 尚未校验 Capability 动态资源参数；失败 Inbox 缺 DLQ/replay；持久预算、Artifact/provenance、Router 主链和交付验收仍未闭环
+- 审批当前允许请求人自批；高风险 Capability 仍需组织级职责分离与双人审批策略
+
 ### 1. MMClient 读取与文件调用仍无统一重试
 - 已完成：消息投递和附件下载进入共享 httpx 异步连接池，统一 timeout、429/5xx 与传输错误重试；创建消息继续使用稳定 `pending_post_id`
 - 剩余：启动 backfill 和部分兼容 Capability 仍通过同步 Client 在线程池执行，后续可在不影响主事件循环的前提下逐步删除兼容接口

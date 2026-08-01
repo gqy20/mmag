@@ -4,7 +4,7 @@
 >
 > 更新时间：2026-08-01
 >
-> 当前阶段：Agent Package v1 基线与 Link Agent 纵向切片完成，进入持久审计与多 Agent handoff
+> 当前阶段：Agent Package v1 基线完成，正在收口企业执行闭环 P0
 >
 > 架构依据：[`AI_NATIVE_REFACTORING.md`](./AI_NATIVE_REFACTORING.md)
 
@@ -282,6 +282,20 @@ Managed Agent 与 Router
 ## 10. Step 7：治理与私有化生产能力
 
 已建立 Policy Engine、持久审批、脱敏、Secret Provider、Model Gateway、成本配额、审计、metrics、任务级 tracing、数据清理、SQLite 在线备份和私有化部署基线。目标环境的告警后端、容量数值和灾备演练仍属于部署验收，见 [`OPERATIONS.md`](./OPERATIONS.md)。
+
+### 企业闭环 P0 收口
+
+- [x] 过期、重复与 resume token 异常审批禁止恢复执行；
+- [x] 审批接入 Mattermost 请求人/频道管理员/系统管理员资格校验，身份查询失败默认拒绝；
+- [x] Outbox Delivery 跨重试复用持久 Mattermost 幂等键；
+- [x] Inbox 瞬时处理错误使用持久 attempts 做有界重试；
+- [x] AgentRun 与 Task 终态解耦，Task 等待 Delivery 终态；
+- [x] 审批、Inbox 失败/重试、Delivery 终态写入基础 AuditEvent；
+- [ ] 建立失败 Inbox 的 DLQ 查询与人工 replay；
+- [ ] 删除全局 Bot ALLOW，接入资源参数级 Policy；
+- [ ] 将 ScopeResolver、AgentRouter、Package Runner、Artifact Repository 串入消息主链；
+- [ ] 持久化 usage/provenance 并实现原子预算预留；
+- [ ] 建立交付接受、驳回、返工和反馈闭环。
 
 这一阶段的完成标准不是“功能齐全”，而是权限可解释、运行可追踪、数据可治理、故障可恢复。
 

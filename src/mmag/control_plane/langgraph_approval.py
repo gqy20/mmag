@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from ..governance import ModelGateway
     from ..runtimes import AgentResult
     from .approval import ApprovalService
+    from .approval_policy import ApprovalAuthorizer
     from .lifecycle import LifecycleService
     from .models import ApprovalRequest
     from .store import SQLiteControlPlane
@@ -27,11 +28,18 @@ class LangGraphApprovalCoordinator:
         lifecycle: LifecycleService,
         approvals: ApprovalService,
         gateway: ModelGateway,
+        *,
+        authorizer: ApprovalAuthorizer | None = None,
     ) -> None:
         self.store = store
         self.lifecycle = lifecycle
         self.approvals = approvals
         self.gateway = gateway
+        if authorizer is None:
+            from .approval_policy import RequesterApprovalAuthorizer
+
+            authorizer = RequesterApprovalAuthorizer()
+        self.authorizer = authorizer
 
     def register(
         self,
@@ -56,6 +64,14 @@ class LangGraphApprovalCoordinator:
             resume_token=str(interruption["id"]),
         )
         self._transition_run(str(payload["thread_id"]), "waiting_approval", str(interruption["id"]))
+        self.store.append_audit(
+            "approval.requested",
+            actor_id=requested_by,
+            scope_id=scope_id,
+            target=approval.id,
+            decision="pending",
+            details={"capability": approval.capability_name},
+        )
         return approval
 
     async def resume(
@@ -71,13 +87,31 @@ class LangGraphApprovalCoordinator:
         request = self.store.get_approval_request(request_id)
         if request.scope_id != scope_id:
             raise PermissionError("approval belongs to another Mattermost scope")
-        request = self.approvals.decide(
-            request_id,
-            approved=approved,
-            actor_id=actor_id,
-            reason=reason,
-        )
         payload = dict(request.arguments)
+        if request.resume_token != str(payload.get("interrupt_id", "")):
+            raise PermissionError("approval resume token is invalid")
+        if not await self.authorizer.can_decide(request, actor_id):
+            self.store.append_audit(
+                "approval.denied",
+                actor_id=actor_id,
+                scope_id=scope_id,
+                trace_id=trace_id,
+                target=request_id,
+                decision="unauthorized",
+            )
+            raise PermissionError("actor is not authorized to decide this approval")
+        request = self.approvals.decide(
+            request_id, approved=approved, actor_id=actor_id, reason=reason
+        )
+        self.store.append_audit(
+            "approval.decided",
+            actor_id=actor_id,
+            scope_id=scope_id,
+            trace_id=trace_id,
+            target=request_id,
+            decision=request.state.value,
+            details={"requested_by": request.requested_by},
+        )
         decisions = _decisions(payload, approved)
         thread_id = str(payload["thread_id"])
         context = CapabilityContext(

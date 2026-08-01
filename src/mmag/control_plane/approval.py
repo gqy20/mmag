@@ -13,6 +13,18 @@ if TYPE_CHECKING:
     from .store import SQLiteControlPlane
 
 
+class ApprovalDecisionError(ValueError):
+    """An approval request cannot accept the proposed decision."""
+
+
+class ApprovalExpiredError(ApprovalDecisionError):
+    pass
+
+
+class ApprovalAlreadyDecidedError(ApprovalDecisionError):
+    pass
+
+
 class ApprovalService:
     def __init__(self, store: SQLiteControlPlane, lifecycle: LifecycleService):
         self.store = store
@@ -50,10 +62,24 @@ class ApprovalService:
         reason: str = "",
     ) -> ApprovalRequest:
         request = self.store.get_approval_request(request_id)
+        if request.state.value != "pending":
+            raise ApprovalAlreadyDecidedError(
+                f"approval {request_id!r} is already {request.state.value}"
+            )
         if request.expires_at is not None and request.expires_at <= time.time():
-            target = "expired"
-        else:
-            target = "approved" if approved else "rejected"
+            self.lifecycle.transition(
+                EntityType.APPROVAL_REQUEST,
+                request_id,
+                "expired",
+                command_id=f"approval:{request_id}:expired",
+                actor_id=actor_id,
+                reason="approval expired before decision",
+            )
+            self.store.record_approval_decision(
+                request_id, actor_id, reason or "approval expired before decision"
+            )
+            raise ApprovalExpiredError(f"approval {request_id!r} has expired")
+        target = "approved" if approved else "rejected"
         self.lifecycle.transition(
             EntityType.APPROVAL_REQUEST,
             request_id,

@@ -66,6 +66,7 @@ async def test_delivery_retry_does_not_reprocess_agent(tmp_path):
     store = SQLiteControlPlane(tmp_path / "control.db")
     runs = 0
     attempts = 0
+    idempotency_keys: list[str] = []
 
     async def process(event: InboundEvent) -> tuple[OutboundMessage, ...]:
         nonlocal runs
@@ -75,6 +76,7 @@ async def test_delivery_retry_does_not_reprocess_agent(tmp_path):
     async def deliver(message: OutboundMessage) -> str:
         nonlocal attempts
         attempts += 1
+        idempotency_keys.append(message.idempotency_key)
         if attempts == 1:
             raise ConnectionError("temporary")
         return "post-1"
@@ -92,8 +94,67 @@ async def test_delivery_retry_does_not_reprocess_agent(tmp_path):
 
     assert runs == 1
     assert attempts == 2
+    assert idempotency_keys[0]
+    assert len(set(idempotency_keys)) == 1
     assert store.get_inbox("one").status == "completed"
     assert store.list_deliveries(status="delivered")[0].remote_id == "post-1"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_delivery_terminal_state_settles_parent_task(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+
+    async def process(event: InboundEvent) -> tuple[OutboundMessage, ...]:
+        return (OutboundMessage(event.conversation_id, "done"),)
+
+    async def fail_delivery(message: OutboundMessage) -> str:
+        raise RuntimeError("permanent failure")
+
+    pipeline = MessagePipeline(store, process, fail_delivery, max_delivery_attempts=1)
+    await pipeline.start()
+    await pipeline.accept(_event("failed-delivery", "channel"))
+    await pipeline.join()
+    await pipeline.close()
+
+    run = store.get_lifecycle_entity(EntityType.AGENT_RUN, "run:failed-delivery")
+    task = store.get_lifecycle_entity(EntityType.TASK, "task:failed-delivery")
+    assert run.state == "succeeded"
+    assert task.state == "failed"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_retries_transient_processing_failure_with_persisted_attempts(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    runs = 0
+
+    async def process(event: InboundEvent) -> tuple[OutboundMessage, ...]:
+        nonlocal runs
+        runs += 1
+        if runs == 1:
+            raise TimeoutError("model timeout")
+        return (OutboundMessage(event.conversation_id, "recovered"),)
+
+    async def deliver(message: OutboundMessage) -> str:
+        return "post-1"
+
+    pipeline = MessagePipeline(
+        store,
+        process,
+        deliver,
+        max_processing_attempts=2,
+        processing_retry_base_seconds=0,
+    )
+    await pipeline.start()
+    await pipeline.accept(_event("retry-process", "channel"))
+    await pipeline.join()
+    await pipeline.close()
+
+    record = store.get_inbox("retry-process")
+    assert runs == 2
+    assert record.status == "completed"
+    assert record.attempts == 2
     store.close()
 
 

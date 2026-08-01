@@ -250,6 +250,21 @@ def _v004_add_control_plane(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def _v005_add_inbox_retry_state(connection: sqlite3.Connection) -> None:
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(inbox_events)")}
+    if "attempts" not in columns:
+        connection.execute(
+            "ALTER TABLE inbox_events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+        )
+    if "next_attempt_at" not in columns:
+        connection.execute(
+            "ALTER TABLE inbox_events ADD COLUMN next_attempt_at REAL NOT NULL DEFAULT 0"
+        )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inbox_retry ON inbox_events(status, next_attempt_at)"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -274,6 +289,12 @@ DEFAULT_MIGRATIONS = (
         name="add durable control plane",
         checksum=_checksum("v004-durable-control-plane-20260731"),
         upgrade=_v004_add_control_plane,
+    ),
+    Migration(
+        version=5,
+        name="add durable inbox retries",
+        checksum=_checksum("v005-durable-inbox-retries-20260801"),
+        upgrade=_v005_add_inbox_retry_state,
     ),
 )
 

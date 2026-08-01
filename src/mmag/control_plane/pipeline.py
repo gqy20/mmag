@@ -8,14 +8,16 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
+from ..logger import get_logger
 from .lifecycle import LifecycleService
-from .models import EntityType, InboundEvent, OutboundMessage
+from .models import DeliveryRecord, EntityType, InboundEvent, OutboundMessage
 
 if TYPE_CHECKING:
     from .store import SQLiteControlPlane
 
 Processor = Callable[[InboundEvent], Awaitable[tuple[OutboundMessage, ...]]]
 Deliverer = Callable[[OutboundMessage], Awaitable[str]]
+log = get_logger(__name__)
 
 
 class PartitionedScheduler:
@@ -86,6 +88,8 @@ class MessagePipeline:
         max_pending: int = 256,
         max_delivery_attempts: int = 3,
         delivery_retry_base_seconds: float = 0.25,
+        max_processing_attempts: int = 3,
+        processing_retry_base_seconds: float = 0.25,
     ):
         self.store = store
         self.lifecycle = LifecycleService(store)
@@ -93,6 +97,8 @@ class MessagePipeline:
         self.deliverer = deliverer
         self.max_delivery_attempts = max_delivery_attempts
         self.delivery_retry_base_seconds = delivery_retry_base_seconds
+        self.max_processing_attempts = max_processing_attempts
+        self.processing_retry_base_seconds = processing_retry_base_seconds
         self.scheduler = PartitionedScheduler(self._process, max_concurrency, max_pending)
         self._delivery_task: asyncio.Task[None] | None = None
         self._delivery_wake = asyncio.Event()
@@ -133,28 +139,63 @@ class MessagePipeline:
 
     async def _process(self, event: InboundEvent) -> None:
         self._ensure_execution_entities(event)
-        self.store.mark_inbox_processing(event.event_id)
         self._start_execution(event)
+        while True:
+            self.store.mark_inbox_processing(event.event_id)
+            try:
+                messages = await self.processor(event)
+            except Exception as error:
+                record = self.store.get_inbox(event.event_id)
+                if self._can_retry_processing(error, record.attempts):
+                    delay = self.processing_retry_base_seconds * 2 ** (record.attempts - 1)
+                    self.store.mark_inbox_retry(event.event_id, str(error), time.time() + delay)
+                    self._append_inbox_audit(event, "retrying", record.attempts, error)
+                    await asyncio.sleep(delay)
+                    continue
+                self.store.mark_inbox_failed(event.event_id, str(error))
+                self._append_inbox_audit(event, "failed", record.attempts, error)
+                self._fail_execution(event, str(error))
+                return
+            self._complete_execution(event, messages)
+            return
+
+    def _complete_execution(
+        self, event: InboundEvent, messages: tuple[OutboundMessage, ...]
+    ) -> None:
+        self.store.complete_event(event.event_id, messages)
+        run_id = f"run:{event.event_id}"
+        run = self.store.get_lifecycle_entity(EntityType.AGENT_RUN, run_id)
+        if run.state == "running":
+            self.lifecycle.transition(
+                EntityType.AGENT_RUN,
+                run_id,
+                "succeeded",
+                command_id=f"run-success:{event.event_id}",
+            )
+        if not messages:
+            self._transition_task(event.event_id, "succeeded", "no delivery required")
+        self._delivery_wake.set()
+
+    def _can_retry_processing(self, error: Exception, attempts: int) -> bool:
+        retryable = isinstance(error, (ConnectionError, TimeoutError)) or bool(
+            getattr(error, "retryable", False)
+        )
+        return retryable and attempts < self.max_processing_attempts
+
+    def _append_inbox_audit(
+        self, event: InboundEvent, decision: str, attempt: int, error: Exception
+    ) -> None:
         try:
-            messages = await self.processor(event)
-            self.store.complete_event(event.event_id, messages)
-            for entity_type, prefix in (
-                (EntityType.AGENT_RUN, "run"),
-                (EntityType.TASK, "task"),
-            ):
-                entity_id = f"{prefix}:{event.event_id}"
-                entity = self.store.get_lifecycle_entity(entity_type, entity_id)
-                if entity.state == "running":
-                    self.lifecycle.transition(
-                        entity_type,
-                        entity_id,
-                        "succeeded",
-                        command_id=f"{prefix}-success:{event.event_id}",
-                    )
-            self._delivery_wake.set()
-        except Exception as error:
-            self.store.mark_inbox_failed(event.event_id, str(error))
-            self._fail_execution(event, str(error))
+            self.store.append_audit(
+                f"inbox.{decision}",
+                actor_id=event.actor_id,
+                scope_id=event.conversation_id,
+                target=event.event_id,
+                decision=decision,
+                details={"attempt": attempt, "error": str(error)},
+            )
+        except Exception:
+            log.exception("inbox %s audit write failed", event.event_id)
 
     async def _delivery_loop(self) -> None:
         while True:
@@ -166,41 +207,66 @@ class MessagePipeline:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._delivery_wake.wait(), timeout=0.1)
                 continue
-            try:
-                self.lifecycle.transition(
-                    EntityType.DELIVERY,
-                    delivery.id,
-                    "sending",
-                    command_id=f"delivery-send:{delivery.id}:{delivery.attempts}",
-                )
-                remote_id = await self.deliverer(delivery.message)
-                if not remote_id:
-                    raise RuntimeError("delivery returned no remote id")
-                self.store.mark_delivery_delivered(delivery.id, remote_id)
-                self.lifecycle.transition(
-                    EntityType.DELIVERY,
-                    delivery.id,
-                    "delivered",
-                    command_id=f"delivery-success:{delivery.id}",
-                )
-            except Exception as error:
-                if delivery.attempts >= self.max_delivery_attempts:
-                    self.store.mark_delivery_failed(delivery.id, str(error))
-                    self.lifecycle.transition(
-                        EntityType.DELIVERY,
-                        delivery.id,
-                        "failed",
-                        command_id=f"delivery-failed:{delivery.id}",
-                    )
-                    continue
-                delay = self.delivery_retry_base_seconds * 2 ** (delivery.attempts - 1)
-                self.store.mark_delivery_retry(delivery.id, str(error), time.time() + delay)
-                self.lifecycle.transition(
-                    EntityType.DELIVERY,
-                    delivery.id,
-                    "retrying",
-                    command_id=f"delivery-retry:{delivery.id}:{delivery.attempts}",
-                )
+            await self._deliver_one(delivery)
+
+    async def _deliver_one(self, delivery: DeliveryRecord) -> None:
+        self.lifecycle.transition(
+            EntityType.DELIVERY,
+            delivery.id,
+            "sending",
+            command_id=f"delivery-send:{delivery.id}:{delivery.attempts}",
+        )
+        try:
+            remote_id = await self.deliverer(delivery.message)
+            if not remote_id:
+                raise RuntimeError("delivery returned no remote id")
+        except Exception as error:
+            self._handle_delivery_failure(delivery, error)
+            return
+        self.store.mark_delivery_delivered(delivery.id, remote_id)
+        self.lifecycle.transition(
+            EntityType.DELIVERY,
+            delivery.id,
+            "delivered",
+            command_id=f"delivery-success:{delivery.id}",
+        )
+        self._settle_parent_task(delivery.message.agent_run_id)
+        self._append_delivery_audit(delivery, "delivered", remote_id=remote_id)
+
+    def _handle_delivery_failure(self, delivery: DeliveryRecord, error: Exception) -> None:
+        if delivery.attempts >= self.max_delivery_attempts:
+            self.store.mark_delivery_failed(delivery.id, str(error))
+            self.lifecycle.transition(
+                EntityType.DELIVERY,
+                delivery.id,
+                "failed",
+                command_id=f"delivery-failed:{delivery.id}",
+            )
+            self._settle_parent_task(delivery.message.agent_run_id, failed=True)
+            self._append_delivery_audit(delivery, "failed", error=str(error))
+            return
+        delay = self.delivery_retry_base_seconds * 2 ** (delivery.attempts - 1)
+        self.store.mark_delivery_retry(delivery.id, str(error), time.time() + delay)
+        self.lifecycle.transition(
+            EntityType.DELIVERY,
+            delivery.id,
+            "retrying",
+            command_id=f"delivery-retry:{delivery.id}:{delivery.attempts}",
+        )
+
+    def _append_delivery_audit(
+        self, delivery: DeliveryRecord, decision: str, **details: str
+    ) -> None:
+        try:
+            self.store.append_audit(
+                f"delivery.{decision}",
+                scope_id=delivery.message.conversation_id,
+                target=delivery.id,
+                decision=decision,
+                details=details,
+            )
+        except Exception:
+            log.exception("delivery %s audit write failed", delivery.id)
 
     def _ensure_execution_entities(self, event: InboundEvent) -> None:
         for entity_type, prefix in (
@@ -247,3 +313,31 @@ class MessagePipeline:
                 command_id=f"{prefix}-start:{event.event_id}:v{entity.version}",
                 expected_version=entity.version,
             )
+
+    def _settle_parent_task(self, agent_run_id: str, *, failed: bool = False) -> None:
+        if not agent_run_id.startswith("run:"):
+            return
+        event_id = agent_run_id.removeprefix("run:")
+        if failed:
+            self._transition_task(event_id, "failed", "delivery failed")
+            return
+        deliveries = self.store.list_deliveries_for_run(agent_run_id)
+        if deliveries and all(delivery.status == "delivered" for delivery in deliveries):
+            self._transition_task(event_id, "succeeded", "all deliveries completed")
+
+    def _transition_task(self, event_id: str, target: str, reason: str) -> None:
+        task_id = f"task:{event_id}"
+        try:
+            task = self.store.get_lifecycle_entity(EntityType.TASK, task_id)
+        except KeyError:
+            return
+        if task.state != "running":
+            return
+        self.lifecycle.transition(
+            EntityType.TASK,
+            task_id,
+            target,
+            command_id=f"task-{target}:{event_id}:v{task.version}",
+            expected_version=task.version,
+            reason=reason,
+        )

@@ -147,6 +147,16 @@ class MMClient:
         user = await self.get_user_async(user_id)
         return user.get("username", user_id[:8])
 
+    async def get_user_authorization_async(self, user_id: str) -> dict:
+        """Fetch uncached user roles; authorization callers must fail closed."""
+        response = await self._request_async("GET", f"/users/{user_id}")
+        return response.json()
+
+    async def get_channel_member_async(self, channel_id: str, user_id: str) -> dict:
+        """Fetch authoritative channel membership and roles."""
+        response = await self._request_async("GET", f"/channels/{channel_id}/members/{user_id}")
+        return response.json()
+
     def get_username(self, user_id: str) -> str:
         return self.get_user(user_id).get("username", user_id[:8])
 
@@ -226,11 +236,12 @@ class MMClient:
         root_id: str = "",
         props: dict | None = None,
         file_ids: list[str] | None = None,
+        pending_post_id: str | None = None,
     ) -> str | None:
         payload: dict[str, Any] = {
             "channel_id": channel_id,
             "message": message,
-            "pending_post_id": uuid.uuid4().hex,
+            "pending_post_id": pending_post_id or uuid.uuid4().hex,
         }
         if root_id:
             payload["root_id"] = root_id

@@ -28,6 +28,7 @@ from .control_plane import (
     InboundEvent,
     LangGraphApprovalCoordinator,
     LifecycleService,
+    MattermostApprovalAuthorizer,
     MessagePipeline,
     OutboundMessage,
     SQLiteControlPlane,
@@ -234,6 +235,7 @@ class Agent:
             lifecycle,
             approvals,
             self.runtime,
+            authorizer=MattermostApprovalAuthorizer(self.mm),
         )
         for spec in (
             AgentSpec(
@@ -1492,6 +1494,7 @@ class Agent:
             channel_id=outbound.channel_id or outbound.conversation_id,
             message=outbound.text,
             props=dict(outbound.props),
+            pending_post_id=outbound.idempotency_key,
         )
         if not post_id:
             raise RuntimeError("Mattermost delivery failed")

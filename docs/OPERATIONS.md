@@ -23,6 +23,19 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 - `RUNTIME_DEADLINE_SECONDS` 是单次 Run deadline，默认 120 秒。
 - `MODEL_BUDGET_USD` 是进程内每个 actor 的成本上限基线，生产环境应由外部配额源同步。
 - Delivery 最多尝试三次，失败记录保留在 Outbox，不会重新执行 Agent。
+- Runtime/网络类瞬时处理错误默认最多尝试三次，次数与下次重试时间持久化在 Inbox；非瞬时错误直接进入 `failed`。
+- Outbox 使用持久 delivery ID 作为 Mattermost `pending_post_id`，进程内和重启后的重试复用同一幂等键。
+
+Task 与 AgentRun 的终态语义不同：AgentRun 在模型执行成功后结束；存在出站消息时，Task 必须等全部 Delivery 成功后才进入 `succeeded`，任何最终 Delivery 失败都会把 Task 标为 `failed`。
+
+## 审批安全
+
+- 过期、已处理或 resume token 不一致的审批不会恢复 LangGraph checkpoint；
+- 原请求人可以处理自己的审批；其他用户必须是当前 Mattermost 频道管理员或系统管理员；
+- 身份或频道成员查询失败时默认拒绝；
+- 审批请求、拒绝和最终决定写入 AuditEvent。
+
+当前策略允许请求人自批。需要职责分离的部署仍应在下一阶段接入组织级审批矩阵，按 Capability 风险要求独立审批人或双人审批。
 
 ## 备份与恢复
 
@@ -30,7 +43,7 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 2. 将备份复制到独立故障域并按组织的数据保留策略轮转。
 3. 恢复时停止旧实例，将备份恢复到新路径，再启动单个实例。
 4. 启动过程会运行 forward-only migration，并 reconciliation 遗留的
-   `RUNNING`、`SENDING` 和未投递记录。
+   `RUNNING`、`SENDING`、`PROCESSING/RETRYING` 和未投递记录。
 5. 恢复演练必须验证 Inbox 不重复执行、Outbox 可继续投递、审批仍可读取，并能用原 `thread_id` 从 LangGraph SQLite checkpoint 恢复。
 
 ## 升级与回滚

@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import requests
@@ -59,3 +59,17 @@ def test_send_post_stops_after_bounded_attempts():
     assert result is None
     assert client._post.call_count == 3
     assert sleep.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_send_post_async_uses_caller_idempotency_key():
+    client = MMClient(base_url="https://mattermost.example", token="token")
+    response = MagicMock()
+    response.json.return_value = {"id": "post-1"}
+    client._request_async = AsyncMock(return_value=response)
+
+    result = await client.send_post_async("channel-1", "hello", pending_post_id="delivery-1")
+
+    assert result == "post-1"
+    payload = client._request_async.await_args.kwargs["json"]
+    assert payload["pending_post_id"] == "delivery-1"

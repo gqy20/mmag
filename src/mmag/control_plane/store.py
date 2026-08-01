@@ -75,7 +75,8 @@ class SQLiteControlPlane:
     def recover_inbox(self) -> list[InboxRecord]:
         with self._lock:
             self._connection.execute(
-                "UPDATE inbox_events SET status='accepted', updated_at=? WHERE status='processing'",
+                """UPDATE inbox_events SET status='accepted', next_attempt_at=0, updated_at=?
+                WHERE status IN ('processing', 'retrying')""",
                 (time.time(),),
             )
             self._connection.commit()
@@ -85,7 +86,22 @@ class SQLiteControlPlane:
         return [self._inbox_record(row) for row in rows]
 
     def mark_inbox_processing(self, event_id: str) -> None:
-        self._update_inbox(event_id, "processing")
+        with self._lock:
+            self._connection.execute(
+                """UPDATE inbox_events SET status='processing', attempts=attempts+1,
+                next_attempt_at=0, version=version+1, updated_at=? WHERE event_id=?""",
+                (time.time(), event_id),
+            )
+            self._connection.commit()
+
+    def mark_inbox_retry(self, event_id: str, error: str, retry_at: float) -> None:
+        with self._lock:
+            self._connection.execute(
+                """UPDATE inbox_events SET status='retrying', last_error=?, next_attempt_at=?,
+                version=version+1, updated_at=? WHERE event_id=?""",
+                (error, retry_at, time.time(), event_id),
+            )
+            self._connection.commit()
 
     def mark_inbox_failed(self, event_id: str, error: str) -> None:
         self._update_inbox(event_id, "failed", error)
@@ -101,6 +117,7 @@ class SQLiteControlPlane:
                 for message in messages:
                     delivery_id = uuid.uuid4().hex
                     channel_id = message.channel_id or message.conversation_id
+                    agent_run_id = message.agent_run_id or f"run:{event_id}"
                     self._connection.execute(
                         """INSERT INTO outbox_deliveries
                         (id, conversation_id, channel_id, message, props, status,
@@ -112,7 +129,7 @@ class SQLiteControlPlane:
                             channel_id,
                             message.text,
                             _json(dict(message.props)),
-                            message.agent_run_id,
+                            agent_run_id,
                             now,
                             now,
                         ),
@@ -126,7 +143,7 @@ class SQLiteControlPlane:
                     delivery_ids.append(delivery_id)
                 self._connection.execute(
                     """UPDATE inbox_events SET status='completed', version=version+1,
-                    last_error='', updated_at=? WHERE event_id=?""",
+                    last_error='', next_attempt_at=0, updated_at=? WHERE event_id=?""",
                     (now, event_id),
                 )
                 self._connection.commit()
@@ -171,6 +188,13 @@ class SQLiteControlPlane:
             rows = self._connection.execute(
                 "SELECT * FROM outbox_deliveries ORDER BY created_at"
             ).fetchall()
+        return [self._delivery_record(row) for row in rows]
+
+    def list_deliveries_for_run(self, agent_run_id: str) -> list[DeliveryRecord]:
+        rows = self._connection.execute(
+            "SELECT * FROM outbox_deliveries WHERE agent_run_id=? ORDER BY created_at",
+            (agent_run_id,),
+        ).fetchall()
         return [self._delivery_record(row) for row in rows]
 
     def recover_deliveries(self) -> None:
@@ -492,6 +516,8 @@ class SQLiteControlPlane:
             row["status"],
             row["version"],
             row["last_error"],
+            row["attempts"],
+            row["next_attempt_at"],
         )
 
     @staticmethod
@@ -504,6 +530,7 @@ class SQLiteControlPlane:
                 row["channel_id"],
                 json.loads(row["props"]),
                 row["agent_run_id"],
+                row["id"],
             ),
             row["status"],
             row["attempts"],

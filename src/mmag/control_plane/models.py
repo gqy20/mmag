@@ -32,6 +32,7 @@ class OutboundMessage:
     channel_id: str = ""
     props: Mapping[str, Any] = field(default_factory=dict)
     agent_run_id: str = ""
+    idempotency_key: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,8 @@ class InboxRecord:
     status: str
     version: int
     last_error: str = ""
+    attempts: int = 0
+    next_attempt_at: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
