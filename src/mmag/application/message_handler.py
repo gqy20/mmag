@@ -137,6 +137,7 @@ class MessageHandler:
             log.info("⏭️ 跳过重复消息: %s", post_id[:12])
             return
 
+        status_post_id = await self.delivery.send_ack(post) or ""
         self.stats["messages"] += 1
         user_id = str(post.get("user_id") or "")
         post["username"] = self.mm.get_username(user_id)
@@ -168,7 +169,7 @@ class MessageHandler:
             trace.set_context(msg_type="mention")
             typing_task = asyncio.create_task(self.delivery.typing_loop(channel_id))
             try:
-                await self.respond(post, tag="mention")
+                await self.respond(post, tag="mention", status_post_id=status_post_id)
             finally:
                 typing_task.cancel()
             trace.clear()
@@ -271,18 +272,22 @@ class MessageHandler:
             return True
         return text.strip().split("\n", 1)[0].strip().startswith("<SILENT>")
 
-    async def respond(self, post: dict, *, tag: str, max_rounds: int | None = None) -> None:
+    async def respond(
+        self,
+        post: dict,
+        *,
+        tag: str,
+        max_rounds: int | None = None,
+        status_post_id: str = "",
+    ) -> None:
         started = time.monotonic()
         await self.delivery.typing_indicator(post["channel_id"])
         context = self.context_builder.build(post, mention=tag == "mention")
         rounds = max_rounds if max_rounds is not None else config.max_tool_rounds
         request = self.build_agent_request(post, tag)
-        status_post_id = ""
         stream: MattermostStream | None = None
         try:
             selection = self.agent_router.route(request)
-            if selection.agent.descriptor.name in config.mm_long_task_agents:
-                status_post_id = await self.delivery.send_ack(post) or ""
             if self._should_stream(selection.agent):
                 stream = self.delivery.stream(
                     post,
@@ -671,6 +676,8 @@ class MessageHandler:
                 target=agent.descriptor.name,
                 decision=runtime_status.value,
                 details={
+                    "run_id": capability_context.run_id,
+                    "message_id": capability_context.message_id,
                     "intent": request.intent,
                     "skill_ref": request.skill.ref if request.skill is not None else "",
                     "capabilities": list(allowed_capabilities),

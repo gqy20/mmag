@@ -71,6 +71,29 @@ excerpt 和 SHA-256；报告不保存密码、Token 或 Session。
 每次运行在 `.eval-runs/<evaluation-run-id>.json` 原子生成报告，记录资产 Hash、Profile ID、Case 结果、
 MMAG Run ID、响应 Hash、断言、耗时和错误码。报告文件是本地运行证据，不是正式发布记录。
 
+## 真实体验录制
+
+仓库提供可重复的三分钟演示录制脚本。它使用独立 Playwright session 登录 Mattermost，依次展示默认
+`get`、MMChat、Project 知识写入与回读、PPT 审批和 PPTX Artifact 交付；只加速 LLM、执行和上传等待，
+输入、审批和最终结果保持正常速度。凭据只从 `.env` 中的评估账号变量读取，不写入命令参数、日志或产物。
+当前测试录制使用 1920×1080；流程、节奏和画面验收通过后，正式成片切换为 2560×1440（2K/QHD）。
+
+先做无外部访问的配置与分镜检查：
+
+```bash
+MMAG_E2E_ENABLED=1 scripts/record_mattermost_demo.sh --dry-run
+```
+
+确认专用测试频道和账号后执行真实录制：
+
+```bash
+MMAG_E2E_ENABLED=1 scripts/record_mattermost_demo.sh
+```
+
+如果 Bot 已经独立运行，增加 `--bot-already-running`。原始片段、Bot 日志、中间转码和最终 MP4 都写入
+`.eval-runs/recordings/<UTC timestamp>/`，不会进入 Git。脚本需要 `playwright-cli`、FFmpeg、ffprobe、
+字体发现工具和项目现有的 `uv` 环境。
+
 ## 后续发布门禁
 
 当前实现完成了严格资产、真实 API Driver、确定性断言、Suite 阈值和原子报告。尚未完成：

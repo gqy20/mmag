@@ -121,6 +121,13 @@ class DeterministicEvaluator:
                 control_plane["task_state"],
                 observation.control_plane.task_state,
             )
+        if control_plane.get("agent_name"):
+            self._append(
+                assertions,
+                "agent_name",
+                control_plane["agent_name"],
+                observation.control_plane.agent_name,
+            )
 
         max_duration = scenario.thresholds.get("max_duration_seconds")
         if max_duration is not None:

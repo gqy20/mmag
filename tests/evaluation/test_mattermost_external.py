@@ -4,12 +4,34 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
+from mmag.control_plane import SQLiteControlPlane
 from mmag.evaluation import (
     EvaluationAssetLoader,
     EvaluationRunner,
     JSONEvaluationReporter,
     MattermostEvaluationDriver,
+    SQLiteEvaluationObserver,
 )
+
+
+def test_sqlite_observer_resolves_agent_by_original_message_id(tmp_path):
+    database = tmp_path / "control.db"
+    store = SQLiteControlPlane(database)
+    store.append_audit(
+        "agent.run",
+        target="mmchat",
+        details={"message_id": "post-1", "run_id": "mattermost:post-1"},
+    )
+    store.append_audit(
+        "agent.run",
+        target="project",
+        details={"message_id": "post-2", "run_id": "mattermost:post-2"},
+    )
+    store.close()
+
+    observation = SQLiteEvaluationObserver().observe(str(database), "post-1")
+
+    assert observation.agent_name == "mmchat"
 
 
 @pytest.mark.external

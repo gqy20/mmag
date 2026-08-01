@@ -45,7 +45,7 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 - Delivery 最多尝试三次，失败记录保留在 Outbox，不会重新执行 Agent。
 - Runtime/网络类瞬时处理错误默认最多尝试三次，次数与下次重试时间持久化在 Inbox；非瞬时错误直接进入 `failed`。
 - Outbox 为每个 Run/响应分段生成稳定幂等键，并作为 Mattermost `pending_post_id`；进程内和重启后的重试复用同一键。
-- 所有响应继承原消息 Thread root。LangGraph 默认对 `text-v1` Agent 流式更新同一条 Post；结构化 Agent 不流式暴露 JSON。`report,ppt` 默认先创建真实 `running` 状态 Post，最终结果由 Outbox 原地更新。可通过 `MM_LONG_TASK_AGENTS` / `MM_ACK_MESSAGE` 和 `MM_STREAM_*` 调整。
+- 所有通过入口验收和幂等去重的用户消息都会立即回复默认状态 `get`；`MM_ACK_MESSAGE` 只能用非空值覆盖文案，空值不会关闭基础确认。所有响应继承原消息 Thread root。LangGraph 默认对 `text-v1` Agent 流式更新状态 Post；结构化 Agent 不流式暴露 JSON。可通过 `MM_STREAM_*` 调整流式展示。
 - 流式 Post 是可丢失的展示投影，更新失败不会中断 Agent；只有最终 ResponseView 进入持久 Outbox，不持久化每个 token。SDK 备选 Runtime 仍只交付最终结果。
 - Outbox 同时保存消息种类、Scope、Artifact refs、已上传 file IDs、action 和 update target。Artifact 上传成功后立即保存 file IDs，发帖重试不会重新执行 Agent。
 

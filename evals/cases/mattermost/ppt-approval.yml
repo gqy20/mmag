@@ -23,5 +23,7 @@ spec:
       authorized: true
     artifacts:
       minimum: 1
+    control_plane:
+      agent_name: ppt
   thresholds:
     max_duration_seconds: 300

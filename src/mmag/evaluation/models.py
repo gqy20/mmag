@@ -73,6 +73,7 @@ class ControlPlaneObservation:
     agent_run_state: str = ""
     task_state: str = ""
     delivery_states: tuple[str, ...] = ()
+    agent_name: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -18,5 +18,7 @@ spec:
       raw_json_forbidden: true
       contains_any: [评估, 链路, 正常]
       not_contains: [password=, token=, api_key=]
+    control_plane:
+      agent_name: mmchat
   thresholds:
     max_duration_seconds: 120

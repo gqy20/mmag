@@ -66,7 +66,7 @@ def _make_handler(runtime_result: str = "已完成"):
         )
     )
     delivery = MattermostDelivery(mm, memory, identity, stats)
-    delivery.send_ack = AsyncMock()
+    delivery.send_ack = AsyncMock(return_value="")
     delivery.typing_loop = AsyncMock()
     delivery.typing_indicator = AsyncMock()
     attachments = AttachmentProcessor(mm)
@@ -117,6 +117,7 @@ async def test_explicit_message_routes_and_delivers_reply():
     assert handler.stats == {"messages": 1, "responses": 1, "dropped_messages": 0}
     handler.compactor.maybe_compact.assert_awaited_once_with("channel-1")
     runtime.run.assert_awaited_once()
+    handler.delivery.send_ack.assert_awaited_once()
     sent = handler.mm.send_post_async.await_args.kwargs
     assert sent["channel_id"] == "channel-1"
     assert sent["root_id"] == "post-1"
@@ -147,6 +148,21 @@ async def test_duplicate_post_is_not_persisted_or_replied_twice():
     persisted = [call.args[0]["id"] for call in handler.memory.log_message.call_args_list]
     assert persisted.count("post-1") == 1
     runtime.run.assert_awaited_once()
+    handler.delivery.send_ack.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_plain_message_keeps_ack_when_agent_decides_silent():
+    handler, runtime = _make_handler("<SILENT>")
+    event = _posted_event()
+    event["data"]["post"]["message"] = "普通频道消息"
+
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
+        await handler.on_posted(event)
+
+    handler.delivery.send_ack.assert_awaited_once()
+    runtime.run.assert_awaited_once()
+    handler.mm.send_post_async.assert_not_awaited()
 
 
 @pytest.mark.asyncio

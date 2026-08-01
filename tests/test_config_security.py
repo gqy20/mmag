@@ -5,7 +5,7 @@ import logging
 import pytest
 
 from mmag.application.app import _validate_database_paths
-from mmag.config import _log_config_loading
+from mmag.config import _log_config_loading, _text_env
 
 
 def test_config_log_reports_secret_presence_without_value(monkeypatch, caplog):
@@ -28,3 +28,11 @@ def test_business_and_checkpoint_databases_must_be_separate(tmp_path):
     _validate_database_paths(str(business), str(checkpoint))
     with pytest.raises(ValueError, match="must use separate files"):
         _validate_database_paths(str(business), str(tmp_path / "." / "business.db"))
+
+
+def test_empty_ack_override_keeps_code_default(monkeypatch):
+    monkeypatch.setenv("MM_ACK_MESSAGE", "")
+    assert _text_env("MM_ACK_MESSAGE", "get") == "get"
+
+    monkeypatch.setenv("MM_ACK_MESSAGE", "已收到")
+    assert _text_env("MM_ACK_MESSAGE", "get") == "已收到"

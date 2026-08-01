@@ -60,7 +60,6 @@ _FIELD_TO_ENV: dict[str, str] = {
     "mm_action_listen_host": "MM_ACTION_LISTEN_HOST",
     "mm_action_listen_port": "MM_ACTION_LISTEN_PORT",
     "mm_action_token_ttl_seconds": "MM_ACTION_TOKEN_TTL_SECONDS",
-    "mm_long_task_agents": "MM_LONG_TASK_AGENTS",
     "mm_stream_enabled": "MM_STREAM_ENABLED",
     "mm_stream_update_interval_ms": "MM_STREAM_UPDATE_INTERVAL_MS",
     "mm_stream_min_chars": "MM_STREAM_MIN_CHARS",
@@ -104,6 +103,11 @@ _SECRET_FIELD_NAMES: frozenset[str] = frozenset(
 )
 
 
+def _text_env(name: str, default: str) -> str:
+    """Return a non-empty optional override while preserving a code default."""
+    return os.getenv(name, "").strip() or default
+
+
 def _secret_status(value: str | None) -> str:
     """Return presence-only status so logs never contain secret fragments."""
     return "(已设置)" if value else "(未设置)"
@@ -134,7 +138,7 @@ class Config:
     mm_token: str = os.getenv("MM_TOKEN", "")
     mm_team_id: str = os.getenv("MM_TEAM_ID", "")
     mm_channel_id: str = os.getenv("MM_CHANNEL_ID", "")  # 指定频道 ID，留空=监听 Team 下所有频道
-    mm_ack_message: str = os.getenv("MM_ACK_MESSAGE", "收到，正在处理。")
+    mm_ack_message: str = _text_env("MM_ACK_MESSAGE", "get")
     mm_response_max_chars: int = int(os.getenv("MM_RESPONSE_MAX_CHARS", "12000"))
     mm_action_callback_url: str = os.getenv("MM_ACTION_CALLBACK_URL", "")
     mm_action_signing_secret: str = os.getenv("MM_ACTION_SIGNING_SECRET", "")
@@ -142,11 +146,6 @@ class Config:
     mm_action_listen_port: int = int(os.getenv("MM_ACTION_LISTEN_PORT", "8787"))
     mm_action_token_ttl_seconds: int = int(
         os.getenv("MM_ACTION_TOKEN_TTL_SECONDS", "600")
-    )
-    mm_long_task_agents: tuple[str, ...] = tuple(
-        name.strip()
-        for name in os.getenv("MM_LONG_TASK_AGENTS", "report,ppt").split(",")
-        if name.strip()
     )
     mm_stream_enabled: bool = os.getenv("MM_STREAM_ENABLED", "true").lower() in (
         "true",

@@ -206,7 +206,8 @@ class SQLiteEvaluationObserver:
                     (f"run:{root_post_id}",),
                 ).fetchall()
             )
-            return ControlPlaneObservation(run, task, deliveries)
+            agent_name = self._agent_name(connection, root_post_id)
+            return ControlPlaneObservation(run, task, deliveries, agent_name)
         except sqlite3.Error:
             return ControlPlaneObservation()
         finally:
@@ -217,6 +218,17 @@ class SQLiteEvaluationObserver:
         row = connection.execute(
             "SELECT state FROM lifecycle_entities WHERE entity_type=? AND entity_id=?",
             (entity_type, entity_id),
+        ).fetchone()
+        return str(row[0]) if row else ""
+
+    @staticmethod
+    def _agent_name(connection: sqlite3.Connection, root_post_id: str) -> str:
+        row = connection.execute(
+            """SELECT target FROM audit_events
+            WHERE event_type='agent.run'
+              AND json_extract(details, '$.message_id')=?
+            ORDER BY created_at DESC LIMIT 1""",
+            (root_post_id,),
         ).fetchone()
         return str(row[0]) if row else ""
 
@@ -326,24 +338,25 @@ class MattermostEvaluationDriver:
                     )
 
             terminal = self._latest_terminal(bot_posts)
-            if terminal is not None:
-                if not approval or not decision or decision_sent or approval_post is None:
-                    artifacts = scenario.expected.get("artifacts", {})
-                    minimum_artifacts = (
-                        int(artifacts.get("minimum", 0)) if isinstance(artifacts, dict) else 0
-                    )
-                    if self._artifact_count(bot_posts) < minimum_artifacts:
-                        await asyncio.sleep(resolved.poll_interval_seconds)
-                        continue
-                    denied = bool(decision_sent and not authorized and self._kind(terminal) == "error")
-                    return self._observation(
-                        latest_posts,
-                        root_post_id,
-                        started,
-                        approval_id=approval_id,
-                        approval_denied=denied,
-                        control_plane_path=resolved.control_plane_db_path,
-                    )
+            if terminal is not None and (
+                not approval or not decision or decision_sent or approval_post is None
+            ):
+                artifacts = scenario.expected.get("artifacts", {})
+                minimum_artifacts = (
+                    int(artifacts.get("minimum", 0)) if isinstance(artifacts, dict) else 0
+                )
+                if self._artifact_count(bot_posts) < minimum_artifacts:
+                    await asyncio.sleep(resolved.poll_interval_seconds)
+                    continue
+                denied = bool(decision_sent and not authorized and self._kind(terminal) == "error")
+                return self._observation(
+                    latest_posts,
+                    root_post_id,
+                    started,
+                    approval_id=approval_id,
+                    approval_denied=denied,
+                    control_plane_path=resolved.control_plane_db_path,
+                )
             await asyncio.sleep(resolved.poll_interval_seconds)
 
         return self._observation(

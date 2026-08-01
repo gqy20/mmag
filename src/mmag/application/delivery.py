@@ -58,8 +58,6 @@ class MattermostDelivery:
         await asyncio.sleep(duration)
 
     async def send_ack(self, post: dict) -> str | None:
-        if not config.mm_ack_message:
-            return None
         try:
             return await asyncio.to_thread(
                 self.mm.send_post,

@@ -42,7 +42,7 @@ class TestSendGetAck:
 
         a.mm.send_post.assert_called_once_with(
             channel_id="ch1",
-            message="收到，正在处理。",
+            message="get",
             root_id="msg_abc",
             props={
                 PROP_FROM_BOT: PROP_TRUE,
