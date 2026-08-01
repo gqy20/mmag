@@ -72,6 +72,22 @@ class RunContext:
     run_id: str = ""
 
 
+class RunEventKind(StrEnum):
+    TEXT_DELTA = "text_delta"
+
+
+@dataclass(frozen=True, slots=True)
+class RunEvent:
+    kind: RunEventKind
+    text: str = ""
+    round: int = 0
+
+
+@runtime_checkable
+class RunEventSink(Protocol):
+    async def __call__(self, event: RunEvent) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RunRequest:
     """Provider-neutral input for one Agent run.
@@ -87,6 +103,7 @@ class RunRequest:
     max_rounds: int = 5
     max_tokens: int = 4096
     fallback_max_tokens: int = 1024
+    event_sink: RunEventSink | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.max_rounds < 1:
@@ -122,6 +139,7 @@ class AgentResult:
     runtime: str
     status: RuntimeStatus = RuntimeStatus.COMPLETED
     artifacts: tuple[Mapping[str, Any], ...] = ()
+    deliveries: tuple[Mapping[str, Any], ...] = ()
     capability_calls: tuple[Mapping[str, Any], ...] = ()
     interruptions: tuple[Mapping[str, Any], ...] = ()
     usage: TokenUsage = field(default_factory=TokenUsage)

@@ -63,6 +63,7 @@ def test_builtin_capability_visibility_is_identical_for_both_runtimes():
         "save_knowledge",
         "get_user_profile",
         "analyze_link",
+        "load_skill_resource",
         "send_file",
     ]
 

@@ -10,20 +10,33 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from ..agent_packages import AgentPackageError
-from ..agent_system import AgentRequest
+from ..agent_system import AgentOutput, AgentRequest
 from ..capabilities import CapabilityContext, bind_capability_context
 from ..config import config
 from ..control_plane import InboundEvent, MessagePipeline, OutboundMessage
 from ..governance import GovernanceContext, bind_governance_context
 from ..logger import get_logger, trace
-from ..runtimes import AgentResult, AgentRuntimeError, RunContext, RunRequest, RuntimeStatus
+from ..runtimes import (
+    AgentResult,
+    AgentRuntimeError,
+    RunContext,
+    RunEventSink,
+    RunRequest,
+    RuntimeRateLimitError,
+    RuntimeRejectedError,
+    RuntimeStatus,
+    RuntimeTimeoutError,
+    RuntimeUnavailableError,
+)
 from ..skill_packages import SkillPackageError
 from .delivery import OUTBOUND_COLLECTOR, MattermostDelivery
+from .views import ResponseAction, ResponsePresenter, ResponseView
 
 if TYPE_CHECKING:
     from ..agent_system import ManagedAgent
     from ..skill_packages import SkillResolver
     from .context import AttachmentProcessor, BotIdentity, ContextBuilder
+    from .stream import MattermostStream
 
 log = get_logger(__name__)
 
@@ -48,6 +61,7 @@ class MessageHandler:
         context_builder: ContextBuilder,
         delivery: MattermostDelivery,
         stats: dict[str, int],
+        action_tokens=None,
     ) -> None:
         self.mm = mm_client
         self.memory = memory
@@ -63,6 +77,9 @@ class MessageHandler:
         self.context_builder = context_builder
         self.delivery = delivery
         self.stats = stats
+        self.action_tokens = action_tokens
+        self._action_tasks: set[asyncio.Task] = set()
+        self.presenter = ResponsePresenter()
         self.pipeline: MessagePipeline | None = None
 
     async def on_posted(self, event: dict) -> None:
@@ -149,7 +166,6 @@ class MessageHandler:
 
         if self.is_explicit_invocation(post):
             trace.set_context(msg_type="mention")
-            await self.delivery.send_ack(post)
             typing_task = asyncio.create_task(self.delivery.typing_loop(channel_id))
             try:
                 await self.respond(post, tag="mention")
@@ -226,6 +242,7 @@ class MessageHandler:
         capabilities: tuple[dict, ...],
         max_rounds: int,
         skill_context: str = "",
+        event_sink: RunEventSink | None = None,
     ) -> RunRequest:
         channel_id = post["channel_id"]
         team_id = self.mm.get_channel(channel_id).get("team_id") or "-"
@@ -245,6 +262,7 @@ class MessageHandler:
             system_prompt=system_prompt,
             capabilities=capabilities,
             max_rounds=max_rounds,
+            event_sink=event_sink,
         )
 
     @staticmethod
@@ -259,8 +277,18 @@ class MessageHandler:
         context = self.context_builder.build(post, mention=tag == "mention")
         rounds = max_rounds if max_rounds is not None else config.max_tool_rounds
         request = self.build_agent_request(post, tag)
+        status_post_id = ""
+        stream: MattermostStream | None = None
         try:
             selection = self.agent_router.route(request)
+            if selection.agent.descriptor.name in config.mm_long_task_agents:
+                status_post_id = await self.delivery.send_ack(post) or ""
+            if self._should_stream(selection.agent):
+                stream = self.delivery.stream(
+                    post,
+                    f"mattermost:{post.get('id', trace.current)}",
+                    post_id=status_post_id,
+                )
             request = replace(request, intent=selection.intent)
             request = self._resolve_skill(request, selection.agent)
             capability_names = self._effective_capabilities(request, selection.agent)
@@ -270,34 +298,51 @@ class MessageHandler:
                 capabilities=tuple(self.capability_registry.get_schema_list(capability_names)),
                 max_rounds=rounds,
                 skill_context=request.skill.prompt_context if request.skill is not None else "",
+                event_sink=stream,
             )
-            result = await self.run_request(
+            output = await self.run_request(
                 post,
                 replace(request, runtime_request=runtime_request),
                 selection.agent,
             )
-            response = (
+            runtime_result = output.runtime_result or AgentResult(
+                text=output.text,
+                runtime=f"agent:{output.agent_name}",
+                artifacts=tuple(output.artifacts),
+            )
+            response_view = (
                 self._register_approval_interrupt(
                     post,
-                    result,
+                    runtime_result,
                     allowed_capabilities=capability_names,
                     allowed_execution_profiles=self._effective_execution_profiles(selection.agent),
                 )
-                if result.status is RuntimeStatus.WAITING_APPROVAL
-                else result.text
+                if runtime_result.status is RuntimeStatus.WAITING_APPROVAL
+                else self.presenter.present(
+                    output,
+                    run_id=f"mattermost:{post.get('id', trace.current)}",
+                )
             )
         except (AgentPackageError, AgentRuntimeError, SkillPackageError) as error:
             log.error("%s [%s] Agent 执行失败: %s", trace.prefix(), tag, error, exc_info=True)
-            response = "⚠️ LLM 服务暂时不可用，请稍后再试。"
+            response_view = self._error_view(
+                error,
+                run_id=f"mattermost:{post.get('id', trace.current)}",
+            )
+        response_length = len(response_view.summary)
         log.info(
             "%s [%s] Agent 返回 (%.1fs, %d 字符)",
             trace.prefix(),
             tag,
             time.monotonic() - started,
-            len(response),
+            response_length,
         )
-        if response:
-            await self.delivery.reply(post, response)
+        update_post_id = status_post_id or (stream.post_id if stream is not None else "")
+        await self.delivery.reply_view(
+            post,
+            response_view,
+            update_post_id=update_post_id,
+        )
 
     def _resolve_skill(self, request: AgentRequest, agent: ManagedAgent) -> AgentRequest:
         package = getattr(agent, "package", None)
@@ -324,6 +369,15 @@ class MessageHandler:
         package = getattr(agent, "package", None)
         return tuple(package.execution_profiles) if package is not None else ()
 
+    @staticmethod
+    def _should_stream(agent: ManagedAgent) -> bool:
+        if not config.mm_stream_enabled:
+            return False
+        package = getattr(agent, "package", None)
+        if package is None:
+            return True
+        return package.manifest.execution.provider == "text-v1"
+
     def build_agent_request(self, post: dict, intent: str) -> AgentRequest:
         return AgentRequest(
             intent=intent,
@@ -342,7 +396,7 @@ class MessageHandler:
         *,
         allowed_capabilities: tuple[str, ...] = (),
         allowed_execution_profiles: tuple[str, ...] = (),
-    ) -> str:
+    ) -> ResponseView:
         if not allowed_execution_profiles and runtime_result.interruptions:
             value = runtime_result.interruptions[0].get("value", {})
             if isinstance(value, dict):
@@ -368,10 +422,144 @@ class MessageHandler:
                 allowed_execution_profiles=frozenset(allowed_execution_profiles),
             ),
         )
+        actions = self._approval_actions(post, approval.id)
+        return self.presenter.approval(
+            capability=approval.capability_name,
+            approval_id=approval.id,
+            run_id=f"mattermost:{post.get('id', trace.current)}",
+            actions=actions,
+        )
+
+    def _approval_actions(
+        self, post: dict, approval_id: str
+    ) -> tuple[ResponseAction, ...]:
+        if self.action_tokens is None:
+            return ()
+        run_id = f"mattermost:{post.get('id', trace.current)}"
+        shared = {
+            "target": approval_id,
+            "scope_id": self.post_scope(post),
+            "run_id": run_id,
+            "conversation_id": str(post.get("channel_id") or ""),
+            "root_id": self.delivery.thread_root(post),
+            "requested_by": str(post.get("user_id") or ""),
+        }
+        try:
+            approve = self.action_tokens.issue(action="approve", **shared)
+            reject = self.action_tokens.issue(action="reject", **shared)
+        except (TypeError, ValueError) as error:
+            log.warning("Action token 创建失败，将使用文本降级: %s", error)
+            return ()
         return (
-            f"⏸️ 操作等待人工审批：`{approval.capability_name}`\n"
-            f"审批 ID：`{approval.id}`\n"
-            f"回复 `批准 {approval.id}` 或 `拒绝 {approval.id}`。"
+            ResponseAction(
+                id="approve",
+                label="批准",
+                action="approve",
+                target=approval_id,
+                style="success",
+                fallback=f"`批准 {approval_id}`",
+                token=approve,
+            ),
+            ResponseAction(
+                id="reject",
+                label="拒绝",
+                action="reject",
+                target=approval_id,
+                style="danger",
+                fallback=f"`拒绝 {approval_id}`",
+                token=reject,
+            ),
+        )
+
+    async def handle_action_callback(self, payload: dict) -> dict:
+        if self.action_tokens is None:
+            raise PermissionError("interactive actions are not configured")
+        context = payload.get("context")
+        token = context.get("token") if isinstance(context, dict) else ""
+        actor_id = str(payload.get("user_id") or "")
+        channel_id = str(payload.get("channel_id") or "")
+        claims = self.action_tokens.verify(str(token or ""))
+        if channel_id != claims.conversation_id:
+            raise PermissionError("action belongs to another conversation")
+        channel = self.mm.get_channel(channel_id)
+        scope_id = f"mattermost:{channel.get('team_id') or '-'}/{channel_id}"
+        if scope_id != claims.scope_id:
+            raise PermissionError("action belongs to another scope")
+        if claims.action not in {"approve", "reject"}:
+            raise ValueError("action is not supported by this callback")
+        approval = self.approval_coordinator.store.get_approval_request(claims.target)
+        if not await self.approval_coordinator.authorizer.can_decide(approval, actor_id):
+            raise PermissionError("actor is not authorized to decide this approval")
+        claims = self.action_tokens.consume(str(token), actor_id=actor_id)
+        task = asyncio.create_task(
+            self._complete_action(claims, actor_id),
+            name=f"action:{claims.jti}",
+        )
+        self._action_tasks.add(task)
+        task.add_done_callback(self._action_tasks.discard)
+        decision = "已批准，正在继续执行。" if claims.action == "approve" else "已拒绝。"
+        return {
+            "update": {
+                "message": decision,
+                "props": {
+                    "from_bot": "true",
+                    "mmag_kind": "approval",
+                    "mmag_status": "running" if claims.action == "approve" else "failed",
+                },
+            }
+        }
+
+    async def close_actions(self) -> None:
+        tasks = tuple(self._action_tasks)
+        if not tasks:
+            return
+        _, pending = await asyncio.wait(tasks, timeout=30)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _complete_action(self, claims, actor_id: str) -> None:
+        post = {
+            "id": claims.root_id,
+            "root_id": claims.root_id,
+            "channel_id": claims.conversation_id,
+            "user_id": claims.requested_by,
+            "message": "approval resume",
+        }
+        try:
+            result = await self.approval_coordinator.resume(
+                claims.target,
+                approved=claims.action == "approve",
+                actor_id=actor_id,
+                scope_id=claims.scope_id,
+                trace_id=claims.run_id,
+                reason="Mattermost interactive action",
+            )
+            view = (
+                self._register_approval_interrupt(post, result)
+                if result.status is RuntimeStatus.WAITING_APPROVAL
+                else self.presenter.present(
+                    AgentOutput(
+                        text=result.text,
+                        agent_name="approval",
+                        artifacts=tuple(dict(item) for item in result.artifacts),
+                        runtime_result=result,
+                    ),
+                    run_id=claims.run_id,
+                )
+            )
+        except Exception as error:
+            log.error("交互审批恢复失败: %s", error, exc_info=True)
+            view = self.presenter.error(
+                title="审批恢复失败",
+                summary="审批已记录，但任务恢复失败，请联系运维并提供 Run ID。",
+                run_id=claims.run_id,
+            )
+        await self.delivery.reply_view(
+            post,
+            view,
+            delivery_key=f"{claims.run_id}:action:{claims.jti}",
         )
 
     def post_scope(self, post: dict) -> str:
@@ -390,14 +578,27 @@ class MessageHandler:
                 trace_id=trace.current,
                 reason="",
             )
-            response = (
+            response_view = (
                 self._register_approval_interrupt(post, result)
                 if result.status is RuntimeStatus.WAITING_APPROVAL
-                else result.text
+                else self.presenter.present(
+                    AgentOutput(
+                        text=result.text,
+                        agent_name="approval",
+                        artifacts=tuple(dict(item) for item in result.artifacts),
+                        runtime_result=result,
+                    ),
+                    run_id=f"mattermost:{post.get('id', trace.current)}",
+                )
             )
         except (KeyError, PermissionError, ValueError) as error:
-            response = f"⚠️ 无法处理审批：{error}"
-        await self.delivery.reply(post, response or "✅ 审批已处理。")
+            response_view = self.presenter.error(
+                title="审批失败",
+                summary="当前审批无法处理，请确认审批 ID、权限和状态。",
+                run_id=f"mattermost:{post.get('id', trace.current)}",
+            )
+            log.warning("审批处理失败: %s", error)
+        await self.delivery.reply_view(post, response_view)
 
     @staticmethod
     def approval_command(message: str) -> tuple[bool, str] | None:
@@ -415,7 +616,7 @@ class MessageHandler:
         post: dict,
         request: AgentRequest,
         agent: ManagedAgent,
-    ) -> AgentResult:
+    ) -> AgentOutput:
         runtime_request = request.runtime_request
         if not isinstance(runtime_request, RunRequest):
             raise TypeError("Mattermost execution requires a prepared RunRequest")
@@ -485,12 +686,43 @@ class MessageHandler:
                 len(output.artifacts),
                 getattr(output.runtime_result, "runtime", "deterministic"),
             )
-        if output.runtime_result is not None:
-            return output.runtime_result
-        return AgentResult(
-            text=output.text,
-            runtime=f"agent:{output.agent_name}",
-            artifacts=tuple(output.artifacts),
+        return output
+
+    def _error_view(self, error: Exception, *, run_id: str) -> ResponseView:
+        if isinstance(error, RuntimeTimeoutError):
+            return self.presenter.error(
+                title="执行超时",
+                summary="任务未能在运行时限内完成，请缩小范围后重试。",
+                run_id=run_id,
+            )
+        if isinstance(error, RuntimeRateLimitError):
+            return self.presenter.error(
+                title="服务繁忙",
+                summary="模型服务当前限流，请稍后重试。",
+                run_id=run_id,
+            )
+        if isinstance(error, RuntimeRejectedError):
+            return self.presenter.error(
+                title="请求未执行",
+                summary="该请求不符合当前执行策略或权限边界。",
+                run_id=run_id,
+            )
+        if isinstance(error, RuntimeUnavailableError):
+            return self.presenter.error(
+                title="外部服务不可用",
+                summary="依赖服务暂时不可用，请稍后重试。",
+                run_id=run_id,
+            )
+        if isinstance(error, (AgentPackageError, SkillPackageError)):
+            return self.presenter.error(
+                title="输入或结果不符合契约",
+                summary="任务未通过 Agent/Skill 契约校验，请调整输入后重试。",
+                run_id=run_id,
+            )
+        return self.presenter.error(
+            title="系统故障",
+            summary="任务未完成，详情已记录供运维查询。",
+            run_id=run_id,
         )
 
     @staticmethod

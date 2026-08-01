@@ -48,10 +48,21 @@
 - [x] Prompt/Schema/eval/Policy/Model Policy 进入 Package Hash 和 provenance；
 - [x] Agent Manifest 绑定 Skill 精确版本，Skill Set Hash 进入 Agent 快照；
 - [x] 运行时能力收窄为 Agent、Skill 与 Policy 的交集；
-- [x] `web-research@1.0.0` 作为首个可复用 Skill，由 `mmchat@1.1.0` 激活；
+- [x] `web-research@1.0.0` 作为首个可复用 Skill，由 `mmchat@1.2.0` 激活；
 - [x] Skill 三级渐进式披露、Resource Hash 缓存、运行预算和审批 resume 恢复；
 - [x] strict Prompt render、输入/输出/Artifact Schema 和预算强制；
 - [x] Model Policy Registry 严格加载并校验 route。
+
+### 结构化输出基线
+
+- [x] Capability 以 JSON Schema 投影为模型工具，Anthropic `tool_use` 参数保持结构化；
+- [x] LangGraph 使用类型化 State 累积消息、Artifact、Capability 调用和审批状态；
+- [x] `ppt`、`project`、`report` 通过 `langgraph/json-v1` 产出业务结果，运行后执行 JSON 解析、
+  Skill/Artifact Schema 校验、平台 Envelope 组装和 Draft 2020-12 终局校验；
+- [x] 无效结果最多触发一次禁用 Capability 的结构修复，二次失败以稳定错误结束；
+- [x] `AgentOutput` 已区分 `text`、`structured_result`、`envelope`、`artifacts` 和 Runtime 结果；
+- [x] 已确认当前边界：输出 Schema 尚未进入 `RunRequest` 和模型 API，LangGraph 最终状态仍是
+  `final_text`；现有能力属于提示词生成 JSON 后的校验与修复，不是 Provider/LangGraph 模型端强约束。
 
 ### Mattermost 交付基线
 
@@ -96,7 +107,35 @@
 
 退出标准：修改 Model Policy 只能通过新版本生效，每次调用都能复现实际模型参数。
 
-## 下一步 3：执行 eval 发布门禁
+## 下一步 3：模型端结构化输出与结果契约
+
+优先级：P0，为专业 Agent、严格 handoff 和展示层提供稳定输入。
+
+- [ ] 在 Provider-neutral `RunRequest` 中增加可选的结构化输出声明，至少包含业务结果 Schema、
+  Schema ID/version 和响应策略；在 `AgentResult` 中增加结构化结果，原始文本只用于兼容、诊断和审计；
+- [ ] 明确区分“模型负责的业务 `result` Schema”和“平台负责的 Envelope Schema”；模型不得生成
+  `status`、`usage`、`provenance` 等平台字段，避免把完整 Envelope 误传给模型；
+- [ ] 在 LangGraph State 中增加 `structured_result`、`validation_errors` 和 `repair_count`，将现有
+  Agent/Capability 循环的最终出口路由到无副作用的 `finalize` 节点，不再以 `final_text` 作为 JSON
+  Agent 的唯一结果；
+- [ ] 扩展模型 Backend：Provider 支持时使用原生 Schema-constrained output；不支持时使用强制的
+  final-output Tool Strategy；仅在两者不可用时降级到当前文本 JSON parse/validate/repair；
+- [ ] 保留 MMAG 的 Draft 2020-12 终局校验作为安全边界，不能因 Provider 声称支持结构化输出而跳过
+  Skill、Artifact、Package 和 Envelope 契约校验；
+- [ ] repair 使用相同的结构化输出约束且最多一次，只修复业务结果，不重新开放 Capability 或重放
+  外部副作用；保留首次运行的 Artifact、Capability 调用、审批、token、cost 和 provenance；
+- [ ] 统一内部 Capability 结果类型，避免在 Registry 与 LangGraph 之间反复执行对象 → JSON 字符串 →
+  对象转换；只在模型 Provider、MCP 和交付边界序列化；
+- [ ] 让多轮 LangGraph、结构修复和 Provider fallback 的实际模型调用、token、cost 与错误进入统一
+  usage 和审计，不再把一次 Runtime 执行固定计为一次模型调用；
+- [ ] 覆盖 Provider-native、Tool Strategy、文本 fallback、非法 JSON、Schema 不匹配、重复结构化结果、
+  repair 失败、工具副作用保留和 checkpoint resume 测试；默认测试使用离线 Fake Backend。
+
+退出标准：启用结构化输出的 Agent 在 Runtime 边界返回已验证对象；Provider 能力变化只改变生成策略，
+不改变业务契约；格式错误不会重放工具副作用，Artifact、usage 和 provenance 不丢失；下游不再从自然语言
+或 JSON 文本猜测业务结果。
+
+## 下一步 4：执行 eval 发布门禁
 
 优先级：P0。
 
@@ -108,28 +147,31 @@
 
 退出标准：坏 Prompt、坏 Schema、越权能力和质量回退不能进入新 Run。
 
-## 下一步 4：Mattermost 响应展示与交互层
+## 下一步 5：Mattermost 响应展示与交互层
 
 优先级：P1，作为 Research、Presentation、审批和 Artifact 交付的公共基础。
 
-- [ ] 定义平台无关的 `ResponseView` 契约，统一表达 `kind`、`title`、`summary`、`sections`、`sources`、`warnings`、`artifacts`、`actions` 和 Run 状态；
-- [ ] 实现 `ResponsePresenter`，将 `AgentOutput.structured_result/artifacts/envelope` 转为 `ResponseView`，禁止将结构化 JSON 直接展示给默认用户；
-- [ ] 实现 `MattermostRenderer`，将 `ResponseView` 确定性地映射为 Markdown、`props.attachments`、文件附件和 action，对模型/外部内容做长度限制、转义与安全链接处理；
-- [ ] 扩展 `OutboundMessage` 和 SQLite Outbox，持久化 `root_id`、`message_kind`、`artifact_refs/file_ids`、`props`、`actions`、`update_post_id` 及稳定幂等键；
-- [ ] 统一 Thread 策略：ack、进度、审批、附件、错误和最终结果均继承原始 `root_id`，避免在频道中散落；
-- [ ] 将 `get` ack 替换为可配置的简短确认；短任务仅使用 typing，长任务创建单个状态 Post 并原地更新，阶段必须来自真实 Lifecycle Event，不伪造进度百分比或 ETA；
-- [ ] 实现 Markdown-aware 长消息分段，保留标题、链接、代码围栏和序号；详细报告默认“Thread 摘要 + Artifact 附件”；
-- [ ] 将 `send_file` 的直接上传/发帖副作用收口到 Delivery/Outbox：执行层只产出 Artifact ref，交付层在审批后上传、绑定 `file_ids` 并重试；
-- [ ] 为 Link/Research 结果提供稳定 Presenter，在 Thread 中展示结论、关键字段、来源和警告，完整 JSON 仅作为可下载 Artifact 或审计数据；
+- [x] 定义平台无关的 `ResponseView` 契约，统一表达 `kind`、`title`、`summary`、`sections`、`sources`、`warnings`、`artifacts`、`actions` 和 Run 状态；
+- [x] 实现 `ResponsePresenter`，将 `AgentOutput.structured_result/artifacts/envelope` 转为 `ResponseView`，禁止将结构化 JSON 直接展示给默认用户；
+- [x] 实现 `MattermostRenderer`，将 `ResponseView` 确定性地映射为 Markdown、`props.attachments`、文件附件和 action，对模型/外部内容做长度限制、转义与安全链接处理；
+- [x] 扩展 `OutboundMessage` 和 SQLite Outbox，持久化 `root_id`、`message_kind`、`artifact_refs/file_ids`、`props`、`actions`、`update_post_id` 及稳定幂等键；
+- [x] 统一 Thread 策略：ack、进度、审批、附件、错误和最终结果均继承原始 `root_id`，避免在频道中散落；
+- [x] 将 `get` ack 替换为可配置的简短确认；短任务仅使用 typing，长任务创建单个状态 Post 并原地更新，阶段必须来自真实 Lifecycle Event，不伪造进度百分比或 ETA；
+- [x] 接通 LangGraph/Anthropic 文本增量事件，对 `text-v1` Agent 节流更新单一 Post，最终结果仍经 ResponseView + Outbox 覆盖交付；
+- [x] 实现 Markdown-aware 长消息分段，保留标题、链接、代码围栏和序号；详细报告默认“Thread 摘要 + Artifact 附件”；
+- [x] 将 `send_file` 的直接上传/发帖副作用收口到 Delivery/Outbox：执行层只产出 Artifact ref，交付层在审批后上传、绑定 `file_ids` 并重试；
+- [x] 为 Link/Research 结果提供稳定 Presenter，在 Thread 中展示结论、关键字段、来源和警告，完整 JSON 仅作为可下载 Artifact 或审计数据；
 - [ ] 实现签名、短时、一次性 Action Token 和 Callback Endpoint，支持批准/拒绝/重试/下载/返工，每次回调重新校验 actor、scope、资源和当前状态；
-- [ ] 交互按钮优先使用 Mattermost `props.attachments`/action，不支持或回调不可达时降级为 `批准 <id>` / `拒绝 <id>` 文本命令；
-- [ ] 实现统一错误展示分类：输入问题、权限不足、等待审批、资源耗尽、执行超时、外部依赖失败和系统故障；对用户隐藏秘密/堆栈，保留可查询 Run ID；
+  - 已完成批准/拒绝及文本降级；Delivery 手工重试、授权下载与创建新 Run 的返工仍需各自业务状态服务，不能用按钮伪造完成。
+- [x] 交互按钮优先使用 Mattermost `props.attachments`/action，不支持或回调不可达时降级为 `批准 <id>` / `拒绝 <id>` 文本命令；
+- [x] 实现统一错误展示分类：输入问题、权限不足、等待审批、资源耗尽、执行超时、外部依赖失败和系统故障；对用户隐藏秘密/堆栈，保留可查询 Run ID；
 - [ ] 增加可重复的 Mattermost 能力探测，记录 Server 版本、Edition、文件/插件/交互开关和客户端兼容矩阵；认证级探测必须经 HTTPS 或本机受信通道；
+  - 已完成受信传输限制和 Server/Edition/文件/插件/交互开关审计；目标版本上的 Web/Desktop/Mobile 兼容矩阵仍待验收。
 - [ ] 覆盖 Web/Desktop/Mobile 的 Markdown、Thread、分段、重试、回调幂等、按钮降级和附件失败测试。
 
 退出标准：任何 Agent 都只产出平台无关结果；Mattermost 用户在一个 Thread 中获得可读摘要、真实进度、来源、可下载 Artifact 和可审计操作；富交互不可用时仍能用 Markdown/文本命令完成同一流程。
 
-## 下一步 5：Research Package
+## 下一步 6：Research Package
 
 优先级：P1。
 
@@ -142,7 +184,7 @@
 
 退出标准：Research 只能读允许来源，输出始终是可验证、有来源、有版本的 Artifact。
 
-## 下一步 6：受控 Python/CLI 执行平面
+## 下一步 7：受控 Python/CLI 执行平面
 
 优先级：P1，为 Presentation 等生成型 Agent 提供基础能力。
 
@@ -161,14 +203,14 @@
 
 退出标准：Agent 只能调用 Agent、Skill、Policy 和 Execution Profile 共同允许的固定执行能力；任意命令、未声明脚本、越界文件访问和未授权网络请求均在副作用前被拒绝，临时文件、Artifact 和审计记录可按 Run 追踪。
 
-## 下一步 7：Presentation Package 与严格 handoff
+## 下一步 8：Presentation Package 与严格 handoff
 
-优先级：P1，依赖下一步 4、5、6。
+优先级：P1，依赖下一步 5、6、7。
 
 - [ ] Presentation 只接受 `research-report` ref；
 - [ ] 输入 Artifact 在执行前校验版本和 scope；
-- [x] 定义 `slides@1.1.0` Skill、演示叙事模板和严格输出契约；
-- [x] 定义 `ppt@1.1.0` Agent Manifest 和默认拒绝 Policy，对外交付要求审批；
+- [x] 定义 `slides@1.2.0` Skill、演示叙事模板和严格输出契约；
+- [x] 定义 `ppt@1.2.0` Agent Manifest 和默认拒绝 Policy，对外交付要求审批；
 - [x] Presentation Package 绑定 `ppt@1.0.0` Execution Profile、受管脚本以及 `ppt.render` / `ppt.export_pdf`；
 - [ ] 通过受控执行平面输出 presentation outline/file/preview Artifact；
 - [ ] 交付同时生成 PPTX、可预览 PDF 和封面/关键页 PNG，由 Mattermost Presenter 组装摘要、预览与下载入口；
@@ -177,7 +219,7 @@
 
 退出标准：Research → Presentation 不传自由文本；非法或越权 Artifact 不能进入下游；PPT 生成不依赖宿主机通用 Shell/Python 权限。
 
-## 下一步 8：反馈、返工与业务闭环
+## 下一步 9：反馈、返工与业务闭环
 
 优先级：P1。
 
@@ -189,7 +231,7 @@
 
 退出标准：企业任务从请求到交付、审批、验收、返工和审计形成可查询闭环。
 
-## 下一步 9：结构化可观测性与部署验收
+## 下一步 10：结构化可观测性与部署验收
 
 优先级：P1。
 
@@ -200,7 +242,7 @@
 
 退出标准：告警可定位到 Run/Package/Capability，目标环境有可验证 RPO/RTO。
 
-## 下一步 10：可选 Deep Agents Runtime 与可替换 Sandbox
+## 下一步 11：可选 Deep Agents Runtime 与可替换 Sandbox
 
 优先级：P2，触发式实施；依赖受控执行平面、Artifact 交付、运行幂等和结构化审计。设计边界见
 [ADR-0007](adr/0007-deepagents-sandbox-runtime.md)。
@@ -237,7 +279,7 @@ Artifact；LangGraph 仍是默认 Runtime，现有固定 Capability 不扩权，
 - 不恢复旧 Agent、Tool 或 Prompt 兼容入口；
 - 不为了“多 Agent”数量重新注册没有 Package 契约的占位 Agent；
 - 不用 Prompt 代替权限、审批、幂等和预算；
-- 不向普通业务 Agent 暴露宿主机通用 Shell 或动态 Python；自主执行入口只有在“下一步 10”全部
+- 不向普通业务 Agent 暴露宿主机通用 Shell 或动态 Python；自主执行入口只有在“下一步 11”全部
   门禁完成后，才能向专用 Package 的独立 Sandbox 开放；
 - 不允许 Agent/Skill Manifest 自授权或放宽平台执行配置；
 - 不让 Agent Prompt 直接生成 Mattermost `props`、action callback 或平台专用协议；

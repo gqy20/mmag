@@ -2,7 +2,7 @@
 _get_ack + typing indicator 单元测试
 
 覆盖:
-  - _send_get_ack: 线程回复 "get", 带正确 root_id / props
+  - send_ack: 线程回复可配置确认，带正确 root_id / props
   - _send_get_ack: 不记入 memory / stats
   - _send_get_ack: send_post 异常不外泄
   - _typing_loop: 可被 cancel 正常退出
@@ -33,7 +33,7 @@ def _make_delivery(bot_user_id: str = "u_bot") -> MattermostDelivery:
 
 
 class TestSendGetAck:
-    def test_sends_get_as_thread_reply(self):
+    def test_sends_configured_status_as_thread_reply(self):
         a = _make_delivery()
         a.mm.send_post.return_value = "post_ack_123"
         post = {"channel_id": "ch1", "id": "msg_abc", "message": "@agent2 hi"}
@@ -42,9 +42,13 @@ class TestSendGetAck:
 
         a.mm.send_post.assert_called_once_with(
             channel_id="ch1",
-            message="get",
+            message="收到，正在处理。",
             root_id="msg_abc",
-            props={PROP_FROM_BOT: PROP_TRUE},
+            props={
+                PROP_FROM_BOT: PROP_TRUE,
+                "mmag_kind": "status",
+                "mmag_status": "running",
+            },
         )
 
     def test_does_not_log_to_memory(self):

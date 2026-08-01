@@ -10,10 +10,10 @@ Capability 调用再由当前 Package Policy 动态裁决。
 
 | Agent | Skill | 路由职责 | 当前可执行能力 | 结构化结果 |
 |---|---|---|---|---|
-| `mmchat@1.1.0` | `web-research@1.0.0` | 默认群聊/私聊协同入口 | 对话上下文、知识、链接、审批文件与受控 MCP | 文本答复 |
+| `mmchat@1.2.0` | `web-research@1.0.0` | 默认群聊/私聊协同入口 | 对话上下文、知识、链接与受控 MCP | 文本答复 |
 | `link@1.2.0` | `link-read@1.0.0` | 单 URL 解析 | 确定性 `analyze_link`，无模型循环 | `link_analysis` |
 | `report@1.0.0` | `report@1.0.0` | 研报、行业/竞品研究 | 当前频道知识/消息、公开链接、按需模板 | 证据账本式 research report |
-| `ppt@1.1.0` | `slides@1.1.0` | PPT、幻灯片、路演结构与文件生成 | 当前频道知识、按需模板、受控 PPTX/PDF 渲染、审批后文件交付 | slide deck 结构与 Artifact ref |
+| `ppt@1.2.0` | `slides@1.2.0` | PPT、幻灯片、路演结构与文件生成 | 当前频道知识、按需模板、受控 PPTX/PDF 渲染、审批后 Artifact 交付 | slide deck 结构与 Artifact ref |
 | `project@1.0.0` | `project@1.0.0` | 项目计划、状态和任务拆解 | 当前频道消息/知识、审批后写入共享知识 | project brief |
 
 `link` 保留确定性 Provider，因为单 URL 提取不需要增加模型成本和不确定性。它的 Skill 提供输入、

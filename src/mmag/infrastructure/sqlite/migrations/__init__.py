@@ -265,6 +265,45 @@ def _v005_add_inbox_retry_state(connection: sqlite3.Connection) -> None:
     )
 
 
+def _v006_add_delivery_presentation(connection: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(outbox_deliveries)")
+    }
+    additions = {
+        "root_id": "TEXT NOT NULL DEFAULT ''",
+        "message_kind": "TEXT NOT NULL DEFAULT 'result'",
+        "scope_id": "TEXT NOT NULL DEFAULT ''",
+        "artifact_refs": "TEXT NOT NULL DEFAULT '[]'",
+        "file_ids": "TEXT NOT NULL DEFAULT '[]'",
+        "actions": "TEXT NOT NULL DEFAULT '[]'",
+        "update_post_id": "TEXT NOT NULL DEFAULT ''",
+        "idempotency_key": "TEXT NOT NULL DEFAULT ''",
+    }
+    for name, declaration in additions.items():
+        if name not in columns:
+            connection.execute(
+                f"ALTER TABLE outbox_deliveries ADD COLUMN {name} {declaration}"
+            )
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_idempotency "
+        "ON outbox_deliveries(idempotency_key) WHERE idempotency_key != ''"
+    )
+
+
+def _v007_add_action_tokens(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS action_tokens (
+        jti TEXT PRIMARY KEY, action TEXT NOT NULL, target TEXT NOT NULL,
+        scope_id TEXT NOT NULL, run_id TEXT NOT NULL DEFAULT '',
+        expires_at REAL NOT NULL, used_at REAL NOT NULL DEFAULT 0,
+        used_by TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_action_expiry ON action_tokens(expires_at, used_at)"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -295,6 +334,18 @@ DEFAULT_MIGRATIONS = (
         name="add durable inbox retries",
         checksum=_checksum("v005-durable-inbox-retries-20260801"),
         upgrade=_v005_add_inbox_retry_state,
+    ),
+    Migration(
+        version=6,
+        name="add delivery presentation contract",
+        checksum=_checksum("v006-add-delivery-presentation-20260801"),
+        upgrade=_v006_add_delivery_presentation,
+    ),
+    Migration(
+        version=7,
+        name="add one-time action tokens",
+        checksum=_checksum("v007-add-one-time-action-tokens-20260801"),
+        upgrade=_v007_add_action_tokens,
     ),
 )
 

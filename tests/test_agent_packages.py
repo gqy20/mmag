@@ -101,8 +101,8 @@ def test_registry_loads_flat_packages_and_resolves_governance_hashes():
 
     assert {(item.manifest.metadata.name, item.manifest.metadata.version) for item in loaded} == {
         ("link", "1.2.0"),
-        ("mmchat", "1.1.0"),
-        ("ppt", "1.1.0"),
+        ("mmchat", "1.2.0"),
+        ("ppt", "1.2.0"),
         ("project", "1.0.0"),
         ("report", "1.0.0"),
     }

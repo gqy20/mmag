@@ -1,5 +1,6 @@
 """Application composition and Mattermost adapters."""
 
+from .actions import ActionCallbackServer, ActionClaims, ActionTokenError, ActionTokenService
 from .app import Agent
 from .context import (
     AttachmentProcessor,
@@ -10,14 +11,45 @@ from .context import (
 )
 from .delivery import MattermostDelivery
 from .message_handler import MessageHandler
+from .probe import MattermostCapabilities, MattermostCapabilityProbe
+from .render import MattermostRenderer, RenderedResponse, split_markdown
+from .stream import MattermostStream
+from .views import (
+    ResponseAction,
+    ResponseArtifact,
+    ResponseKind,
+    ResponsePresenter,
+    ResponseSection,
+    ResponseSource,
+    ResponseView,
+    RunStatus,
+)
 
 __all__ = [
     "Agent",
+    "ActionCallbackServer",
+    "ActionClaims",
+    "ActionTokenError",
+    "ActionTokenService",
     "AttachmentProcessor",
     "BotIdentity",
     "ContextBuilder",
     "MattermostDelivery",
+    "MattermostCapabilities",
+    "MattermostCapabilityProbe",
     "MessageHandler",
+    "MattermostRenderer",
+    "MattermostStream",
+    "RenderedResponse",
+    "ResponseAction",
+    "ResponseArtifact",
+    "ResponseKind",
+    "ResponsePresenter",
+    "ResponseSection",
+    "ResponseSource",
+    "ResponseView",
+    "RunStatus",
     "format_time_label",
     "is_text_attachment",
+    "split_markdown",
 ]

@@ -8,7 +8,9 @@
 6. Review the deck for narrative gaps, duplicate slides, unsupported numbers, and missing decisions.
 7. Call ppt.render only after the deck structure is complete and validated.
 8. Call ppt.export_pdf only with the same-scope Artifact ref returned by ppt.render.
-9. Return the structured deck contract and report only Artifact refs returned by capabilities.
+9. If explicit file delivery was requested, call send_file with the returned Artifact ref; never
+   pass raw content, base64, or a host path.
+10. Return the structured deck contract and report only Artifact refs returned by capabilities.
 
 Load references/story.md when the argument needs restructuring. Load templates/deck.md only when
 editable Markdown slide source or governed file delivery is requested. File delivery is optional,

@@ -1,5 +1,5 @@
 id: mmchat
-version: 1.1.0
+version: 1.2.0
 default_effect: deny
 
 rules:
@@ -42,12 +42,6 @@ rules:
     resource_arguments:
       channel_id: conversation_id
     reason: Knowledge writes are restricted to the originating channel.
-
-  - id: approve-file-delivery
-    effect: require_approval
-    actions: [send_file]
-    permissions: [mattermost:file:write]
-    reason: File delivery is an external side effect and requires approval.
 
   - id: approve-allowlisted-mcp
     effect: require_approval

@@ -33,6 +33,13 @@ class OutboundMessage:
     props: Mapping[str, Any] = field(default_factory=dict)
     agent_run_id: str = ""
     idempotency_key: str = ""
+    root_id: str = ""
+    message_kind: str = "result"
+    scope_id: str = ""
+    artifact_refs: tuple[str, ...] = ()
+    file_ids: tuple[str, ...] = ()
+    actions: tuple[Mapping[str, Any], ...] = ()
+    update_post_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)

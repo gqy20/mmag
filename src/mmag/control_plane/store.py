@@ -140,15 +140,20 @@ class SQLiteControlPlane:
         with self._lock:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
-                for message in messages:
-                    delivery_id = uuid.uuid4().hex
+                for index, message in enumerate(messages):
+                    stable_key = message.idempotency_key or f"{event_id}:{index}"
+                    delivery_id = uuid.uuid5(
+                        uuid.NAMESPACE_URL, f"mmag:delivery:{stable_key}"
+                    ).hex
                     channel_id = message.channel_id or message.conversation_id
                     agent_run_id = message.agent_run_id or f"run:{event_id}"
                     self._connection.execute(
                         """INSERT INTO outbox_deliveries
                         (id, conversation_id, channel_id, message, props, status,
-                         agent_run_id, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+                         agent_run_id, root_id, message_kind, scope_id, artifact_refs,
+                         file_ids, actions, update_post_id, idempotency_key,
+                         created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             delivery_id,
                             message.conversation_id,
@@ -156,6 +161,14 @@ class SQLiteControlPlane:
                             message.text,
                             _json(dict(message.props)),
                             agent_run_id,
+                            message.root_id,
+                            message.message_kind,
+                            message.scope_id,
+                            _json(list(message.artifact_refs)),
+                            _json(list(message.file_ids)),
+                            _json([dict(action) for action in message.actions]),
+                            message.update_post_id,
+                            stable_key,
                             now,
                             now,
                         ),
@@ -234,6 +247,44 @@ class SQLiteControlPlane:
 
     def mark_delivery_delivered(self, delivery_id: str, remote_id: str) -> None:
         self._update_delivery(delivery_id, "delivered", remote_id=remote_id)
+
+    def save_delivery_files(self, delivery_key: str, file_ids: tuple[str, ...]) -> None:
+        with self._lock:
+            self._connection.execute(
+                """UPDATE outbox_deliveries SET file_ids=?, updated_at=?
+                WHERE id=? OR idempotency_key=?""",
+                (_json(list(file_ids)), time.time(), delivery_key, delivery_key),
+            )
+            self._connection.commit()
+
+    def create_action_token(
+        self,
+        *,
+        jti: str,
+        action: str,
+        target: str,
+        scope_id: str,
+        run_id: str,
+        expires_at: float,
+    ) -> None:
+        with self._lock:
+            self._connection.execute(
+                """INSERT INTO action_tokens
+                (jti, action, target, scope_id, run_id, expires_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (jti, action, target, scope_id, run_id, expires_at, time.time()),
+            )
+            self._connection.commit()
+
+    def consume_action_token(self, jti: str, *, actor_id: str, now: float) -> bool:
+        with self._lock:
+            cursor = self._connection.execute(
+                """UPDATE action_tokens SET used_at=?, used_by=?
+                WHERE jti=? AND used_at=0 AND expires_at>=?""",
+                (now, actor_id, jti, now),
+            )
+            self._connection.commit()
+            return cursor.rowcount == 1
 
     def mark_delivery_retry(self, delivery_id: str, error: str, retry_at: float) -> None:
         self._update_delivery(delivery_id, "retrying", error=error, retry_at=retry_at)
@@ -640,7 +691,14 @@ class SQLiteControlPlane:
                 row["channel_id"],
                 json.loads(row["props"]),
                 row["agent_run_id"],
-                row["id"],
+                row["idempotency_key"] or row["id"],
+                row["root_id"],
+                row["message_kind"],
+                row["scope_id"],
+                tuple(json.loads(row["artifact_refs"])),
+                tuple(json.loads(row["file_ids"])),
+                tuple(json.loads(row["actions"])),
+                row["update_post_id"],
             ),
             row["status"],
             row["attempts"],

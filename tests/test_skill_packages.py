@@ -28,7 +28,7 @@ def _capabilities() -> CapabilityRegistry:
         "analyze_link",
         "load_skill_resource",
         "search_knowledge",
-        "send_file",
+        "save_knowledge",
     ):
         registry.register(CapabilityBinding(name, name, {"type": "object"}, lambda: {}))
     return registry
@@ -69,7 +69,7 @@ def test_resolver_selects_only_agent_bound_skill_and_projects_capabilities():
     invocation = resolver.resolve(
         package,
         AgentRequest("mention", "请调研三家竞品"),
-        ("analyze_link", "load_skill_resource", "search_knowledge", "send_file"),
+        ("analyze_link", "load_skill_resource", "search_knowledge", "save_knowledge"),
     )
 
     assert invocation is not None
@@ -79,7 +79,7 @@ def test_resolver_selects_only_agent_bound_skill_and_projects_capabilities():
         "load_skill_resource",
         "search_knowledge",
     )
-    assert "send_file" not in invocation.capabilities
+    assert "save_knowledge" not in invocation.capabilities
 
 
 class RecordingRuntime:
@@ -99,7 +99,7 @@ async def test_runtime_filters_tools_and_records_skill_provenance():
     invocation = SkillResolver(skills, capabilities).resolve(
         package,
         AgentRequest("mention", "请调研三家竞品"),
-        ("analyze_link", "load_skill_resource", "search_knowledge", "send_file"),
+        ("analyze_link", "load_skill_resource", "search_knowledge", "save_knowledge"),
     )
     runtime = RecordingRuntime()
     agent = ContractAgentDecorator(
@@ -112,7 +112,7 @@ async def test_runtime_filters_tools_and_records_skill_provenance():
                     "analyze_link",
                     "load_skill_resource",
                     "search_knowledge",
-                    "send_file",
+                    "save_knowledge",
                 ),
                 scopes=("mattermost:*",),
             ),
@@ -152,7 +152,7 @@ async def test_runtime_rejects_forged_skill_capability_expansion():
         "web-research@1.0.0",
         skill.root.joinpath("SKILL.md").read_text(encoding="utf-8"),
         build_skill_resource_catalog(skill),
-        ("analyze_link", "send_file"),
+        ("analyze_link", "save_knowledge"),
         skill.snapshot.to_dict(),
     )
     agent = ContractAgentDecorator(
@@ -161,7 +161,7 @@ async def test_runtime_rejects_forged_skill_capability_expansion():
             AgentDescriptor(
                 "mmchat",
                 "chat",
-                capabilities=("analyze_link", "send_file"),
+                capabilities=("analyze_link", "save_knowledge"),
                 scopes=("mattermost:*",),
             ),
             RecordingRuntime(),

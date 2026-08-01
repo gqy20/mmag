@@ -53,6 +53,17 @@ _FIELD_TO_ENV: dict[str, str] = {
     "mm_token": "MM_TOKEN",
     "mm_team_id": "MM_TEAM_ID",
     "mm_channel_id": "MM_CHANNEL_ID",
+    "mm_ack_message": "MM_ACK_MESSAGE",
+    "mm_response_max_chars": "MM_RESPONSE_MAX_CHARS",
+    "mm_action_callback_url": "MM_ACTION_CALLBACK_URL",
+    "mm_action_signing_secret": "MM_ACTION_SIGNING_SECRET",
+    "mm_action_listen_host": "MM_ACTION_LISTEN_HOST",
+    "mm_action_listen_port": "MM_ACTION_LISTEN_PORT",
+    "mm_action_token_ttl_seconds": "MM_ACTION_TOKEN_TTL_SECONDS",
+    "mm_long_task_agents": "MM_LONG_TASK_AGENTS",
+    "mm_stream_enabled": "MM_STREAM_ENABLED",
+    "mm_stream_update_interval_ms": "MM_STREAM_UPDATE_INTERVAL_MS",
+    "mm_stream_min_chars": "MM_STREAM_MIN_CHARS",
     "anthropic_api_key": "ANTHROPIC_API_KEY",
     "anthropic_model": "ANTHROPIC_MODEL",
     "anthropic_base_url": "ANTHROPIC_BASE_URL",
@@ -87,7 +98,9 @@ _FIELD_TO_ENV: dict[str, str] = {
     "artifact_store_path": "ARTIFACT_STORE_PATH",
 }
 # 敏感字段（日志只记录是否配置，不输出任何值片段）
-_SECRET_FIELD_NAMES: frozenset[str] = frozenset({"mm_token", "anthropic_api_key"})
+_SECRET_FIELD_NAMES: frozenset[str] = frozenset(
+    {"mm_token", "anthropic_api_key", "mm_action_signing_secret"}
+)
 
 
 def _secret_status(value: str | None) -> str:
@@ -120,6 +133,29 @@ class Config:
     mm_token: str = os.getenv("MM_TOKEN", "")
     mm_team_id: str = os.getenv("MM_TEAM_ID", "")
     mm_channel_id: str = os.getenv("MM_CHANNEL_ID", "")  # 指定频道 ID，留空=监听 Team 下所有频道
+    mm_ack_message: str = os.getenv("MM_ACK_MESSAGE", "收到，正在处理。")
+    mm_response_max_chars: int = int(os.getenv("MM_RESPONSE_MAX_CHARS", "12000"))
+    mm_action_callback_url: str = os.getenv("MM_ACTION_CALLBACK_URL", "")
+    mm_action_signing_secret: str = os.getenv("MM_ACTION_SIGNING_SECRET", "")
+    mm_action_listen_host: str = os.getenv("MM_ACTION_LISTEN_HOST", "127.0.0.1")
+    mm_action_listen_port: int = int(os.getenv("MM_ACTION_LISTEN_PORT", "8787"))
+    mm_action_token_ttl_seconds: int = int(
+        os.getenv("MM_ACTION_TOKEN_TTL_SECONDS", "600")
+    )
+    mm_long_task_agents: tuple[str, ...] = tuple(
+        name.strip()
+        for name in os.getenv("MM_LONG_TASK_AGENTS", "report,ppt").split(",")
+        if name.strip()
+    )
+    mm_stream_enabled: bool = os.getenv("MM_STREAM_ENABLED", "true").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    mm_stream_update_interval_ms: int = int(
+        os.getenv("MM_STREAM_UPDATE_INTERVAL_MS", "750")
+    )
+    mm_stream_min_chars: int = int(os.getenv("MM_STREAM_MIN_CHARS", "80"))
     # Anthropic
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")

@@ -173,7 +173,7 @@ Skill 输入固定投影为 `intent`、`goal` 和 `parameters`，选择前执行
 - `web-research@1.0.0`：默认会话中的轻量研究；
 - `link-read@1.0.0`：确定性链接解析契约；
 - `report@1.0.0`：证据账本式研报流程；
-- `slides@1.1.0`：受来源约束的演示叙事，并通过 `ppt@1.0.0` 受控执行平面生成 PPTX/PDF Artifact；
+- `slides@1.2.0`：受来源约束的演示叙事，通过 `ppt@1.0.0` 受控执行平面生成 PPTX/PDF Artifact，并只用 Artifact ref 请求审批交付；
 - `project@1.0.0`：项目计划和状态评估。
 
 绑定关系与实际权限见 [数字员工清单](WORKERS.md)。

@@ -40,7 +40,10 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 - `MODEL_BUDGET_USD` 是进程内每个 actor 的成本上限基线，生产环境应由外部配额源同步。
 - Delivery 最多尝试三次，失败记录保留在 Outbox，不会重新执行 Agent。
 - Runtime/网络类瞬时处理错误默认最多尝试三次，次数与下次重试时间持久化在 Inbox；非瞬时错误直接进入 `failed`。
-- Outbox 使用持久 delivery ID 作为 Mattermost `pending_post_id`，进程内和重启后的重试复用同一幂等键。
+- Outbox 为每个 Run/响应分段生成稳定幂等键，并作为 Mattermost `pending_post_id`；进程内和重启后的重试复用同一键。
+- 所有响应继承原消息 Thread root。LangGraph 默认对 `text-v1` Agent 流式更新同一条 Post；结构化 Agent 不流式暴露 JSON。`report,ppt` 默认先创建真实 `running` 状态 Post，最终结果由 Outbox 原地更新。可通过 `MM_LONG_TASK_AGENTS` / `MM_ACK_MESSAGE` 和 `MM_STREAM_*` 调整。
+- 流式 Post 是可丢失的展示投影，更新失败不会中断 Agent；只有最终 ResponseView 进入持久 Outbox，不持久化每个 token。SDK 备选 Runtime 仍只交付最终结果。
+- Outbox 同时保存消息种类、Scope、Artifact refs、已上传 file IDs、action 和 update target。Artifact 上传成功后立即保存 file IDs，发帖重试不会重新执行 Agent。
 
 Task 与 AgentRun 的终态语义不同：AgentRun 在模型执行成功后结束；存在出站消息时，Task 必须等全部 Delivery 成功后才进入 `succeeded`，任何最终 Delivery 失败都会把 Task 标为 `failed`。
 
@@ -58,6 +61,10 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 - 原请求人可以处理自己的审批；其他用户必须是当前 Mattermost 频道管理员或系统管理员；
 - 身份或频道成员查询失败时默认拒绝；
 - 审批请求、拒绝和最终决定写入 AuditEvent。
+- 可选交互按钮要求同时配置 `MM_ACTION_CALLBACK_URL` 与至少 32 bytes 的 `MM_ACTION_SIGNING_SECRET`。公网 callback 只接受 HTTPS；进程默认监听 `127.0.0.1:8787`，由受信反向代理转发 callback path。
+- Action token 使用 HMAC、最长 10 分钟有效期和 SQLite 原子一次性消费；Callback 在消费前后都重新校验 actor、频道、Scope、审批状态和 Mattermost 管理角色。按钮不可用时继续支持 `批准 <id>` / `拒绝 <id>`。
+
+启动时会执行 Mattermost 能力探测并记录 `mattermost.capabilities` 审计，包括 Server 版本、Edition、文件、插件和交互开关。认证级探测在非本机明文 HTTP 上直接跳过，不发送 Bot Token。
 
 当前策略允许请求人自批。需要职责分离的部署仍应在下一阶段接入组织级审批矩阵，按 Capability 风险要求独立审批人或双人审批。
 

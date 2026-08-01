@@ -20,6 +20,7 @@ from .skill_resource import create_load_skill_resource_capability
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from ..execution import ArtifactRepository
     from .base import CapabilityExecutor, CapabilitySpec
     from .registry import CapabilityBinding
 
@@ -28,6 +29,7 @@ def create_builtin_capabilities(
     mm_client,
     memory,
     *,
+    artifacts: ArtifactRepository | None = None,
     context_provider: Callable[[], CapabilityContext | None] = get_capability_context,
     additional_specs: tuple[CapabilitySpec, ...] = (),
 ) -> list[CapabilitySpec]:
@@ -41,7 +43,7 @@ def create_builtin_capabilities(
         create_get_user_profile_capability(mm_client, memory),
         create_analyze_link_capability(memory),
         create_load_skill_resource_capability(),
-        create_send_file_capability(mm_client, context_provider=context_provider),
+        create_send_file_capability(artifacts, context_provider=context_provider),
         *additional_specs,
     ]
 
@@ -50,6 +52,7 @@ def build_builtin_bindings(
     mm_client,
     memory,
     *,
+    artifacts: ArtifactRepository | None = None,
     executor: CapabilityExecutor | None = None,
     additional_specs: tuple[CapabilitySpec, ...] = (),
 ) -> list[CapabilityBinding]:
@@ -61,6 +64,7 @@ def build_builtin_bindings(
         for spec in create_builtin_capabilities(
             mm_client,
             memory,
+            artifacts=artifacts,
             additional_specs=additional_specs,
         )
     ]
@@ -70,6 +74,7 @@ def build_sdk_bindings(
     mm_client,
     memory,
     *,
+    artifacts: ArtifactRepository | None = None,
     context_provider: Callable[[], CapabilityContext | None] = get_capability_context,
     executor: CapabilityExecutor | None = None,
     additional_specs: tuple[CapabilitySpec, ...] = (),
@@ -82,6 +87,7 @@ def build_sdk_bindings(
         for spec in create_builtin_capabilities(
             mm_client,
             memory,
+            artifacts=artifacts,
             context_provider=context_provider,
             additional_specs=additional_specs,
         )

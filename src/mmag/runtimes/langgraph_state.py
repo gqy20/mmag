@@ -22,6 +22,7 @@ class LangGraphState(TypedDict):
     thread_id: str
     review_decisions: dict[str, dict[str, Any]]
     artifacts: Annotated[list[dict[str, Any]], operator.add]
+    deliveries: Annotated[list[dict[str, Any]], operator.add]
     capability_calls: Annotated[list[dict[str, Any]], operator.add]
 
 

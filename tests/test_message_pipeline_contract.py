@@ -38,6 +38,8 @@ def _make_handler(runtime_result: str = "已完成"):
         "team_id": "team-1",
     }
     mm.send_post.return_value = "reply-1"
+    mm.send_post_async = AsyncMock(return_value="reply-1")
+    mm.update_post_async = AsyncMock(return_value="reply-1")
     memory = MagicMock()
     memory.has_message.return_value = False
     memory.log_message.return_value = True
@@ -115,11 +117,11 @@ async def test_explicit_message_routes_and_delivers_reply():
     assert handler.stats == {"messages": 1, "responses": 1, "dropped_messages": 0}
     handler.compactor.maybe_compact.assert_awaited_once_with("channel-1")
     runtime.run.assert_awaited_once()
-    handler.mm.send_post.assert_called_once_with(
-        channel_id="channel-1",
-        message="任务完成",
-        props={"from_bot": "true"},
-    )
+    sent = handler.mm.send_post_async.await_args.kwargs
+    assert sent["channel_id"] == "channel-1"
+    assert sent["root_id"] == "post-1"
+    assert "任务完成" in sent["message"]
+    assert sent["props"]["mmag_kind"] == "result"
 
 
 @pytest.mark.asyncio
@@ -128,11 +130,10 @@ async def test_runtime_failure_delivers_user_visible_error():
     runtime.run.side_effect = RuntimeUnavailableError("model unavailable", runtime="test")
     with patch.multiple(config, mm_channel_id="", mm_team_id=""):
         await handler.on_posted(_posted_event())
-    handler.mm.send_post.assert_called_once_with(
-        channel_id="channel-1",
-        message="⚠️ LLM 服务暂时不可用，请稍后再试。",
-        props={"from_bot": "true"},
-    )
+    sent = handler.mm.send_post_async.await_args.kwargs
+    assert sent["root_id"] == "post-1"
+    assert "外部服务不可用" in sent["message"]
+    assert "mattermost:post-1" in sent["message"]
 
 
 @pytest.mark.asyncio

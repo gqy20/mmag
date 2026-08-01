@@ -136,10 +136,10 @@ provenance 当前记录：
 
 ## 当前 Package
 
-- `mmchat@1.1.0`：Mattermost 默认对话 Agent；使用 `langgraph/text-v1`，允许 `web-research@1.0.0`；
+- `mmchat@1.2.0`：Mattermost 默认对话 Agent；使用 `langgraph/text-v1`，允许 `web-research@1.0.0`；普通对话不拥有文件外发能力；
 - `link@1.2.0`：确定性链接分析 Agent；绑定 `link-read@1.0.0` 和专属只读 Policy；
 - `report@1.0.0`：结构化研报 Agent；绑定只读 `report@1.0.0` Skill；
-- `ppt@1.1.0`：演示文稿 Agent；绑定 `slides@1.1.0` 与 `ppt@1.0.0` Execution Profile，文件交付需要审批；
+- `ppt@1.2.0`：演示文稿 Agent；绑定 `slides@1.2.0` 与 `ppt@1.0.0` Execution Profile，文件交付只接受同 Scope Artifact ref 并需要审批；
 - `project@1.0.0`：项目助理 Agent；绑定 `project@1.0.0`，共享知识写入需要审批。
 
 这些 Package 都具备 Manifest、Prompt、输入/输出与 Artifact Schema、Policy、预算、eval 和

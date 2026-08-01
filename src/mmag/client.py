@@ -256,6 +256,48 @@ class MMClient:
             log.error("异步发送消息失败: %s", error)
             return None
 
+    async def update_post_async(
+        self,
+        post_id: str,
+        message: str,
+        *,
+        props: dict | None = None,
+    ) -> str | None:
+        payload: dict[str, Any] = {"id": post_id, "message": message}
+        if props:
+            payload["props"] = props
+        try:
+            response = await self._request_async("PUT", f"/posts/{post_id}", json=payload)
+            return response.json().get("id")
+        except Exception as error:
+            log.error("异步更新消息失败: %s", error)
+            return None
+
+    async def upload_file_async(
+        self,
+        channel_id: str,
+        filename: str,
+        data: bytes,
+        content_type: str = "",
+    ) -> str | None:
+        if not content_type:
+            guessed_type, _ = mimetypes.guess_type(filename)
+            content_type = guessed_type or "application/octet-stream"
+        try:
+            response = await self._request_async(
+                "POST",
+                "/files",
+                data={"channel_id": channel_id, "filename": filename},
+                files={"files": (filename, data, content_type)},
+            )
+            result = response.json()
+            if isinstance(result, dict):
+                result = result.get("file_infos", [])
+            return result[0].get("id") if isinstance(result, list) and result else None
+        except Exception as error:
+            log.error("异步上传文件失败: %s", error)
+            return None
+
     def upload_file(
         self,
         channel_id: str,
@@ -280,6 +322,8 @@ class MMClient:
             )
             resp.raise_for_status()
             result = resp.json()
+            if isinstance(result, dict):
+                result = result.get("file_infos", [])
             if isinstance(result, list) and result:
                 file_id = result[0].get("id")
                 log.debug(

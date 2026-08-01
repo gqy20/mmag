@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import time
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from ..agent_packages import (
     AgentFactory,
@@ -54,9 +57,11 @@ from ..runtimes import ClaudeSDKRuntimeAdapter, LangGraphRuntimeAdapter
 from ..sdk_llm import SDKLLM
 from ..skill_packages import SkillPackageRegistry, SkillResolver, SkillResourceLoader
 from ..ws_client import WebSocketClient
+from .actions import ActionCallbackServer, ActionTokenService
 from .context import AttachmentProcessor, BotIdentity, ContextBuilder
 from .delivery import MattermostDelivery
 from .message_handler import MessageHandler
+from .probe import MattermostCapabilityProbe
 
 log = get_logger(__name__)
 
@@ -113,6 +118,7 @@ class Agent:
         builtin_bindings = build_builtin_bindings(
             self.mm,
             self.memory,
+            artifacts=self.artifact_repository,
             executor=self.capability_executor,
             additional_specs=self.execution_capabilities,
         )
@@ -196,7 +202,18 @@ class Agent:
             mm_client=self.mm,
             config=config,
         )
-        self.delivery = MattermostDelivery(self.mm, self.memory, self.identity, self.stats)
+        self.action_tokens: ActionTokenService | None = None
+        self.action_server: ActionCallbackServer | None = None
+        if config.mm_action_callback_url or config.mm_action_signing_secret:
+            self.action_tokens = self._build_action_tokens()
+        self.delivery = MattermostDelivery(
+            self.mm,
+            self.memory,
+            self.identity,
+            self.stats,
+            artifacts=self.artifact_repository,
+            outbox_store=self.control_store,
+        )
         attachment_processor = AttachmentProcessor(self.mm)
         context_builder = ContextBuilder(
             self.mm,
@@ -221,7 +238,17 @@ class Agent:
             context_builder=context_builder,
             delivery=self.delivery,
             stats=self.stats,
+            action_tokens=self.action_tokens,
         )
+        self.capability_probe = MattermostCapabilityProbe(self.mm)
+        if self.action_tokens is not None:
+            callback_path = urlsplit(config.mm_action_callback_url).path or "/actions"
+            self.action_server = ActionCallbackServer(
+                config.mm_action_listen_host,
+                config.mm_action_listen_port,
+                self.message_handler.handle_action_callback,
+                path=callback_path,
+            )
         self.sdk_llm: SDKLLM | None = None
         self.ws: WebSocketClient | None = None
         self.pipeline: MessagePipeline | None = None
@@ -234,6 +261,7 @@ class Agent:
         self.identity.user_id = me["id"]
         self.identity.username = me["username"]
         log.info("Bot: @%s (%s)", self.identity.username, self.identity.user_id)
+        await self._probe_mattermost()
 
         log.info(
             "模型: %s | Key: %s", config.anthropic_model, _secret_status(config.anthropic_api_key)
@@ -254,6 +282,13 @@ class Agent:
             max_pending=config.pipeline_max_pending,
         )
         await self.pipeline.start()
+        if self.action_server is not None:
+            await self.action_server.start()
+            log.info(
+                "Mattermost Action callback 监听 %s:%d",
+                config.mm_action_listen_host,
+                config.mm_action_listen_port,
+            )
         self.message_handler.pipeline = self.pipeline
         self.ws = WebSocketClient(
             url=config.ws_url,
@@ -272,6 +307,23 @@ class Agent:
         except Exception as error:
             log.warning("MCP 加载失败（不影响启动）: %s", error)
 
+    async def _probe_mattermost(self) -> None:
+        capabilities = await self.capability_probe.probe()
+        self.control_store.append_audit(
+            "mattermost.capabilities",
+            scope_id=config.mm_team_id,
+            target=config.mm_url,
+            decision="trusted" if capabilities.trusted_transport else "skipped",
+            details=capabilities.to_dict(),
+        )
+        log.info(
+            "Mattermost capabilities version=%s edition=%s files=%s actions=%s",
+            capabilities.server_version,
+            capabilities.edition,
+            capabilities.files_enabled,
+            capabilities.interactive_messages_enabled,
+        )
+
     async def _configure_optional_sdk(self) -> None:
         if not config.use_sdk_llm:
             return
@@ -280,6 +332,7 @@ class Agent:
             bindings = build_sdk_bindings(
                 self.mm,
                 self.memory,
+                artifacts=self.artifact_repository,
                 context_provider=sdk_llm.get_capability_context,
                 executor=self.capability_executor,
                 additional_specs=self.execution_capabilities,
@@ -367,6 +420,11 @@ class Agent:
         self.running = False
         for name, close in (
             ("ws", self.ws.close if self.ws is not None else None),
+            (
+                "action_server",
+                self.action_server.close if self.action_server is not None else None,
+            ),
+            ("action_tasks", self.message_handler.close_actions),
             ("pipeline", self.pipeline.close if self.pipeline is not None else None),
             ("sdk_llm", self.sdk_llm.stop if self.sdk_llm is not None else None),
             ("langgraph_runtime", self.langgraph_runtime.close),
@@ -388,3 +446,22 @@ class Agent:
         self.memory.close()
         self.control_store.close()
         log.info("Agent 已停止")
+
+    def _build_action_tokens(self) -> ActionTokenService:
+        if not config.mm_action_callback_url or not config.mm_action_signing_secret:
+            raise ValueError(
+                "MM_ACTION_CALLBACK_URL and MM_ACTION_SIGNING_SECRET must be configured together"
+            )
+        parsed = urlsplit(config.mm_action_callback_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("MM_ACTION_CALLBACK_URL must be an absolute HTTP(S) URL")
+        trusted_local = parsed.hostname == "localhost"
+        with contextlib.suppress(ValueError):
+            trusted_local = trusted_local or ip_address(parsed.hostname).is_loopback
+        if parsed.scheme != "https" and not trusted_local:
+            raise ValueError("Mattermost Action callback must use HTTPS outside localhost")
+        return ActionTokenService(
+            config.mm_action_signing_secret,
+            self.control_store,
+            ttl_seconds=config.mm_action_token_ttl_seconds,
+        )

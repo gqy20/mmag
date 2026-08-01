@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, cast
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -14,11 +15,15 @@ from langgraph.types import Command, interrupt
 from ..capabilities import AuthorizationDecision, get_capability_context
 from ..governance import get_governance_context
 from ..llm import LLMError
+from ..logger import get_logger
 from ..model_artifacts import strip_model_artifacts
 from ..skill_packages import get_skill_resource_session
 from .base import (
     AgentResult,
     AgentRuntimeError,
+    RunEvent,
+    RunEventKind,
+    RunEventSink,
     RunRequest,
     RuntimeStatus,
     RuntimeTimeoutError,
@@ -41,10 +46,14 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
     from ..capabilities import CapabilityRegistry
-    from ..llm import LLM
+    from ..llm import LLM, ParsedResponse
 
 
 _EXHAUSTED_TEXT = "⚠️ 处理超时，请重试"
+log = get_logger(__name__)
+_EVENT_SINK: ContextVar[RunEventSink | None] = ContextVar(
+    "mmag_run_event_sink", default=None
+)
 
 
 class LangGraphRuntimeAdapter:
@@ -93,24 +102,24 @@ class LangGraphRuntimeAdapter:
         remaining = remaining_seconds(request)
         if remaining is not None and remaining <= 0:
             raise RuntimeTimeoutError("runtime deadline exceeded", runtime=self.runtime_name)
+        token = _EVENT_SINK.set(request.event_sink)
         try:
-            if remaining is None:
-                return await self._run(request)
-            async with asyncio.timeout(remaining):
-                return await self._run(request)
-        except AgentRuntimeError:
-            raise
-        except Exception as error:
-            translated = translate_runtime_error(error, runtime=self.runtime_name)
-            raise translated from error
+            try:
+                if remaining is None:
+                    return await self._run(request)
+                async with asyncio.timeout(remaining):
+                    return await self._run(request)
+            except AgentRuntimeError:
+                raise
+            except Exception as error:
+                translated = translate_runtime_error(error, runtime=self.runtime_name)
+                raise translated from error
+        finally:
+            _EVENT_SINK.reset(token)
 
     async def _run(self, request: RunRequest) -> AgentResult:
         if not request.capabilities:
-            text = await self.backend.chat(
-                messages=thaw_messages(request.messages),
-                system=request.system_prompt,
-                max_tokens=request.max_tokens,
-            )
+            text = await self._chat(request)
             return AgentResult(text=text, runtime=self.runtime_name)
 
         graph = await self._ready_graph()
@@ -126,6 +135,7 @@ class LangGraphRuntimeAdapter:
             "thread_id": thread_id,
             "review_decisions": {},
             "artifacts": [],
+            "deliveries": [],
             "capability_calls": [],
         }
         state_result = await graph.ainvoke(state, self._config(thread_id, request.max_rounds))
@@ -142,6 +152,7 @@ class LangGraphRuntimeAdapter:
                     text=recovered,
                     runtime=self.runtime_name,
                     artifacts=result.artifacts,
+                    deliveries=result.deliveries,
                     capability_calls=result.capability_calls,
                 )
         return result
@@ -178,12 +189,7 @@ class LangGraphRuntimeAdapter:
         round_number = state["round"] + 1
         final_round = round_number >= state["max_rounds"]
         try:
-            parsed = await self.backend.complete(
-                messages=state["messages"],
-                system=state["system_prompt"],
-                tools=[] if final_round else state["capabilities"],
-                max_tokens=state["max_tokens"],
-            )
+            parsed = await self._complete_turn(state, round_number, final_round)
         except Exception as error:
             if isinstance(error, LLMError):
                 raise
@@ -210,6 +216,55 @@ class LangGraphRuntimeAdapter:
             "round": round_number,
             "review_decisions": {},
         }
+
+    async def _chat(self, request: RunRequest) -> str:
+        messages = thaw_messages(request.messages)
+        stream = getattr(self.backend, "chat_stream", None)
+        if _EVENT_SINK.get() is not None and callable(stream):
+            return await stream(
+                messages,
+                system=request.system_prompt,
+                max_tokens=request.max_tokens,
+                on_text=lambda text: self._emit_text(text, 1),
+            )
+        return await self.backend.chat(
+            messages=messages,
+            system=request.system_prompt,
+            max_tokens=request.max_tokens,
+        )
+
+    async def _complete_turn(
+        self,
+        state: LangGraphState,
+        round_number: int,
+        final_round: bool,
+    ) -> ParsedResponse:
+        tools = [] if final_round else state["capabilities"]
+        stream = getattr(self.backend, "complete_stream", None)
+        if _EVENT_SINK.get() is not None and callable(stream):
+            return await stream(
+                messages=state["messages"],
+                system=state["system_prompt"],
+                tools=tools,
+                max_tokens=state["max_tokens"],
+                on_text=lambda text: self._emit_text(text, round_number),
+            )
+        return await self.backend.complete(
+            messages=state["messages"],
+            system=state["system_prompt"],
+            tools=tools,
+            max_tokens=state["max_tokens"],
+        )
+
+    @staticmethod
+    async def _emit_text(text: str, round_number: int) -> None:
+        sink = _EVENT_SINK.get()
+        if sink is not None and text:
+            try:
+                await sink(RunEvent(RunEventKind.TEXT_DELTA, text, round_number))
+            except Exception as error:
+                # Presentation is an observer, never part of model correctness.
+                log.warning("运行时增量事件交付失败，继续生成最终结果: %s", error)
 
     def _review_tools_node(self, state: LangGraphState) -> dict[str, Any]:
         pending: list[dict[str, Any]] = []
@@ -264,6 +319,7 @@ class LangGraphRuntimeAdapter:
     async def _tools_node(self, state: LangGraphState) -> dict[str, Any]:
         new_messages: list[dict[str, Any]] = []
         artifacts: list[dict[str, Any]] = []
+        deliveries: list[dict[str, Any]] = []
         capability_calls: list[dict[str, Any]] = []
         for call in last_tool_calls(state):
             authorization = self.capability_registry.authorization(call["name"], call["input"])
@@ -292,6 +348,7 @@ class LangGraphRuntimeAdapter:
             new_messages.append(tool_result(call["id"], result))
             payload = self._tool_payload(result)
             artifacts.extend(self._tool_artifacts(payload))
+            deliveries.extend(self._tool_deliveries(payload))
             capability_calls.append(
                 {
                     "name": call["name"],
@@ -302,6 +359,7 @@ class LangGraphRuntimeAdapter:
             "messages": new_messages,
             "review_decisions": {},
             "artifacts": artifacts,
+            "deliveries": deliveries,
             "capability_calls": capability_calls,
         }
 
@@ -319,6 +377,13 @@ class LangGraphRuntimeAdapter:
         if not isinstance(artifacts, list):
             return []
         return [dict(item) for item in artifacts if isinstance(item, Mapping)]
+
+    @staticmethod
+    def _tool_deliveries(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        deliveries = payload.get("deliveries", ())
+        if not isinstance(deliveries, list):
+            return []
+        return [dict(item) for item in deliveries if isinstance(item, Mapping)]
 
     @staticmethod
     def _after_agent(state: LangGraphState) -> str:
@@ -346,6 +411,7 @@ class LangGraphRuntimeAdapter:
                 runtime=self.runtime_name,
                 status=RuntimeStatus.WAITING_APPROVAL,
                 artifacts=tuple(dict(item) for item in state.get("artifacts", ())),
+                deliveries=tuple(dict(item) for item in state.get("deliveries", ())),
                 capability_calls=tuple(dict(item) for item in state.get("capability_calls", ())),
                 interruptions=interruptions,
             )
@@ -358,5 +424,6 @@ class LangGraphRuntimeAdapter:
             runtime=self.runtime_name,
             status=status,
             artifacts=tuple(dict(item) for item in state.get("artifacts", ())),
+            deliveries=tuple(dict(item) for item in state.get("deliveries", ())),
             capability_calls=tuple(dict(item) for item in state.get("capability_calls", ())),
         )

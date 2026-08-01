@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from anthropic import AsyncAnthropic
 
 from .config import config
 from .logger import get_logger, trace
 from .model_artifacts import strip_model_artifacts
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 log = get_logger(__name__)
 
@@ -70,6 +73,25 @@ class LLM:
             )
             raise
 
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        *,
+        system: str = "",
+        max_tokens: int = 1024,
+        on_text: Callable[[str], Awaitable[None]],
+    ) -> str:
+        """Stream visible text deltas and return the canonical final text."""
+        parsed = await self.complete_stream(
+            messages=messages,
+            system=system,
+            tools=[],
+            max_tokens=max_tokens,
+            on_text=on_text,
+        )
+        cleaned = strip_model_artifacts("\n".join(parsed.texts)).strip()
+        return cleaned if cleaned else "(模型返回为空)"
+
     async def complete(
         self,
         *,
@@ -79,6 +101,41 @@ class LLM:
         max_tokens: int,
     ) -> ParsedResponse:
         """Return one structured Anthropic turn for LangGraph nodes."""
+        kwargs = self._request_kwargs(messages, system, tools, max_tokens)
+        try:
+            response = await self.client.messages.create(**kwargs)
+        except Exception as error:
+            raise LLMError(str(error)) from error
+        return _parse_response(response)
+
+    async def complete_stream(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        system: str,
+        tools: list[dict[str, Any]],
+        max_tokens: int,
+        on_text: Callable[[str], Awaitable[None]],
+    ) -> ParsedResponse:
+        """Stream one Anthropic turn while retaining the final structured response."""
+        kwargs = self._request_kwargs(messages, system, tools, max_tokens)
+        try:
+            async with self.client.messages.stream(**kwargs) as stream:
+                async for text in stream.text_stream:
+                    if text:
+                        await on_text(text)
+                response = await stream.get_final_message()
+        except Exception as error:
+            raise LLMError(str(error)) from error
+        return _parse_response(response)
+
+    def _request_kwargs(
+        self,
+        messages: list[dict[str, Any]],
+        system: str,
+        tools: list[dict[str, Any]],
+        max_tokens: int,
+    ) -> dict[str, Any]:
         self.call_count += 1
         kwargs: dict[str, Any] = {
             "model": self.model,
@@ -88,11 +145,7 @@ class LLM:
         }
         if system:
             kwargs["system"] = system
-        try:
-            response = await self.client.messages.create(**kwargs)
-        except Exception as error:
-            raise LLMError(str(error)) from error
-        return _parse_response(response)
+        return kwargs
 
 
 def _parse_response(response: Any) -> ParsedResponse:

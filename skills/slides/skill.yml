@@ -3,7 +3,7 @@ kind: Skill
 
 metadata:
   name: slides
-  version: 1.1.0
+  version: 1.2.0
   description: Turn validated material into an audience-aware, editable presentation structure.
 
 spec:

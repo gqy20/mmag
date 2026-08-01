@@ -1,204 +1,97 @@
-"""请求级文件能力与 Mattermost 文件发送契约。"""
+"""Artifact-only file delivery capability contract."""
 
-from __future__ import annotations
-
-import asyncio
-import base64
-import json
-from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import pytest
 
 from mmag.capabilities import (
     CapabilityContext,
     CapabilityEffect,
-    bind_capability_context,
-    bind_sdk_capability,
     create_send_file_capability,
-    get_capability_context,
 )
-from mmag.sdk_llm import SDKLLM
+
+_REF = "artifact://0123456789abcdef0123456789abcdef"
 
 
-def _make_mock_mm():
-    mm = MagicMock()
-    mm.upload_file.return_value = "file_id_abc"
-    mm.send_post.return_value = "post_id_xyz"
-    return mm
+class FakeArtifacts:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def resolve(self, ref: str, *, scope_id: str):
+        self.calls.append((ref, scope_id))
+        return (
+            SimpleNamespace(
+                ref=ref,
+                filename="deck.pptx",
+                media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ),
+            None,
+        )
 
 
-def _request_context(message: str = "@bot 帮我导出报告") -> CapabilityContext:
+def _context(message: str = "请把 PPT 发给我") -> CapabilityContext:
     return CapabilityContext(
         trace_id="trace-1",
         actor_id="user-1",
-        conversation_id="ch1",
-        message_id="post_001",
+        conversation_id="channel-1",
+        message_id="post-1",
         message=message,
+        scope="mattermost:team-1/channel-1",
+        allowed_capabilities=frozenset({"send_file"}),
     )
 
 
-async def _invoke(tool_fn, args, context: CapabilityContext | None):
-    if context is None:
-        return await tool_fn.handler(args)
-    with bind_capability_context(context):
-        return await tool_fn.handler(args)
-
-
-def _run_tool(tool_fn, args, context: CapabilityContext | None = None):
-    raw = asyncio.run(_invoke(tool_fn, args, context))
-    return json.loads(raw["content"][0]["text"])
-
-
-def _make_send_file_tool():
-    mm = _make_mock_mm()
-    spec = create_send_file_capability(mm)
-    return bind_sdk_capability(spec), spec, mm
-
-
-def _arguments(**overrides):
-    values = {
-        "filename": "报告.md",
-        "content": "# 标题\n正文内容",
-        "message": "这是你要的报告",
-        "content_encoding": "text",
-    }
-    values.update(overrides)
-    return values
-
-
-def test_send_file_declares_governed_write_effect():
-    _, spec, _ = _make_send_file_tool()
+def test_send_file_is_an_approval_gated_artifact_intent():
+    spec = create_send_file_capability(FakeArtifacts(), context_provider=_context)
 
     assert spec.name == "send_file"
     assert spec.effect is CapabilityEffect.WRITE
     assert spec.permission == "mattermost:file:write"
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        "帮我导出一下",
-        "能不能发个文件给我",
-        "please export as file",
-        "PLEASE DOWNLOAD",
-    ],
-)
-def test_explicit_file_request_succeeds(message):
-    tool_fn, _, mm = _make_send_file_tool()
-
-    result = _run_tool(tool_fn, _arguments(), _request_context(message))
-
-    assert result["success"] is True
-    assert result["filename"] == "报告.md"
-    assert result["file_id"] == "file_id_abc"
-    mm.upload_file.assert_called_once()
-
-
-@pytest.mark.parametrize("context", [None, _request_context("今天天气怎么样")])
-def test_missing_explicit_file_request_is_rejected(context):
-    tool_fn, _, mm = _make_send_file_tool()
-
-    result = _run_tool(tool_fn, _arguments(), context)
-
-    assert "未明确请求" in result["error"]
-    mm.upload_file.assert_not_called()
-
-
-def test_base64_content_is_decoded_before_upload():
-    tool_fn, _, mm = _make_send_file_tool()
-    original = b"\x89PNG fake binary data"
-
-    result = _run_tool(
-        tool_fn,
-        _arguments(
-            filename="image.png",
-            content=base64.b64encode(original).decode(),
-            content_encoding="base64",
-        ),
-        _request_context("发文件给我"),
-    )
-
-    assert result["success"] is True
-    assert mm.upload_file.call_args.args[2] == original
-
-
-def test_oversized_file_is_rejected_before_upload():
-    tool_fn, _, mm = _make_send_file_tool()
-
-    result = _run_tool(
-        tool_fn,
-        _arguments(content="x" * (11 * 1024 * 1024)),
-        _request_context("导出数据"),
-    )
-
-    assert "过大" in result["error"]
-    mm.upload_file.assert_not_called()
-
-
-def test_upload_failure_returns_domain_error():
-    tool_fn, _, mm = _make_send_file_tool()
-    mm.upload_file.return_value = None
-
-    result = _run_tool(tool_fn, _arguments(), _request_context("发个文件"))
-
-    assert "上传失败" in result["error"]
-
-
-def test_uploaded_file_is_sent_to_originating_thread():
-    tool_fn, _, mm = _make_send_file_tool()
-
-    _run_tool(tool_fn, _arguments(message="附言"), _request_context("导出给我"))
-
-    mm.send_post.assert_called_once_with(
-        "ch1",
-        "附言",
-        "post_001",
-        None,
-        ["file_id_abc"],
-    )
+    assert spec.input_schema["required"] == ("artifact_ref",)
+    assert "content" not in spec.input_schema["properties"]
 
 
 @pytest.mark.asyncio
-async def test_capability_context_is_isolated_between_concurrent_requests():
-    first = CapabilityContext("trace-1", "user-1", "channel-1", "post-1", "导出 A")
-    second = CapabilityContext("trace-2", "user-2", "channel-2", "post-2", "导出 B")
+async def test_send_file_returns_delivery_intent_without_platform_io():
+    artifacts = FakeArtifacts()
+    spec = create_send_file_capability(artifacts, context_provider=_context)
 
-    async def observe(context: CapabilityContext):
-        with bind_capability_context(context):
-            await asyncio.sleep(0)
-            return get_capability_context()
+    result = await spec.handler(_REF, "演示文稿")
 
-    observed = await asyncio.gather(observe(first), observe(second))
-
-    assert observed == [first, second]
-    assert get_capability_context() is None
+    assert artifacts.calls == [(_REF, "mattermost:team-1/channel-1")]
+    assert result == {
+        "success": True,
+        "deliveries": [
+            {
+                "artifact_ref": _REF,
+                "filename": "deck.pptx",
+                "media_type": (
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                ),
+                "message": "演示文稿",
+            }
+        ],
+    }
 
 
 @pytest.mark.asyncio
-async def test_persistent_sdk_transport_serializes_request_context_bridge():
-    sdk = SDKLLM()
-    first = CapabilityContext("trace-1", "user-1", "channel-1", "post-1", "导出 A")
-    second = CapabilityContext("trace-2", "user-2", "channel-2", "post-2", "导出 B")
-    observed: list[CapabilityContext | None] = []
-    active_calls = 0
-    max_active_calls = 0
-
-    async def observe(_content):
-        nonlocal active_calls, max_active_calls
-        active_calls += 1
-        max_active_calls = max(max_active_calls, active_calls)
-        observed.append(sdk.get_capability_context())
-        await asyncio.sleep(0)
-        active_calls -= 1
-        return "done", False
-
-    sdk._execute_query_unlocked = observe
-
-    await asyncio.gather(
-        sdk._execute_query([], capability_context=first),
-        sdk._execute_query([], capability_context=second),
+async def test_send_file_requires_explicit_user_intent():
+    artifacts = FakeArtifacts()
+    spec = create_send_file_capability(
+        artifacts,
+        context_provider=lambda: _context("做一份 PPT"),
     )
 
-    assert observed == [first, second]
-    assert max_active_calls == 1
-    assert sdk.get_capability_context() is None
+    result = await spec.handler(_REF)
+
+    assert "error" in result
+    assert artifacts.calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_file_fails_closed_without_repository():
+    spec = create_send_file_capability(None, context_provider=_context)
+
+    result = await spec.handler(_REF)
+
+    assert result == {"error": "Artifact Repository 未配置。"}
