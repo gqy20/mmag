@@ -21,7 +21,6 @@ _PACKAGE = AgentPackageLoader().load(
     __import__("pathlib").Path(__file__).resolve().parents[1] / "agents/mmchat"
 )
 _SYSTEM_PROMPT = _PACKAGE.prompts[_PACKAGE.manifest.prompt.system_ref]
-_TASK_PROMPT = _PACKAGE.prompts[_PACKAGE.manifest.prompt.task_ref]
 
 
 def _make_handler(runtime_result: str = "已完成"):
@@ -83,9 +82,7 @@ def _make_handler(runtime_result: str = "已完成"):
         working_memory=working_memory,
         identity=identity,
         attachment_processor=attachments,
-        context_builder=ContextBuilder(
-            mm, memory, working_memory, identity, _SYSTEM_PROMPT, _TASK_PROMPT
-        ),
+        context_builder=ContextBuilder(mm, memory, working_memory, identity, _SYSTEM_PROMPT),
         delivery=delivery,
         stats=stats,
     )

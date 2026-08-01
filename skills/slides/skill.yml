@@ -3,13 +3,13 @@ kind: Skill
 
 metadata:
   name: slides
-  version: 2.2.0
+  version: 2.3.0
   description: Compose governed Markdown into editable PPTX, source, and direct image preview Artifacts.
 
 spec:
   instruction_ref: SKILL.md
-  input_schema_ref: schemas/input.schema.json
-  output_schema_ref: schemas/output.schema.json
+  input_schema_ref: input.schema.json
+  output_schema_ref: output.schema.json
 
   activation:
     intents: [presentation, ppt, slides]
@@ -29,19 +29,11 @@ spec:
 
   resources:
     templates:
-      - templates/deck.md
-      - templates/corp.theme.json
-    references:
-      - references/story.md
-    scripts:
-      - scripts/package.json
-      - scripts/package-lock.json
-      - scripts/ppt-src.cjs
-      - scripts/ppt.cjs
-      - scripts/shell.py
+      - deck.md
+    references: []
 
   disclosure:
-    max_resources: 3
+    max_resources: 1
     max_resource_bytes: 65536
     max_total_bytes: 98304
     max_estimated_tokens: 12000

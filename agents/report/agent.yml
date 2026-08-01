@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: report
-  version: 1.0.0
+  version: 1.1.0
   description: Produce evidence-aware, structured research reports within the active scope.
 
 spec:
@@ -20,23 +20,15 @@ spec:
 
   accepted_intents: [report, research, 研报]
   prompt:
-    system_ref: prompts/system.md
-    task_ref: prompts/task.md
-    output_repair_ref: prompts/output_repair.md
+    system_ref: system.md
     required_variables:
       - current_time
       - actor_name
       - project_context
       - conversation_id
-      - task_goal
-      - parameters_json
-      - context_refs_json
-      - artifact_refs_json
-      - invalid_output
-      - validation_error
 
-  input_schema_ref: schemas/input.schema.json
-  result_schema_ref: schemas/output.schema.json
+  input_schema_ref: input.schema.json
+  result_schema_ref: output.schema.json
 
   runtime:
     route: default
@@ -51,7 +43,7 @@ spec:
 
   skills:
     allow:
-      - report@1.0.0
+      - report@1.1.0
     deny: []
 
   context:
@@ -69,4 +61,4 @@ spec:
   artifacts:
     produces:
       - kind: research_report
-        schema_ref: schemas/artifact.schema.json
+        schema_ref: artifact.schema.json

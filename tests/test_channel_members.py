@@ -40,7 +40,6 @@ def _make_context(bot_user_id: str, bot_username: str = "agent2") -> ContextBuil
         {},
         BotIdentity(bot_user_id, bot_username),
         MagicMock(),
-        MagicMock(),
     )
 
 

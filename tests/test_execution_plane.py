@@ -135,7 +135,7 @@ def test_profile_registry_loads_ppt_demo_commands():
         profile.image_digest
         == "sha256:"
         + hashlib.sha256(
-            (ROOT / "skills/slides/scripts/package-lock.json").read_bytes()
+            (ROOT / "src/mmag/renderers/ppt/package-lock.json").read_bytes()
         ).hexdigest()
     )
 
@@ -198,12 +198,11 @@ def test_fixed_ppt_command_argv_contains_no_payload(tmp_path):
             {"source": marker},
             max_bytes=profile.limits.max_input_bytes,
         )
-        skill = _slides()
-        asset = skill.resources["scripts/ppt.cjs"]
+        renderer = ROOT / "src/mmag/renderers/ppt/ppt.cjs"
         script = manager.copy_asset(
             workspace,
-            skill.root / "scripts/ppt.cjs",
-            expected_sha256=asset.sha256,
+            renderer,
+            expected_sha256=hashlib.sha256(renderer.read_bytes()).hexdigest(),
         )
         output = manager.output_path(workspace, "deck.pptx")
         runner = ProcessRunner(Path(sys.prefix))
@@ -370,29 +369,6 @@ async def test_script_executor_rejects_symlink_and_oversized_artifacts(tmp_path,
 
     audit = store.list_audits(event_type="execution.process", target="ppt.render")[0]
     assert audit.decision == "failed"
-
-
-@pytest.mark.asyncio
-async def test_script_executor_rejects_tampered_skill_script(tmp_path):
-    skill_root = tmp_path / "slides"
-    shutil.copytree(ROOT / "skills" / "slides", skill_root)
-    skill = SkillPackageLoader().load(skill_root)
-    (skill_root / "scripts" / "ppt.cjs").write_text("process.exit(0)", encoding="utf-8")
-    executor, _, _, _ = _executor(tmp_path, WritingRunner())
-    session = SkillResourceLoader().create_session(skill)
-
-    with (
-        bind_capability_context(_context()),
-        bind_skill_resource_session(session),
-        pytest.raises(ScriptExecutionError),
-    ):
-        await executor.execute(
-            profile_ref="ppt@2.1.0",
-            capability="ppt.build",
-            command_id="ppt.render",
-            permission="artifact:generate",
-            payload={"deck": _deck()},
-        )
 
 
 @pytest.mark.asyncio

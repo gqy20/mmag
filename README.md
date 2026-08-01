@@ -119,22 +119,20 @@ MMAG_E2E_ENABLED=1 uv run mmag-eval --root evals run suites/smoke.yml \
 agents/
   mmchat/
     agent.yml
-    prompts/
-    schemas/
-    evals/
+    system.md
+    input.schema.json
+    output.schema.json
   link/
     agent.yml
-    prompts/
-    schemas/
-    evals/
+    input.schema.json
+    output.schema.json
 
 skills/
   web-research/
     skill.yml
     SKILL.md
-    schemas/
-    templates/
-    evals/
+    input.schema.json
+    output.schema.json
 
 policies/                  # 默认拒绝的 Policy-as-Code
 model-policies/            # 模型路由、输出预算和采样策略
@@ -148,6 +146,7 @@ src/mmag/
   skill_packages/          # Skill Manifest、Registry、Resolver 与契约校验
   capabilities/            # Capability Spec、Registry、bindings、Executor
   execution/               # Profile Registry、sandbox runner、工作区与 Artifact staging
+  renderers/               # 平台受信的 Renderer、主题和锁定依赖
   runtimes/                # LangGraph 默认 Runtime、可选 Claude SDK Adapter
   control_plane/           # Inbox/Outbox、Lifecycle、Approval、DLQ/replay
   governance/              # Policy、Model Policy、Secret、Quota、运维原语
@@ -168,15 +167,15 @@ src/mmag/
 
 ```text
 agents/<name>/agent.yml
-agents/<name>/prompts/...
-agents/<name>/schemas/...
-agents/<name>/evals/...
+agents/<name>/system.md             # 模型 Agent 才需要
+agents/<name>/{input,output}.schema.json
+agents/<name>/evals.yml             # 只有真实质量 case 时才需要
 ```
 
 启动时会：
 
 1. 扫描 `agents/*/agent.yml`，校验目录名与 Manifest name 一致；
-2. 严格校验 Prompt 变量、JSON Schema 和 eval case；
+2. 严格校验 Prompt 变量、JSON Schema 和可选质量 eval；
 3. 解析并校验 `policy_ref`、`model_policy_ref`；
 4. 解析 `skills.allow` 精确版本，并校验 Skill Required Capability 不会扩权；
 5. 解析 `execution_profiles.allow`，拒绝 Skill 申请 Agent 未允许的 Profile；
@@ -186,7 +185,7 @@ agents/<name>/evals/...
 
 版本保留在 `metadata.version`；源码历史交给 Git，发布历史交给制品仓库。CI 比较目标分支，Package 任意内容变化都必须提升 SemVer 并产生新的 Hash。
 
-Skill 同样使用扁平目录和 Manifest 内版本。`SKILL.md` 只描述工作方法，资源读取通过受预算约束的 `load_skill_resource` Capability；`scripts/` 不向模型披露，只能由受信 `ScriptExecutor` 在 Profile sandbox 中按 Hash 和固定 argv 执行。
+Skill 同样使用扁平目录和 Manifest 内版本。`SKILL.md` 描述工作方法，独立模板通过受预算约束的 `load_skill_resource` Capability 按需读取；可执行 Renderer 属于平台代码，不属于 Skill 资源。
 
 ## 安全边界
 

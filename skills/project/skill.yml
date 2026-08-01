@@ -3,13 +3,13 @@ kind: Skill
 
 metadata:
   name: project
-  version: 1.0.0
+  version: 1.1.0
   description: Convert scoped team evidence into a project plan or status brief.
 
 spec:
   instruction_ref: SKILL.md
-  input_schema_ref: schemas/input.schema.json
-  output_schema_ref: schemas/output.schema.json
+  input_schema_ref: input.schema.json
+  output_schema_ref: output.schema.json
 
   activation:
     intents: [project, plan, status]
@@ -27,13 +27,11 @@ spec:
 
   resources:
     templates:
-      - templates/brief.md
-    references:
-      - references/status.md
-    scripts: []
+      - brief.md
+    references: []
 
   disclosure:
-    max_resources: 2
+    max_resources: 1
     max_resource_bytes: 16384
     max_total_bytes: 24576
     max_estimated_tokens: 6000

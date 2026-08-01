@@ -40,7 +40,6 @@ _PACKAGE = AgentPackageLoader().load(
     Path(__file__).resolve().parents[1] / "agents/mmchat"
 )
 _SYSTEM_PROMPT = _PACKAGE.prompts[_PACKAGE.manifest.prompt.system_ref]
-_TASK_PROMPT = _PACKAGE.prompts[_PACKAGE.manifest.prompt.task_ref]
 
 
 # ============================================================
@@ -133,7 +132,6 @@ def test_context_includes_image_blocks(tmp_path):
         {"ch1": []},
         BotIdentity("BOT_ID", "test_bot"),
         _SYSTEM_PROMPT,
-        _TASK_PROMPT,
     )
 
     # 构造带 image blocks 的 post
@@ -181,7 +179,6 @@ def test_context_fallback_to_text_when_no_images(tmp_path):
         {"ch1": []},
         BotIdentity("BOT_ID", "test_bot"),
         _SYSTEM_PROMPT,
-        _TASK_PROMPT,
     )
 
     post = {
@@ -223,7 +220,6 @@ def test_llm_actually_sees_image(tmp_path):
             {sample["channel_id"]: []},
             BotIdentity("BOT_ID", "test_bot"),
             _SYSTEM_PROMPT,
-            _TASK_PROMPT,
         )
 
         # 1) 下载图 (在同一个 event loop 里)
@@ -293,7 +289,6 @@ def test_text_only_path_still_works():
         {"ch1": []},
         BotIdentity("BOT_ID", "test_bot"),
         _SYSTEM_PROMPT,
-        _TASK_PROMPT,
     )
 
     post = {

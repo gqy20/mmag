@@ -92,7 +92,6 @@ class SkillPackageLoader:
         resource_refs = (
             *manifest.resources.templates,
             *manifest.resources.references,
-            *manifest.resources.scripts,
         )
         resources = {ref: _file_asset(package_root, ref) for ref in resource_refs}
         self._validate_resource_assets(manifest, resources, package_root)
@@ -123,7 +122,7 @@ class SkillPackageLoader:
     @staticmethod
     def _validate_resources(manifest: SkillManifest) -> None:
         resources = manifest.resources
-        refs = (*resources.templates, *resources.references, *resources.scripts)
+        refs = (*resources.templates, *resources.references)
         if len(refs) != len(set(refs)):
             raise SkillManifestError("a Skill resource cannot have multiple resource kinds")
         disclosure = manifest.disclosure
@@ -196,7 +195,6 @@ class SkillPackageLoader:
             SkillResources(
                 tuple(resources["templates"]),
                 tuple(resources["references"]),
-                tuple(resources["scripts"]),
             ),
             SkillDisclosure(
                 spec["disclosure"]["max_resources"],
@@ -209,7 +207,8 @@ class SkillPackageLoader:
     @staticmethod
     def _load_evals(package_root: Path) -> dict[str, SkillEvalAsset]:
         assets: dict[str, SkillEvalAsset] = {}
-        for path in sorted((package_root / "evals").glob("*.yml")):
+        eval_path = package_root / "evals.yml"
+        for path in (eval_path,) if eval_path.is_file() else ():
             try:
                 raw = yaml.safe_load(path.read_text(encoding="utf-8"))
             except yaml.YAMLError as error:
@@ -228,8 +227,6 @@ class SkillPackageLoader:
                 tuple(MappingProxyType(case) for case in cases),
                 hashlib.sha256(path.read_bytes()).hexdigest(),
             )
-        if not assets:
-            raise SkillManifestError(f"Skill Package {package_root} has no eval suite")
         return assets
 
     @staticmethod

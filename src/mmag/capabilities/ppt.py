@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from importlib.resources import files
 from typing import TYPE_CHECKING, Any
 
 from ..skill_packages import get_skill_resource_session
@@ -16,23 +17,21 @@ if TYPE_CHECKING:
 PPT_PROFILE_REF = "ppt@2.1.0"
 ARTIFACT_PERMISSION = "artifact:generate"
 SHELL_PERMISSION = "execution:shell"
-THEMES = {"corp@1.0.0": "templates/corp.theme.json"}
+THEMES = {"corp@1.0.0": "ppt/themes/corp.json"}
 
 
 def _load_theme(theme_ref: str) -> tuple[dict[str, Any], str]:
-    session = get_skill_resource_session()
-    if session is None:
+    if get_skill_resource_session() is None:
         raise RuntimeError("presentation build requires an active Skill")
     try:
         resource_ref = THEMES[theme_ref]
-        asset = session.package.resources[resource_ref]
     except KeyError as error:
         raise ValueError(f"unknown presentation theme {theme_ref!r}") from error
-    path = session.package.root / resource_ref
-    content = path.read_bytes()
+    asset = files("mmag.renderers").joinpath(*resource_ref.split("/"))
+    if not asset.is_file():
+        raise RuntimeError("presentation theme is not installed")
+    content = asset.read_bytes()
     digest = hashlib.sha256(content).hexdigest()
-    if digest != asset.sha256:
-        raise RuntimeError("presentation theme no longer matches its Skill Package")
     theme = json.loads(content)
     metadata = theme.get("metadata", {})
     actual_ref = f"{metadata.get('name')}@{metadata.get('version')}"

@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: mmchat
-  version: 1.2.0
+  version: 1.3.0
   description: Participate in Mattermost conversations with bounded enterprise capabilities.
 
 spec:
@@ -20,8 +20,7 @@ spec:
 
   accepted_intents: [chat, mention, conversation]
   prompt:
-    system_ref: prompts/system.md
-    task_ref: prompts/task.md
+    system_ref: system.md
     required_variables:
       - current_time
       - bot_username
@@ -31,9 +30,8 @@ spec:
       - current_user_profile
       - recent_speakers
       - channel_members
-      - task_goal
-  input_schema_ref: schemas/input.schema.json
-  result_schema_ref: schemas/output.schema.json
+  input_schema_ref: input.schema.json
+  result_schema_ref: output.schema.json
   runtime:
     route: default
     max_turns: 10
@@ -54,7 +52,7 @@ spec:
     deny: []
   skills:
     allow:
-      - web-research@1.0.0
+      - web-research@1.1.0
     deny: []
   context:
     read_scopes: [conversation, project]

@@ -3,13 +3,13 @@ kind: Skill
 
 metadata:
   name: report
-  version: 1.0.0
+  version: 1.1.0
   description: Build a structured research report with an explicit evidence ledger.
 
 spec:
   instruction_ref: SKILL.md
-  input_schema_ref: schemas/input.schema.json
-  output_schema_ref: schemas/output.schema.json
+  input_schema_ref: input.schema.json
+  output_schema_ref: output.schema.json
 
   activation:
     intents: [report, research, 研报]
@@ -25,13 +25,11 @@ spec:
 
   resources:
     templates:
-      - templates/report.md
-    references:
-      - references/evidence.md
-    scripts: []
+      - report.md
+    references: []
 
   disclosure:
-    max_resources: 2
+    max_resources: 1
     max_resource_bytes: 16384
     max_total_bytes: 24576
     max_estimated_tokens: 6000

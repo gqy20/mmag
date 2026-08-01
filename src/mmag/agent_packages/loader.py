@@ -73,9 +73,7 @@ class AgentPackageLoader:
             raise ManifestValidationError("a capability cannot be both allowed and denied")
 
         prompt_registry = PromptRegistry(package_root, manifest.prompt.required_variables)
-        prompt_refs = [manifest.prompt.system_ref, manifest.prompt.task_ref]
-        if manifest.prompt.output_repair_ref:
-            prompt_refs.append(manifest.prompt.output_repair_ref)
+        prompt_refs = [manifest.prompt.system_ref] if manifest.prompt.system_ref else []
         for ref in prompt_refs:
             prompt_registry.load(ref)
         prompt_registry.validate_declaration()
@@ -97,7 +95,11 @@ class AgentPackageLoader:
             agent_name=manifest.metadata.name,
             agent_spec_version=manifest.metadata.version,
             package_hash=package_hash,
-            prompt_id=f"{manifest.metadata.name}:system-task",
+            prompt_id=(
+                f"{manifest.metadata.name}:system"
+                if manifest.prompt.system_ref
+                else f"{manifest.metadata.name}:none"
+            ),
             prompt_version=manifest.metadata.version,
             prompt_hash=prompt_hash,
             input_schema_version=schemas[manifest.input_schema_ref].version,
@@ -134,7 +136,8 @@ class AgentPackageLoader:
     @staticmethod
     def _load_evals(package_root: Path) -> dict[str, EvalAsset]:
         assets: dict[str, EvalAsset] = {}
-        for path in sorted((package_root / "evals").glob("*.yml")):
+        eval_path = package_root / "evals.yml"
+        for path in (eval_path,) if eval_path.is_file() else ():
             try:
                 raw = yaml.safe_load(path.read_text(encoding="utf-8"))
             except yaml.YAMLError as error:
@@ -170,8 +173,6 @@ class AgentPackageLoader:
                 tuple(MappingProxyType(dict(case)) for case in cases),
                 hashlib.sha256(path.read_bytes()).hexdigest(),
             )
-        if not assets:
-            raise ManifestValidationError(f"Agent Package {package_root} has no eval suite")
         return assets
 
     @staticmethod
@@ -180,7 +181,7 @@ class AgentPackageLoader:
         spec = raw["spec"]
         execution = spec["execution"]
         routing = spec["routing"]
-        prompt = spec["prompt"]
+        prompt = spec.get("prompt", {})
         runtime = spec["runtime"]
         capabilities = spec["capabilities"]
         context = spec["context"]
@@ -204,10 +205,8 @@ class AgentPackageLoader:
             ),
             tuple(spec["accepted_intents"]),
             PromptDeclaration(
-                prompt["system_ref"],
-                prompt["task_ref"],
-                prompt.get("output_repair_ref"),
-                tuple(prompt["required_variables"]),
+                prompt.get("system_ref"),
+                tuple(prompt.get("required_variables", ())),
             ),
             spec["input_schema_ref"],
             spec["result_schema_ref"],

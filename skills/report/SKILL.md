@@ -10,6 +10,9 @@ Use this workflow only inside the active Agent scope.
 6. Record missing coverage, stale evidence, conflicts, and inaccessible references as limitations.
 7. Return exactly the structured result contract; never manufacture outer-envelope provenance.
 
-Load references/evidence.md when credibility or conflicting sources need explicit treatment. Load
-templates/report.md only when the user requests a full decision memo. Avoid loading both for a
-short comparison.
+Prefer primary sources, direct observations, and dated enterprise records. For public sources,
+consider authority, publication date, method transparency, incentives, and independent
+confirmation. Search snippets, syndication, model memory, and unverified summaries are not
+independent evidence. Keep contradictions visible and lower confidence when sources are missing.
+
+Load `report.md` only when the user requests a full decision memo.

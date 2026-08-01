@@ -56,11 +56,10 @@
         "resources": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["templates", "references", "scripts"],
+          "required": ["templates", "references"],
           "properties": {
             "templates": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/safeRef"}},
-            "references": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/safeRef"}},
-            "scripts": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/safeRef"}}
+            "references": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/safeRef"}}
           }
         },
         "disclosure": {

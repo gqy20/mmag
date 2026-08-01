@@ -193,7 +193,7 @@ MCP 默认不连接；工具必须进入精确 allowlist。可见性不等于执
 新增或修改 Agent Package 时：
 
 - 使用 `agents/<name>/agent.yml` 扁平目录，目录名与 Manifest name 一致。
-- 提供真实 Prompt、输入/输出/Artifact Schema、Policy、Model Policy 和 eval。
+- 模型 Agent 提供真实 system Prompt；所有 Agent 提供输入/输出/Artifact Schema、Policy 和 Model Policy。领域质量 eval 可选。
 - 绑定精确版本的 Skill 与 Execution Profile。
 - Capability 必须来自已注册 Catalog；不得通过 Prompt 或 Manifest 自授权。
 - YAML 只能选择代码注册的稳定 Provider，不能填写 Python import 路径。
@@ -204,12 +204,11 @@ MCP 默认不连接；工具必须进入精确 allowlist。可见性不等于执
 
 新增或修改 Skill 时：
 
-- 必须包含 `skill.yml`、`SKILL.md` 和严格输入/输出 Schema。
+- 必须包含 `skill.yml`、`SKILL.md` 和严格输入/输出 Schema；领域质量 eval 可选。
 - required/optional Capability 必须是当前 Agent 已允许能力的子集。
 - Execution Profile 必须同时被 Agent Package 允许。
 - instruction 只描述工作方法；reference/template 按预算渐进披露。
-- `resources.scripts` 不进入模型上下文，不作为普通可披露资源。
-- Skill 脚本只能由受信 `ScriptExecutor` 按 Hash 和固定 Execution Profile 执行。
+- Skill 不拥有可执行脚本；平台受信 Renderer 只能由 `ScriptExecutor` 按 Hash 和固定 Execution Profile 执行。
 - Skill 不能通过路径、Prompt、脚本内容或 Manifest 自行启动进程。
 - Skill 内容变化必须提升版本并更新快照、测试和相关 Package 引用。
 
@@ -223,8 +222,7 @@ MCP 默认不连接；工具必须进入精确 allowlist。可见性不等于执
 - MUST 默认断网、清空父进程环境、限制可写目录和资源。
 - Sandbox、runtime 或依赖不可用时必须失败关闭，禁止回退到宿主机执行。
 - Secret 不得写入 Agent/Skill Manifest、Execution Profile、Prompt、日志或 Artifact。
-- Deep Agents 自主执行入口在 ADR-0007 的门禁完成前不得启用；当前 `resources.scripts` 也不得投影给
-  模型自由修改和执行。
+- Deep Agents 自主执行入口在 ADR-0007 的门禁完成前不得启用；平台 Renderer 不得投影给模型自由修改和执行。
 
 涉及执行面的修改至少考虑：命令注入、路径穿越、符号链接、环境泄漏、未授权网络、资源超限、
 跨 scope Artifact、重复恢复和缺失 Sandbox。

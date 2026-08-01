@@ -19,9 +19,11 @@ Agent Manifest
 ```text
 agents/<agent-name>/
   agent.yml
-  prompts/{system,task,output_repair}.md
-  schemas/{input,output,artifact}.schema.json
-  evals/contract-cases.yml
+  system.md                         # 模型 Agent 必需，direct Agent 不需要
+  input.schema.json
+  output.schema.json
+  artifact.schema.json             # 仅产生该类 Artifact 时需要
+  evals.yml                         # 仅存在真实质量案例时需要
 
 policies/<policy>.yml
 model-policies/<model-policy>.yml
@@ -37,7 +39,7 @@ execution-profiles/<profile>.yml
 
 - Agent 身份、版本和 Intent；
 - execution kind/provider 与 routing default/priority/keywords/scope；
-- system/task/repair Prompt 引用与必需变量；
+- 模型 Agent 的 system Prompt 引用与必需变量；
 - 输入、结果和 Artifact Schema；
 - Runtime route、轮次、deadline、重试；
 - Capability allow/deny；
@@ -59,7 +61,7 @@ execution-profiles/<profile>.yml
 3. Prompt 变量编译，拒绝未声明变量、未使用声明和缺失运行时变量；
 4. Draft 2020-12 Schema 校验并要求 `x-version`；
 5. Capability allow/deny 冲突检查；
-6. eval 文件结构、case ID 和期望字段校验；
+6. 可选 eval 文件结构、case ID 和期望字段校验；
 7. Manifest、Prompt、Schema 和 eval 内容 Hash 计算。
 
 `AgentPackageRegistry` 随后：
@@ -109,14 +111,16 @@ routing:
 - 执行前校验统一输入 Envelope；
 - Manifest allowlist 决定 Agent 可见的 Capability，支持显式 `mcp_*` 模式；
 - `SkillResolver` 只能从当前 Agent 的 Skill allowlist 选择，并进一步收窄模型可见工具与执行上下文；
-- Skill 被选中后只注入 `SKILL.md` 和资源目录；模板/参考资料通过 `load_skill_resource` 按步骤披露，scripts 永不进入 Runtime；
+- Skill 被选中后只注入 `SKILL.md` 和资源目录；独立模板通过 `load_skill_resource` 按步骤披露；
 - Capability 执行前由当前 Package 的 `policy_ref` 根据 actor、scope、role 和动态资源参数再次裁决；
 - 受管脚本只能由 Agent Profile allowlist、Skill Profile/Capability 声明、Policy 与 Profile command 的交集启动，模型不能提供命令、路径或 Python；
 - 返回后校验 result、Artifact 和统一输出 Envelope；
 - 预算超限直接失败；
 - provenance 来自运行时代码，模型不能伪造。
 
-`PackageAgentRunner` 对非法模型输出最多执行一次无 Capability 的结构修复；再次失败返回 `INVALID_OUTPUT`，不得把结果交给下游 Agent。
+任务消息和结构修复由平台统一生成，避免每个 Package 复制 `task.md` 和 `output_repair.md`。
+`PackageAgentRunner` 对非法模型输出最多执行一次无 Capability 的结构修复；再次失败返回
+`INVALID_OUTPUT`，不得把结果交给下游 Agent。
 
 ## 输入输出 Envelope
 
@@ -136,14 +140,14 @@ provenance 当前记录：
 
 ## 当前 Package
 
-- `mmchat@1.2.0`：Mattermost 默认对话 Agent；使用 `langgraph/text-v1`，允许 `web-research@1.0.0`；普通对话不拥有文件外发能力；
-- `link@1.2.0`：确定性链接分析 Agent；绑定 `link-read@1.0.0` 和专属只读 Policy；
-- `report@1.0.0`：结构化研报 Agent；绑定只读 `report@1.0.0` Skill；
-- `ppt@2.2.0`：演示文稿 Agent；绑定 `slides@2.2.0` 与 `ppt@2.1.0` Execution Profile，通过 `ppt.build` 生成可编辑 PPTX、源文件和 PNG 预览，并默认将 PPTX 送入审批交付；Demo 阶段显式开放宿主 `ppt.shell`；
-- `project@1.0.0`：项目助理 Agent；绑定 `project@1.0.0`，共享知识写入需要审批。
+- `mmchat@1.3.0`：Mattermost 默认对话 Agent；允许 `web-research@1.1.0`；
+- `link@1.3.0`：直接执行确定性链接分析，不再伪造 Skill 和 Prompt；
+- `report@1.1.0`：结构化研报 Agent；绑定只读 `report@1.1.0` Skill；
+- `ppt@2.3.0`：演示文稿 Agent；绑定 `slides@2.3.0` 与 `ppt@2.1.0` Execution Profile；
+- `project@1.1.0`：项目助理 Agent；绑定 `project@1.1.0`，共享知识写入需要审批。
 
-这些 Package 都具备 Manifest、Prompt、输入/输出与 Artifact Schema、Policy、预算、eval 和
-provenance。当前能力边界及下一步见 [数字员工清单](WORKERS.md)。
+模型 Package 具备 system Prompt；所有 Package 保留输入/输出契约、Policy、预算和 provenance。
+Package eval 只在存在领域质量案例时添加，通用 Loader/Schema 不变量由平台测试覆盖。
 
 ## 尚未完成的生产门禁
 

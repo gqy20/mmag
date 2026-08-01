@@ -69,6 +69,32 @@ def _render(asset: PromptAsset, variables: Mapping[str, Any]) -> str:
         raise PromptContractError(f"prompt {asset.ref!r} could not be rendered: {error}") from error
 
 
+def build_task_message(request: AgentRequest) -> str:
+    """Build the common request envelope once; domain workflow belongs to the active Skill."""
+    sections = [f"Goal:\n{request.prompt}"]
+    if request.parameters:
+        sections.append(
+            "Parameters:\n"
+            + json.dumps(request.parameters, ensure_ascii=False, sort_keys=True, default=str)
+        )
+    if request.context_refs:
+        sections.append("Context references:\n" + json.dumps(request.context_refs, ensure_ascii=False))
+    if request.artifact_refs:
+        sections.append(
+            "Artifact references:\n" + json.dumps(request.artifact_refs, ensure_ascii=False)
+        )
+    return "\n\n".join(sections)
+
+
+def _repair_message(invalid_output: str, error: Exception, schema: Mapping[str, Any]) -> str:
+    return (
+        "Repair the invalid output into exactly one JSON object matching the schema. "
+        "Preserve supported facts, do not invent values, and return no commentary.\n\n"
+        f"Validation error:\n{error}\n\nInvalid output:\n{invalid_output}\n\n"
+        f"Required JSON Schema:\n{_schema_json(schema)}"
+    )
+
+
 def build_agent_descriptor(
     package: AgentPackage, base: AgentDescriptor | None = None
 ) -> AgentDescriptor:
@@ -515,6 +541,8 @@ class PackageAgentRunner:
             ),
         }
         prompt = self.package.manifest.prompt
+        if prompt.system_ref is None:
+            raise AgentPackageError("model-backed Agent requires a system prompt")
         capabilities = self._capabilities
         if request.skill is not None:
             capabilities = tuple(
@@ -536,7 +564,7 @@ class PackageAgentRunner:
             messages=(
                 {
                     "role": "user",
-                    "content": _render(self.package.prompts[prompt.task_ref], variables),
+                    "content": build_task_message(request),
                 },
             ),
             system_prompt=system_prompt,
@@ -592,18 +620,10 @@ class PackageAgentRunner:
             SkillContractError,
             TypeError,
         ) as first_error:
-            repair_ref = prompt.output_repair_ref
-            if repair_ref is None:
-                raise InvalidAgentOutputError(str(first_error), direction="output") from first_error
-            repair_variables = {
-                **variables,
-                "invalid_output": runtime_result.text,
-                "validation_error": str(first_error),
-            }
-            repair_content = _render(self.package.prompts[repair_ref], repair_variables)
-            repair_content = (
-                f"{repair_content}\n\nExact required JSON Schema:\n"
-                f"{_schema_json(_expected_result_schema(self.package, request))}"
+            repair_content = _repair_message(
+                runtime_result.text,
+                first_error,
+                _expected_result_schema(self.package, request),
             )
             repair_request = replace(
                 runtime_request,

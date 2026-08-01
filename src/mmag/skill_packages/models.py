@@ -39,7 +39,6 @@ class SkillCapabilities:
 class SkillResources:
     templates: tuple[str, ...]
     references: tuple[str, ...]
-    scripts: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)

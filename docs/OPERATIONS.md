@@ -24,7 +24,7 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 
 - 启动时先加载 Skill Package，再解析 Agent 的 `skills.allow` 精确版本。未知 Skill、Hash 漂移或 Required Capability 超出 Agent allowlist 会阻止整批 Agent 注册。
 - 选中 Skill 后，模型 Tool Schema、CapabilityContext 和 Package Governance 同时收窄到该 Skill 的 required/available optional 集合。Skill 未声明的 Agent Capability 在本次请求不可执行。
-- `SKILL.md` 在选中后加载；模板和参考资料只能通过 `load_skill_resource` 按精确 ref 加载，并受数量、字节和估算 token 预算限制。`scripts/` 不向模型披露，只能由 Agent、Skill、Policy 和 Execution Profile 共同允许的窄口 Capability 执行。
+- `SKILL.md` 在选中后加载；独立模板和参考资料只能通过 `load_skill_resource` 按精确 ref 加载，并受数量、字节和估算 token 预算限制。平台 Renderer 只能由 Agent、Skill、Policy 和 Execution Profile 共同允许的窄口 Capability 执行。
 - Skill 资源首次按需加载时重新校验发布 Hash，之后按 Hash 缓存。审批 interrupt 保存已披露 ref，resume 只恢复这些资源；实际加载清单进入运行 provenance。
 - 每次 Capability 调用根据当前 Agent Package 的 `policy_ref` 动态选择 Policy；`mmchat`、
   `link`、`report`、`ppt` 和 `project` 均使用各自版本化 Policy，默认效果为 `deny`。

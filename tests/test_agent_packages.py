@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 
 from mmag.agent_packages import (
     AgentFactory,
@@ -56,12 +57,13 @@ def test_loader_compiles_flat_manifest_execution_prompts_schemas_and_version():
     package = AgentPackageLoader().load(PACKAGE_ROOT)
 
     assert package.manifest.metadata.name == "link"
-    assert package.snapshot.agent_spec_version == "1.2.0"
-    assert package.snapshot.prompt_version == "1.2.0"
+    assert package.snapshot.agent_spec_version == "1.3.0"
+    assert package.snapshot.prompt_version == "1.3.0"
     assert package.snapshot.input_schema_version == "1.0.0"
     assert len(package.snapshot.package_hash) == 64
     assert len(package.snapshot.eval_hash) == 64
-    assert package.evals
+    assert not package.evals
+    assert package.manifest.prompt.system_ref is None
     assert set(package.manifest.capabilities.allow) == {"analyze_link"}
     assert package.manifest.execution.provider == "single-v1"
     assert package.manifest.routing.requires_url is True
@@ -100,11 +102,11 @@ def test_registry_loads_flat_packages_and_resolves_governance_hashes():
     loaded = registry.load_directory(REPOSITORY_ROOT / "agents")
 
     assert {(item.manifest.metadata.name, item.manifest.metadata.version) for item in loaded} == {
-        ("link", "1.2.0"),
-        ("mmchat", "1.2.0"),
-        ("ppt", "2.2.0"),
-        ("project", "1.0.0"),
-        ("report", "1.0.0"),
+        ("link", "1.3.0"),
+        ("mmchat", "1.3.0"),
+        ("ppt", "2.3.0"),
+        ("project", "1.1.0"),
+        ("report", "1.1.0"),
     }
     snapshot = registry.get("mmchat").snapshot
     assert len(snapshot.policy_hash) == 64
@@ -261,9 +263,23 @@ class SequenceRuntime:
         return AgentResult(text=self.outputs.pop(0), runtime="stub")
 
 
+def _model_package(tmp_path):
+    root = tmp_path / "link"
+    shutil.copytree(PACKAGE_ROOT, root)
+    raw = yaml.safe_load((root / "agent.yml").read_text())
+    raw["spec"]["execution"] = {"kind": "langgraph", "provider": "json-v1"}
+    raw["spec"]["prompt"] = {
+        "system_ref": "system.md",
+        "required_variables": ["current_time"],
+    }
+    (root / "agent.yml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    (root / "system.md").write_text("Current time: {current_time}", encoding="utf-8")
+    return AgentPackageLoader().load(root)
+
+
 @pytest.mark.asyncio
-async def test_runtime_package_repairs_invalid_json_once_and_removes_tools():
-    package = AgentPackageLoader().load(PACKAGE_ROOT)
+async def test_runtime_package_repairs_invalid_json_once_and_removes_tools(tmp_path):
+    package = _model_package(tmp_path)
     runtime = SequenceRuntime(["not-json", json.dumps({"summary": "ok"})])
     agent = PackageAgentRunner(
         package,
@@ -278,14 +294,14 @@ async def test_runtime_package_repairs_invalid_json_once_and_removes_tools():
     assert runtime.requests[0].capabilities
     assert runtime.requests[1].capabilities == ()
     repair_prompt = runtime.requests[1].messages[0]["content"]
-    assert "Exact required JSON Schema" in repair_prompt
+    assert "Required JSON Schema" in repair_prompt
     assert '{"type": "object"}' in repair_prompt
     assert result.envelope["usage"]["model_calls"] == 2
 
 
 @pytest.mark.asyncio
-async def test_runtime_package_narrows_channel_argument_to_trusted_conversation():
-    package = AgentPackageLoader().load(PACKAGE_ROOT)
+async def test_runtime_package_narrows_channel_argument_to_trusted_conversation(tmp_path):
+    package = _model_package(tmp_path)
     capability_spec = CapabilitySpec(
         name="analyze_link",
         description="analyze",
@@ -317,8 +333,8 @@ async def test_runtime_package_narrows_channel_argument_to_trusted_conversation(
 
 
 @pytest.mark.asyncio
-async def test_runtime_package_returns_stable_invalid_output_after_one_repair():
-    package = AgentPackageLoader().load(PACKAGE_ROOT)
+async def test_runtime_package_returns_stable_invalid_output_after_one_repair(tmp_path):
+    package = _model_package(tmp_path)
     runtime = SequenceRuntime(["bad", "still bad"])
     agent = PackageAgentRunner(
         package,

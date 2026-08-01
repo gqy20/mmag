@@ -225,7 +225,7 @@ print('Bot 成员状态:', 'OK' if 'id' in data else 'NOT MEMBER')
 
 ### Q2: 启动时报 Prompt 缺少变量？
 
-Prompt 位于 `agents/<name>/prompts/`，运行时严格渲染。缺变量会拒绝执行，不再把 `{variable}` 原文发给用户。
+模型 Agent 的 Prompt 位于 `agents/<name>/system.md`，运行时严格渲染。缺变量会拒绝执行，不再把 `{variable}` 原文发给用户。
 
 **原因：** Prompt 使用了 Manifest `required_variables` 未声明的变量，或应用没有提供声明变量。
 

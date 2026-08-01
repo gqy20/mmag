@@ -17,11 +17,10 @@ Agent 与 Skill 是多对多关系，但一次 Skill 只能在已选择 Agent �
 skills/<skill-name>/
   skill.yml
   SKILL.md
-  schemas/{input,output}.schema.json
-  templates/...
-  references/...
-  scripts/...
-  evals/contract-cases.yml
+  input.schema.json
+  output.schema.json
+  <template>.md                    # 只有确需按需披露时添加
+  evals.yml                        # 只有领域质量案例时添加
 ```
 
 目录名必须等于 `metadata.name`。版本只保留在 `skill.yml` 的 `metadata.version`，不建立 `versions/` 层级。Git 保存源码历史，制品仓库保存发布历史，Package Hash 标识不可变内容。
@@ -34,27 +33,26 @@ kind: Skill
 
 metadata:
   name: web-research
-  version: 1.0.0
+  version: 1.1.0
   description: Plan, verify, and synthesize web research.
 
 spec:
   instruction_ref: SKILL.md
-  input_schema_ref: schemas/input.schema.json
-  output_schema_ref: schemas/output.schema.json
+  input_schema_ref: input.schema.json
+  output_schema_ref: output.schema.json
 
   activation:
     intents: [research, compare, report]
     keywords: [调研, 竞品, research]
     priority: 50
 
-  required_capabilities: [analyze_link, load_skill_resource]
+  required_capabilities: [analyze_link]
   optional_capabilities: [search_knowledge]
   execution_profiles: []
 
   resources:
-    templates: [templates/report.md]
-    references: [references/source-quality.md]
-    scripts: []
+    templates: []
+    references: []
 
   disclosure:
     max_resources: 3
@@ -65,7 +63,9 @@ spec:
 
 `required_capabilities` 必须全部属于 Agent 的 Capability allowlist，且部署时真实存在；缺少任意一项则拒绝选择。`optional_capabilities` 只在同时被 Agent 允许且已部署时加入本次能力集合。
 
-`templates/` 和 `references/` 是可披露的 UTF-8 文本资源；`scripts/` 会被校验和哈希，但永不进入资源目录或模型上下文。脚本只有同时绑定已注册 Execution Profile、窄口 Capability，并通过 Agent 与 Policy 后，才能由 `ScriptExecutor` 在 sandbox 中以固定 argv 执行；`SKILL.md`、脚本路径或 Manifest 都不能直接启动进程。
+只有确需延后读取的较大模板或参考资料才保留为独立 UTF-8 资源；始终使用的短规则直接写进
+`SKILL.md`。Skill 不拥有可执行脚本，平台受信 Renderer 由 Execution Profile 以固定 argv 调用；
+`SKILL.md`、资源路径或 Manifest 都不能直接启动进程。
 
 ## 三级渐进式披露
 
@@ -95,7 +95,7 @@ Agent Manifest 显式绑定带版本的 Skill：
 spec:
   skills:
     allow:
-      - web-research@1.0.0
+      - web-research@1.1.0
     deny: []
 ```
 
@@ -139,7 +139,7 @@ Agent 已解析能力
 
 因此，即使模型尝试调用 Agent 原本拥有、但当前 Skill 未声明的 Capability，也会在执行前失败。
 
-`load_skill_resource` 自身也是只读 Capability：必须同时被 Agent 和 Skill 允许，并通过当前 Package Policy。它只能访问当前 `SkillResourceSession`，不能指定其他 Skill，也不能读取未声明路径、绝对路径、目录穿越或 scripts。
+`load_skill_resource` 自身也是只读 Capability：必须同时被 Agent 和 Skill 允许，并通过当前 Package Policy。它只能访问当前 `SkillResourceSession`，不能指定其他 Skill，也不能读取未声明路径、绝对路径或目录穿越。
 
 ## 契约与 provenance
 
@@ -161,20 +161,19 @@ Skill 输入固定投影为 `intent`、`goal` 和 `parameters`，选择前执行
 
 1. 创建 `skills/<name>/skill.yml` 和 `SKILL.md`；
 2. 定义输入/输出 JSON Schema，并声明 `x-version`；
-3. 添加至少一个 `evals/*.yml` 契约 case；
+3. 有领域质量案例时添加根目录 `evals.yml`；通用契约不在每个包重复；
 4. 只声明完成流程真正需要的 Capability；
-5. 需要受管脚本时，在 Skill 声明精确 `execution_profiles`，同时让 Agent 显式允许相同 Profile；
+5. 需要受管执行时，在 Skill 声明精确 `execution_profiles`，同时让 Agent 显式允许相同 Profile；
 6. 在一个或多个 Agent 的 `skills.allow` 中绑定精确版本；
 7. 提升相关 Agent 的 `metadata.version`；
 8. 通过 Package 加载和定向契约测试后发布。
 
 当前包：
 
-- `web-research@1.0.0`：默认会话中的轻量研究；
-- `link-read@1.0.0`：确定性链接解析契约；
-- `report@1.0.0`：证据账本式研报流程；
-- `slides@2.2.0`：用受控 Markdown 与注册主题编排演示，通过 `ppt.build` 一次生成可编辑 PPTX、源文件和直接 PNG 预览，随后默认将 PPTX 送入审批交付；Demo 阶段可按 Agent/Policy 授权使用 `ppt.shell`；
-- `project@1.0.0`：项目计划和状态评估。
+- `web-research@1.1.0`：默认会话中的轻量研究；
+- `report@1.1.0`：证据账本式研报流程；
+- `slides@2.3.0`：用受控 Markdown 与平台注册 Renderer 生成演示；
+- `project@1.1.0`：项目计划和状态评估。
 
 绑定关系与实际权限见 [数字员工清单](WORKERS.md)。
 执行隔离和发布要求见 [受控执行平面](EXECUTION.md)。

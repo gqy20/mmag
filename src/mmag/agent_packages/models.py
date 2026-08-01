@@ -43,9 +43,7 @@ class RoutingDeclaration:
 
 @dataclass(frozen=True, slots=True)
 class PromptDeclaration:
-    system_ref: str
-    task_ref: str
-    output_repair_ref: str | None
+    system_ref: str | None
     required_variables: tuple[str, ...]
 
 

@@ -7,6 +7,8 @@ import hashlib
 import json
 import struct
 import zipfile
+from importlib.resources import as_file, files
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from ..capabilities import get_capability_context
@@ -269,16 +271,17 @@ class ScriptExecutor:
         skill: SkillPackage,
         command: ExecutionCommand,
     ):
+        del skill
         if command.script_ref is None:
             return None
-        if command.script_ref not in skill.manifest.resources.scripts:
-            raise ScriptExecutionError("command script is not declared by the active Skill")
-        asset = skill.resources[command.script_ref]
-        return self.workspaces.copy_asset(
-            workspace,
-            skill.root / command.script_ref,
-            expected_sha256=asset.sha256,
-        )
+        asset = self._renderer_asset(command.script_ref)
+        expected_sha256 = hashlib.sha256(asset.read_bytes()).hexdigest()
+        with as_file(asset) as path:
+            return self.workspaces.copy_asset(
+                workspace,
+                path,
+                expected_sha256=expected_sha256,
+            )
 
     def _copy_source(
         self,
@@ -305,14 +308,22 @@ class ScriptExecutor:
             expected_sha256=artifact.sha256,
         )
 
-    @staticmethod
-    def _script_hash(skill: SkillPackage, command: ExecutionCommand) -> str:
+    @classmethod
+    def _script_hash(cls, skill: SkillPackage, command: ExecutionCommand) -> str:
+        del skill
         if command.script_ref is None:
             return ""
-        try:
-            return skill.resources[command.script_ref].sha256
-        except KeyError as error:
-            raise ScriptExecutionError("command references an unregistered Skill script") from error
+        return hashlib.sha256(cls._renderer_asset(command.script_ref).read_bytes()).hexdigest()
+
+    @staticmethod
+    def _renderer_asset(ref: str):
+        path = PurePosixPath(ref)
+        if path.is_absolute() or ".." in path.parts or not path.parts:
+            raise ScriptExecutionError("command renderer reference is unsafe")
+        asset = files("mmag.renderers").joinpath(*path.parts)
+        if not asset.is_file():
+            raise ScriptExecutionError("command references an unknown platform renderer")
+        return asset
 
     @staticmethod
     def _validate_output(path, kind: str, max_bytes: int) -> None:

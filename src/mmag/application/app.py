@@ -221,13 +221,14 @@ class Agent:
             outbox_store=self.control_store,
         )
         attachment_processor = AttachmentProcessor(self.mm)
+        if default_package.manifest.prompt.system_ref is None:
+            raise RuntimeError("default Agent requires a system prompt")
         context_builder = ContextBuilder(
             self.mm,
             self.memory,
             self.working_memory,
             self.identity,
             default_package.prompts[default_package.manifest.prompt.system_ref],
-            default_package.prompts[default_package.manifest.prompt.task_ref],
         )
         self.message_handler = MessageHandler(
             mm_client=self.mm,

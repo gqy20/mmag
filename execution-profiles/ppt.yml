@@ -37,7 +37,7 @@ spec:
     - id: ppt.source
       permission: artifact:generate
       executable: node
-      script_ref: scripts/ppt.cjs
+      script_ref: ppt/ppt.cjs
       argv: ["{script}", "source", "--input", "{input}", "--output", "{output}"]
       output:
         filename: slides.md
@@ -48,7 +48,7 @@ spec:
     - id: ppt.render
       permission: artifact:generate
       executable: node
-      script_ref: scripts/ppt.cjs
+      script_ref: ppt/ppt.cjs
       argv: ["{script}", "render", "--input", "{input}", "--output", "{output}"]
       output:
         filename: deck.pptx
@@ -59,7 +59,7 @@ spec:
     - id: ppt.preview_svg
       permission: artifact:generate
       executable: node
-      script_ref: scripts/ppt.cjs
+      script_ref: ppt/ppt.cjs
       argv: ["{script}", "preview", "--input", "{input}", "--output", "{output}"]
       output:
         filename: preview.svg
@@ -81,7 +81,7 @@ spec:
     - id: ppt.shell
       permission: execution:shell
       executable: python
-      script_ref: scripts/shell.py
+      script_ref: ppt/shell.py
       argv: ["-I", "-B", "{script}", "--input", "{input}", "--output", "{output}"]
       output:
         filename: shell-result.json

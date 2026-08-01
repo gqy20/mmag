@@ -12,7 +12,12 @@ from ..capabilities import CapabilityEffect
 from ..runtimes import RunContext, RunRequest
 from .assets import render_prompt
 from .errors import AgentPackageError
-from .runtime import ContractAgentDecorator, PackageAgentRunner, build_agent_descriptor
+from .runtime import (
+    ContractAgentDecorator,
+    PackageAgentRunner,
+    build_agent_descriptor,
+    build_task_message,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -160,6 +165,8 @@ class LangGraphTextProvider:
                 **request.parameters,
             }
             prompt = package.manifest.prompt
+            if prompt.system_ref is None:
+                raise AgentPackageError("model-backed Agent requires a system prompt")
             selected_names = request.skill.capabilities if request.skill is not None else names
             system_prompt = render_prompt(package.prompts[prompt.system_ref], variables)
             if request.skill is not None:
@@ -178,7 +185,7 @@ class LangGraphTextProvider:
                 messages=(
                     {
                         "role": "user",
-                        "content": render_prompt(package.prompts[prompt.task_ref], variables),
+                        "content": build_task_message(request),
                     },
                 ),
                 system_prompt=system_prompt,

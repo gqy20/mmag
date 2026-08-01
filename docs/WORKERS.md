@@ -1,6 +1,6 @@
 # 数字员工与 Skill 清单
 
-> 更新时间：2026-08-01
+> 更新时间：2026-08-02
 
 当前实现对应“企业 AI Native 协同架构”示意图中的协同中枢和四类数字员工。所有数字员工通过
 `agents/*/agent.yml` 自动注册，LangGraph 是默认模型执行框架；Skill 通过 Agent 白名单选择，
@@ -10,14 +10,14 @@ Capability 调用再由当前 Package Policy 动态裁决。
 
 | Agent | Skill | 路由职责 | 当前可执行能力 | 结构化结果 |
 |---|---|---|---|---|
-| `mmchat@1.2.0` | `web-research@1.0.0` | 默认群聊/私聊协同入口 | 对话上下文、知识、链接与受控 MCP | 文本答复 |
-| `link@1.2.0` | `link-read@1.0.0` | 单 URL 解析 | 确定性 `analyze_link`，无模型循环 | `link_analysis` |
-| `report@1.0.0` | `report@1.0.0` | 研报、行业/竞品研究 | 当前频道知识/消息、公开链接、按需模板 | 证据账本式 research report |
-| `ppt@2.2.0` | `slides@2.2.0` | PPT、幻灯片、路演结构与文件生成 | 当前频道知识、受控 Markdown/主题、可编辑 PPTX/PNG 预览、Demo Shell、审批后 Artifact 交付 | Presentation Bundle 与 Artifact refs |
-| `project@1.0.0` | `project@1.0.0` | 项目计划、状态和任务拆解 | 当前频道消息/知识、审批后写入共享知识 | project brief |
+| `mmchat@1.3.0` | `web-research@1.1.0` | 默认群聊/私聊协同入口 | 对话上下文、知识、链接与受控 MCP | 文本答复 |
+| `link@1.3.0` | — | 单 URL 解析 | 确定性 `analyze_link`，无模型循环 | `link_analysis` |
+| `report@1.1.0` | `report@1.1.0` | 研报、行业/竞品研究 | 当前频道知识/消息、公开链接、按需模板 | 证据账本式 research report |
+| `ppt@2.3.0` | `slides@2.3.0` | PPT、幻灯片、路演结构与文件生成 | 当前频道知识、受控 Markdown/主题、可编辑 PPTX/PNG 预览、Demo Shell、审批后 Artifact 交付 | Presentation Bundle 与 Artifact refs |
+| `project@1.1.0` | `project@1.1.0` | 项目计划、状态和任务拆解 | 当前频道消息/知识、审批后写入共享知识 | project brief |
 
-`link` 保留确定性 Provider，因为单 URL 提取不需要增加模型成本和不确定性。它的 Skill 提供输入、
-输出与版本 provenance 契约，不把一个原子动作强行改造成多轮 Agent。
+`link` 直接执行确定性 Capability，因为单 URL 提取不需要模型和 Skill；输入、输出与版本
+provenance 由 Agent Package 契约负责。
 
 ## 权限交集
 
@@ -40,8 +40,8 @@ Agent Manifest allowlist
 
 `report`、`slides` 和 `project` 各自只在激活后注入 `SKILL.md` 和资源目录。模板和参考资料只有在
 模型调用 `load_skill_resource(ref)` 后才进入上下文，并受单资源、累计字节、资源数量和估算 token
-预算限制。`scripts/` 不可读取；`slides/scripts/ppt.cjs` 只能由 `ScriptExecutor` 校验 Hash 后在绑定的
-Execution Profile 中运行。
+预算限制。PPT Renderer 是平台代码，只能由 `ScriptExecutor` 校验 Hash 后在绑定的 Execution
+Profile 中运行。
 
 ## 当前交付边界
 

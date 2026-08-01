@@ -22,7 +22,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "execution", "routing", "accepted_intents", "prompt", "input_schema_ref", "result_schema_ref",
+        "execution", "routing", "accepted_intents", "input_schema_ref", "result_schema_ref",
         "runtime", "capabilities", "skills", "context", "policy_ref", "model_policy_ref",
         "budget", "artifacts"
       ],
@@ -68,11 +68,9 @@
         "prompt": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["system_ref", "task_ref", "required_variables"],
+          "required": ["system_ref", "required_variables"],
           "properties": {
             "system_ref": {"$ref": "#/$defs/safeRef"},
-            "task_ref": {"$ref": "#/$defs/safeRef"},
-            "output_repair_ref": {"$ref": "#/$defs/safeRef"},
             "required_variables": {"$ref": "#/$defs/nonEmptyStringArray"}
           }
         },
@@ -169,7 +167,16 @@
             }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"execution": {"properties": {"kind": {"const": "langgraph"}}}}
+          },
+          "then": {"required": ["prompt"]},
+          "else": {"not": {"required": ["prompt"]}}
+        }
+      ]
     }
   },
   "$defs": {

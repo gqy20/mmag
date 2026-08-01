@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: link
-  version: 1.2.0
+  version: 1.3.0
   description: Analyze one URL and return a source-preserving structured artifact.
 
 spec:
@@ -21,20 +21,8 @@ spec:
     scopes: ["mattermost:*"]
 
   accepted_intents: [link, url, 链接]
-  prompt:
-    system_ref: prompts/system.md
-    task_ref: prompts/task.md
-    output_repair_ref: prompts/output_repair.md
-    required_variables:
-      - current_time
-      - actor_name
-      - project_context
-      - task_goal
-      - invalid_output
-      - validation_error
-
-  input_schema_ref: schemas/input.schema.json
-  result_schema_ref: schemas/output.schema.json
+  input_schema_ref: input.schema.json
+  result_schema_ref: output.schema.json
 
   runtime:
     route: default
@@ -48,8 +36,7 @@ spec:
     deny: []
 
   skills:
-    allow:
-      - link-read@1.0.0
+    allow: []
     deny: []
 
   context:
@@ -67,4 +54,4 @@ spec:
   artifacts:
     produces:
       - kind: link_analysis
-        schema_ref: schemas/artifact.schema.json
+        schema_ref: artifact.schema.json

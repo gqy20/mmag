@@ -256,14 +256,12 @@ class ContextBuilder:
         working_memory: dict[str, list],
         identity: BotIdentity,
         system_prompt,
-        task_prompt,
     ):
         self.mm = mm_client
         self.memory = memory
         self.working_memory = working_memory
         self.identity = identity
         self.system_prompt = system_prompt
-        self.task_prompt = task_prompt
 
     def _profile_summary(self, user_id: str) -> str:
         if not user_id:
@@ -400,7 +398,7 @@ class ContextBuilder:
             + "]\n"
         )
         task_goal = f"{prefix}{post.get('username', '?')}: {post.get('message', '')}"
-        text = render_prompt(self.task_prompt, {"task_goal": task_goal})
+        text = task_goal
         blocks = post.get("_llm_content_blocks")
         current_content: Any = list(blocks) + [{"type": "text", "text": text}] if blocks else text
         messages.append({"role": "user", "content": current_content})

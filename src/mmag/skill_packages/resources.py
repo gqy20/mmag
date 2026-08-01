@@ -103,8 +103,6 @@ class SkillResourceSession:
             return "template"
         if ref in resources.references:
             return "reference"
-        if ref in resources.scripts:
-            raise SkillReferenceError(f"Skill script {ref!r} is not a disclosable resource")
         raise SkillReferenceError(f"Skill resource {ref!r} is not declared")
 
     def _check_budget(self, candidate: LoadedSkillResource) -> None:

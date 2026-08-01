@@ -22,7 +22,10 @@ execution-profiles/
 
 skills/slides/
   skill.yml               # execution_profiles: [ppt@2.1.0]
-  scripts/ppt.cjs         # 锁定依赖的离线 bundle，只哈希和执行，不向模型披露
+
+src/mmag/renderers/ppt/
+  ppt.cjs                 # 平台受信、锁定依赖的离线 bundle
+  themes/corp.json
 ```
 
 `ExecutionProfileLoader` 使用 Draft 2020-12 Schema 严格拒绝未知字段，并额外校验文件名、命令 ID、可信可执行文件、占位符和挂载边界。Registry 以 `name@version` 原子加载；Profile YAML Hash、runner、运行时镜像/依赖摘要与网络模式进入 Agent Package、Skill provenance 和 Artifact provenance。Profile 内容变化必须提升 SemVer，CI 会比较目标分支。
@@ -46,7 +49,7 @@ skills/slides/
 
 ```text
 input/      # 只读业务输入、同 scope 来源 Artifact
-assets/     # 只读且 SHA-256 匹配的 Skill 脚本
+assets/     # 只读且 SHA-256 匹配的平台 Renderer
 tmp/        # 进程临时文件
 staging/    # 唯一产物出口
 ```
