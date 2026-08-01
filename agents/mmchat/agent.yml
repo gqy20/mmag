@@ -1,0 +1,65 @@
+api_version: mmag.ai/v1
+kind: ManagedAgent
+
+metadata:
+  name: mmchat
+  version: 1.0.0
+  description: Participate in Mattermost conversations with bounded enterprise capabilities.
+
+spec:
+  execution:
+    kind: langgraph
+    provider: text-v1
+
+  routing:
+    default: true
+    priority: 0
+    keywords: []
+    requires_url: false
+    scopes: ["mattermost:*"]
+
+  accepted_intents: [chat, mention, conversation]
+  prompt:
+    system_ref: prompts/system.md
+    task_ref: prompts/task.md
+    required_variables:
+      - current_time
+      - bot_username
+      - bot_user_id
+      - current_user_id
+      - current_user_username
+      - current_user_profile
+      - recent_speakers
+      - channel_members
+      - task_goal
+  input_schema_ref: schemas/input.schema.json
+  result_schema_ref: schemas/output.schema.json
+  runtime:
+    route: default
+    max_turns: 10
+    timeout_seconds: 120
+    retry:
+      max_attempts: 2
+  capabilities:
+    allow:
+      - get_posts
+      - search_messages
+      - search_knowledge
+      - get_channel_info
+      - save_knowledge
+      - get_user_profile
+      - analyze_link
+      - send_file
+      - mcp_*
+    deny: []
+  context:
+    read_scopes: [conversation, project]
+    write_scopes: [conversation]
+  policy_ref: mmchat@1.0.0
+  model_policy_ref: reasoning-medium@1.0.0
+  budget:
+    max_model_calls: 10
+    max_tool_calls: 30
+    max_cost_usd: 5.0
+  artifacts:
+    produces: []

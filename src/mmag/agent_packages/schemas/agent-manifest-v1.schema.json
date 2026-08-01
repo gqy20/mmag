@@ -22,11 +22,48 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "accepted_intents", "prompt", "input_schema_ref", "result_schema_ref",
+        "execution", "routing", "accepted_intents", "prompt", "input_schema_ref", "result_schema_ref",
         "runtime", "capabilities", "context", "policy_ref", "model_policy_ref",
         "budget", "artifacts"
       ],
       "properties": {
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "provider"],
+          "properties": {
+            "kind": {"enum": ["langgraph", "capability"]},
+            "provider": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+            "capability": {"type": "string", "minLength": 1},
+            "source_argument": {"type": "string", "minLength": 1}
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"kind": {"const": "capability"}}},
+              "then": {"required": ["capability"]},
+              "else": {
+                "not": {
+                  "anyOf": [
+                    {"required": ["capability"]},
+                    {"required": ["source_argument"]}
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "routing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["default", "priority", "keywords", "requires_url", "scopes"],
+          "properties": {
+            "default": {"type": "boolean"},
+            "priority": {"type": "integer", "minimum": -1000, "maximum": 1000},
+            "keywords": {"$ref": "#/$defs/stringArray"},
+            "requires_url": {"type": "boolean"},
+            "scopes": {"$ref": "#/$defs/nonEmptyStringArray"}
+          }
+        },
         "accepted_intents": {"$ref": "#/$defs/nonEmptyStringArray"},
         "prompt": {
           "type": "object",
@@ -75,8 +112,8 @@
             "write_scopes": {"$ref": "#/$defs/stringArray"}
           }
         },
-        "policy_ref": {"type": "string", "minLength": 1},
-        "model_policy_ref": {"type": "string", "minLength": 1},
+        "policy_ref": {"$ref": "#/$defs/versionedRef"},
+        "model_policy_ref": {"$ref": "#/$defs/versionedRef"},
         "budget": {
           "type": "object",
           "additionalProperties": false,
@@ -111,6 +148,7 @@
   },
   "$defs": {
     "safeRef": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+    "versionedRef": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}@[0-9]+\\.[0-9]+\\.[0-9]+$"},
     "stringArray": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
     "nonEmptyStringArray": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
   }

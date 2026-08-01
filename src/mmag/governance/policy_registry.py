@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import TYPE_CHECKING
 
@@ -35,21 +36,29 @@ class PolicyDocumentError(ValueError):
 class PolicyRegistry:
     def __init__(self) -> None:
         self._engines: dict[str, PolicyEngine] = {}
+        self._hashes: dict[str, str] = {}
 
     def load_directory(self, root: Path) -> None:
         staged = dict(self._engines)
+        staged_hashes = dict(self._hashes)
         for path in sorted(root.glob("*.yml")):
             ref, engine = self._load(path)
             if ref in staged:
                 raise PolicyDocumentError(f"duplicate policy {ref!r}")
             staged[ref] = engine
+            staged_hashes[ref] = hashlib.sha256(path.read_bytes()).hexdigest()
         self._engines = staged
+        self._hashes = staged_hashes
 
     def get(self, ref: str) -> PolicyEngine:
         try:
             return self._engines[ref]
         except KeyError as error:
             raise LookupError(f"unknown policy {ref!r}") from error
+
+    def hash(self, ref: str) -> str:
+        self.get(ref)
+        return self._hashes[ref]
 
     @staticmethod
     def _load(path: Path) -> tuple[str, PolicyEngine]:
@@ -67,9 +76,7 @@ class PolicyRegistry:
             )
         if not isinstance(raw["rules"], list):
             raise PolicyDocumentError(f"policy {path} rules must be a list")
-        if not isinstance(raw["id"], str) or not re.fullmatch(
-            r"[a-z][a-z0-9-]{1,62}", raw["id"]
-        ):
+        if not isinstance(raw["id"], str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,62}", raw["id"]):
             raise PolicyDocumentError(f"policy {path} has an invalid id")
         if not isinstance(raw["version"], str) or not re.fullmatch(
             r"[0-9]+\.[0-9]+\.[0-9]+", raw["version"]

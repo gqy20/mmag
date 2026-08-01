@@ -13,7 +13,7 @@ from .base import (
     SourcePolicy,
 )
 from .bindings import bind_langgraph_capability, bind_sdk_capability
-from .builtin import create_builtin_capabilities
+from .builtin import build_builtin_bindings, build_sdk_bindings, create_builtin_capabilities
 from .catalog import (
     create_get_channel_info_capability,
     create_get_posts_capability,
@@ -30,15 +30,18 @@ from .context import (
 from .file import create_send_file_capability
 from .link import create_analyze_link_capability
 from .mcp import create_mcp_capability
+from .registry import CapabilityBinding, CapabilityRegistry
 
 __all__ = [
     "AuthorizationDecision",
     "CapabilityAuthorization",
+    "CapabilityBinding",
     "CapabilityContext",
     "CapabilityAuthorizer",
     "CapabilityEffect",
     "CapabilityExecutor",
     "CapabilityResult",
+    "CapabilityRegistry",
     "CapabilitySpec",
     "CapabilityStatus",
     "DeclaredPermissionAuthorizer",
@@ -46,6 +49,8 @@ __all__ = [
     "bind_langgraph_capability",
     "bind_sdk_capability",
     "bind_capability_context",
+    "build_builtin_bindings",
+    "build_sdk_bindings",
     "create_analyze_link_capability",
     "create_builtin_capabilities",
     "create_get_channel_info_capability",

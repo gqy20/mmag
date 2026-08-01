@@ -9,11 +9,11 @@ from mmag.capabilities import (
     CapabilityAuthorization,
     CapabilityEffect,
     CapabilityExecutor,
+    CapabilityRegistry,
     CapabilityStatus,
     SourcePolicy,
 )
 from mmag.mcp_bridge import MCPClientBridge, _stdio_environment
-from mmag.tools import ToolRegistry
 
 
 def _mcp_tool(name: str, *, read_only: bool | None = True):
@@ -44,14 +44,14 @@ def _mcp_result(payload: str):
 
 
 def test_external_mcp_tools_are_denied_by_default():
-    bridge = MCPClientBridge(ToolRegistry())
+    bridge = MCPClientBridge(CapabilityRegistry())
 
     assert bridge.is_tool_allowed("docs", "search") is False
 
 
 def test_external_mcp_allowlist_matches_exact_tool_name():
     bridge = MCPClientBridge(
-        ToolRegistry(),
+        CapabilityRegistry(),
         allowed_tools={"mcp_docs_search"},
     )
 
@@ -78,7 +78,7 @@ def test_stdio_environment_only_inherits_runtime_basics_and_explicit_server_valu
 
 @pytest.mark.asyncio
 async def test_empty_allowlist_skips_external_mcp_connections():
-    bridge = MCPClientBridge(ToolRegistry())
+    bridge = MCPClientBridge(CapabilityRegistry())
 
     with patch("mmag.mcp_bridge.read_mcp_config") as read_config:
         connected = await bridge.load_and_connect()
@@ -89,7 +89,7 @@ async def test_empty_allowlist_skips_external_mcp_connections():
 
 @pytest.mark.asyncio
 async def test_discovered_mcp_tool_uses_one_spec_for_both_runtime_bindings():
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     authorizer = MagicMock()
     authorizer.authorize.return_value = CapabilityAuthorization.allow()
     bridge = MCPClientBridge(
@@ -125,7 +125,7 @@ async def test_discovered_mcp_tool_uses_one_spec_for_both_runtime_bindings():
 
 @pytest.mark.asyncio
 async def test_mcp_policy_denial_is_identical_and_stops_both_bindings():
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     authorizer = MagicMock()
     authorizer.authorize.return_value = CapabilityAuthorization.deny("disabled")
     bridge = MCPClientBridge(
@@ -147,7 +147,7 @@ async def test_mcp_policy_denial_is_identical_and_stops_both_bindings():
 
 
 def test_only_allowlisted_discovered_tools_are_visible_to_both_runtimes():
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     bridge = MCPClientBridge(
         registry,
         allowed_tools={"mcp_docs_search"},

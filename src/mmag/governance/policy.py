@@ -31,6 +31,8 @@ class GovernanceContext:
     scope: str
     roles: frozenset[str] = frozenset()
     resources: Mapping[str, str] = field(default_factory=dict)
+    policy_ref: str = ""
+    allowed_capabilities: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "resources", MappingProxyType(dict(self.resources)))
@@ -132,6 +134,10 @@ def bind_governance_context(context: GovernanceContext) -> Iterator[None]:
         _GOVERNANCE_CONTEXT.reset(token)
 
 
+def get_governance_context() -> GovernanceContext | None:
+    return _GOVERNANCE_CONTEXT.get()
+
+
 class PolicyCapabilityAuthorizer:
     """CapabilityAuthorizer adapter used by both runtime bindings."""
 
@@ -143,6 +149,30 @@ class PolicyCapabilityAuthorizer:
     ) -> CapabilityAuthorization:
         context = _GOVERNANCE_CONTEXT.get() or GovernanceContext("anonymous", "*")
         decision = self.engine.evaluate(spec, arguments, context)
+        if decision.effect is PolicyEffect.DENY:
+            return CapabilityAuthorization.deny(decision.reason)
+        if decision.effect is PolicyEffect.REQUIRE_APPROVAL:
+            return CapabilityAuthorization.require_approval(decision.reason)
+        return CapabilityAuthorization.allow()
+
+
+class RegistryPolicyAuthorizer:
+    """Resolve the active Agent Package policy for every capability call."""
+
+    def __init__(self, registry) -> None:
+        self.registry = registry
+
+    def authorize(
+        self, spec: CapabilitySpec, arguments: Mapping[str, Any]
+    ) -> CapabilityAuthorization:
+        context = get_governance_context()
+        if context is None or not context.policy_ref:
+            return CapabilityAuthorization.deny("capability call has no Agent Package policy")
+        if not any(fnmatch(spec.name, name) for name in context.allowed_capabilities):
+            return CapabilityAuthorization.deny(
+                f"capability {spec.name!r} is outside the Agent Package allowlist"
+            )
+        decision = self.registry.get(context.policy_ref).evaluate(spec, arguments, context)
         if decision.effect is PolicyEffect.DENY:
             return CapabilityAuthorization.deny(decision.reason)
         if decision.effect is PolicyEffect.REQUIRE_APPROVAL:

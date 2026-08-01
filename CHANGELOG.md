@@ -12,6 +12,15 @@
 - 新增统一 Agent 输入/输出 Envelope 强制、Artifact Schema 校验和一次模型输出修复；二次失败返回稳定 `INVALID_OUTPUT`
 - Policy Engine 改为默认拒绝，新增版本化 Policy Registry；Link Agent 接入独立 Package 与只读执行策略
 - Agent、Policy、Model Policy 资源进入 wheel，成功结果携带完整版本 provenance
+- Agent Package 改为扁平 `agents/<name>/agent.yml`；版本保留在 Manifest，Policy、Model Policy 和 eval Hash 合入发布快照
+- 新增 YAML `execution/routing`、可信 Provider Registry 与 AgentFactory，Application 不再手工注册具体 Agent
+- 默认 `mmchat` Prompt 迁入严格 Agent Package；删除全局 `prompts.yml`、`PromptManager` 和宽松缺变量行为
+- 应用层拆为 composition root、消息编排、上下文/附件和 Delivery；删除 1617 行 `agent.py`
+- Agent 领域收口到 `agent_system/`，Capability runtime binding 收口到 `capabilities/`；删除 `managed_agents.py` 和 `tools/` 兼容入口
+- 默认消息主链强制经过 AgentRouter；移除没有 Package/Schema/Policy 的 Research、Project、Presentation 占位 Agent
+- 新增严格 Model Policy Registry，并让 `mmchat/link` 都通过 Package 自动注册
+- Capability 改为根据当前 Package 的 `policy_ref` 动态授权，删除全局 Bot Policy 绑定和专用 `LinkAgent`
+- Claude SDK 工具可见性收紧为“已绑定 Capability ∩ 当前 Package allowlist”，不再暴露 CLI 内置文件/命令工具
 - LangGraph 成为默认 Agent Runtime，接入官方 SQLite checkpointer、稳定 thread id 和原生 interrupt/resume
 - 人工审批在 Capability 副作用前暂停，支持 approve/edit/reject、Mattermost 批准/拒绝命令及进程重启后恢复
 - 移除无 checkpoint 的旧 LangGraph 循环与 `LegacyRuntimeAdapter`，Claude Agent SDK 改为显式 opt-in
@@ -19,28 +28,27 @@
 - 引入持久 Inbox/Outbox、按会话分区的并发调度和独立 Delivery worker；慢任务不再阻塞 WebSocket，投递重试不重跑 Agent
 - 新增统一 LifecycleService、五类状态机、乐观版本、命令幂等、append-only 转换历史和重启 reconciliation
 - 新增企业 Scope/Context、审批快照与恢复令牌、Artifact/Audit 模型，以及 Message/Profile/Knowledge/Summary/URL Repository 边界
-- 新增 Managed Agent Registry/Router、Link Agent、Research/Project/Presentation Agent 和容错 handoff
+- 新增 Managed Agent Registry/Router、Link Agent 和容错 handoff
 - 新增 Policy Engine、Secret Provider、敏感数据脱敏、Model Gateway、actor 成本配额、metrics 和 SQLite 在线备份工具
 - Mattermost 出站与附件进入带 timeout/retry 的共享异步连接池；trace context 改为任务级 ContextVar
 
-- 默认测试集合隔离 PoC 与真实外部服务测试，新增离线消息主链契约
+- 删除过期 SDK PoC 脚本；真实外部服务测试继续通过 marker 与默认离线集合隔离
 - 新增版本化 SQLite migration，支持旧库升级、失败回滚、历史校验和未来版本拒绝
 - 将 schema 初始化、旧 `message_cache` 迁移与 CJK FTS 预处理从 `Memory` 下沉到 SQLite infrastructure
 - Runtime 失败提示现在会投递给用户，不再被发送层静默丢弃
 - 重整 AI Native 路线图，明确工程门禁、Runtime、Capability、执行解耦和企业 Context 的实施顺序与验收标准
 - 收紧安全边界：Secret 日志仅报告是否配置、文件路径使用真实目录边界、未知 SDK/外部 MCP 工具默认拒绝
 - `Memory.log_message` 的主表与 FTS 写入失败时完整回滚，避免后续提交半成品事务
-- 新增统一 `make verify` 门禁：Ruff、255 个默认离线测试、分支覆盖率、mypy 与 wheel smoke
+- 新增统一 `make verify` 门禁：Ruff、默认离线测试、分支覆盖率、mypy 与 wheel smoke
 - 提交 `uv.lock` 并新增 GitHub Actions，CI 使用锁定依赖且不注入外部服务密钥
-- `prompts.yml` 作为 wheel 包资源发布，同时支持 `PROMPTS_PATH` 显式覆盖
 - 修复异步生成器工具被错误 `await`、二进制 WebSocket 消息和附件取消异常等类型检查发现的边界问题
 - 重连重放的 Mattermost post 在执行前按持久化 ID 去重，避免重复模型调用与回复
 - Mattermost 创建消息携带稳定 `pending_post_id`，连接错误、超时、429/5xx 最多重试 3 次，业务 4xx 不重试
 - 新增不可变 `RunContext` / `RunRequest` / `AgentResult`、`AgentRuntime` Protocol 和统一 Runtime 错误模型
 - Claude SDK 与 LangGraph 通过 Runtime 边界实现同一契约，统一 deadline、fallback 和错误翻译
-- `Agent` 与 `MemoryCompactor` 已迁移到 Runtime Port，不再依赖后端私有异常和返回结构
+- 应用服务与 `MemoryCompactor` 已迁移到 Runtime Port，不再依赖后端私有异常和返回结构
 - 新增不可变 `CapabilitySpec`、统一 `CapabilityExecutor`、策略元数据与稳定错误结果
-- `get_channel_info` 已成为首个 Capability 垂直切片，由同一规格生成 LangGraph ToolRegistry 与 Claude SDK binding
+- `get_channel_info` 已成为首个 Capability 垂直切片，由同一规格生成 LangGraph CapabilityRegistry 与 Claude SDK binding
 - `search_knowledge` 已迁移到 Capability Catalog，统一默认条数、上限、结果格式与两端绑定
 - `get_posts` 已迁移到 Capability Catalog，缓存优先、REST 回退与日志回填不再双重维护，并移出异步事件循环
 - `search_messages` 已迁移到 Capability Catalog，统一过滤条件、毫秒转换和结果格式，并修复 SDK 忽略零时间戳的行为漂移

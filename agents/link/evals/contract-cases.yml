@@ -7,4 +7,4 @@ cases:
   - id: rejects-missing-url
     intent: link
     goal: Analyze this
-    expect_error: LinkAgent requires an http(s) URL
+    expect_error: Agent 'link' requires argument 'url'

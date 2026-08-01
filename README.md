@@ -1,240 +1,167 @@
 # mmag — Mattermost AI Agent
 
-通过 WebSocket 实时连接 Mattermost，以 Bot 身份参与团队对话。
+mmag 通过 WebSocket 接入 Mattermost，以版本化 Agent Package、LangGraph Runtime 和默认拒绝的 Capability Policy 运行团队 Agent。
 
-## 架构
-
-核心数据流：
+## 核心架构
 
 ```text
-Mattermost WebSocket → InboundEvent → Inbox → conversation scheduler
-                                              ↓
-                                      Managed Agent / Runtime
-                                              ↓
-                              Capability + Policy + Lifecycle
-                                              ↓
-                                           Outbox
-                                              ↓
-                                Delivery → Mattermost REST
+Mattermost WebSocket
+  → Inbox / conversation scheduler
+  → application.MessageHandler
+  → agent_system.AgentRouter
+  → Agent Package contract
+  → LangGraph Runtime（默认）
+  → CapabilityRegistry → Policy → Executor
+  → Outbox / Delivery
+  → Mattermost REST
 ```
 
-关键点:
-- WebSocket 回调只负责持久接收；同会话串行、跨会话并发
-- Agent 执行与 Delivery 状态独立，失败投递不会重复调用模型
-- Lifecycle、审批、审计、配额和企业 Context 共用 SQLite 控制面
-- LangGraph 是默认 Agent Runtime，使用 SQLite checkpoint、稳定 `thread_id` 和原生 interrupt/resume
-- 待审工具在副作用前暂停；Mattermost 支持 `批准/拒绝 <approval_id>` 恢复原 Run
-- 工具系统统一在 `ToolRegistry`,内置工具 + MCP 注入工具走同一调度
-- Managed Agent 使用版本化 Agent Package；Manifest、Prompt、Schema、Policy 与运行时强制分层治理
-- Link Agent 已启用严格输入/输出/Artifact Schema、版本 provenance 与默认拒绝的专属 Policy
-- 记忆读写双向:消息实时写入 + 启动 backfill 补全,LLM 检索走 FTS5 BM25
+当前主链的关键约束：
+
+- WebSocket 只负责接收；同会话串行、跨会话并发；
+- `mmchat` 和 Link Agent 都必须经过 `AgentRouter`，不存在绕过 Router 的全局 Bot 路径；
+- `agents/*/agent.yml` 通过可信 Provider 自动构造并原子注册，Application 不感知具体 Agent 名称；
+- LangGraph 是默认 Runtime，使用 SQLite checkpoint 和原生 interrupt/resume；
+- `CapabilityRegistry` 是内置能力与 MCP 能力的唯一运行时注册表；
+- Manifest 约束能力可见性，当前 Package 的 Policy 根据 actor/scope/resource 动态裁决，Executor 在副作用前强制执行；
+- Prompt、输入/输出 Schema、eval、Policy 和 Model Policy 都进入版本化 Package 快照；
+- Delivery 与 Agent 执行状态独立，投递重试不会重复调用模型；
+- 全局 Policy 默认拒绝，文件外发和 MCP 副作用进入审批；
+- 失败 Inbox 支持 DLQ 查询和幂等 replay。
+
+更完整的 Package 契约见 [Agent Package 指南](docs/AGENT_PACKAGES.md)，实施状态见 [Roadmap](docs/ROADMAP.md)。
 
 ## 快速开始
 
-### 1. 环境要求
+要求 Python 3.12+、[uv](https://docs.astral.sh/uv/)、Mattermost Bot Token 和 Anthropic 兼容 API Key。
 
-- Python >= 3.11
-- [uv](https://docs.astral.sh/uv/)（包管理器）
-- 一个 Mattermost 服务器 + Bot Account Token
-- LLM API Key（支持 Anthropic Claude 或 StepFun 兼容接口）
-
-### 2. 配置
-
-复制或创建 `.env` 文件：
+创建 `.env`：
 
 ```bash
-# Mattermost
 MM_URL=https://your-mattermost-server
 MM_TOKEN=your-bot-token
-MM_TEAM_ID=                    # Team ID（可选，留空监听所有）
-MM_CHANNEL_ID=                 # Channel ID（可选，留空监听 Team 下所有频道）
+MM_TEAM_ID=
+MM_CHANNEL_ID=
 
-# LLM（二选一）
-ANTHROPIC_API_KEY=sk-xxx       # Anthropic / StepFun API Key
-ANTHROPIC_BASE_URL=            # 留空用官方 API，或填 StepFun 兼容地址
-ANTHROPIC_MODEL=step-3.7-flash # 模型名称
+ANTHROPIC_API_KEY=sk-xxx
+ANTHROPIC_BASE_URL=
+ANTHROPIC_MODEL=claude-sonnet-4-20250514
 
-# Agent
-# 触发策略: @/DM/thread 走硬规则,其他 LLM 自主决策(<SILENT> 标记沉默)
-MAX_CONTEXT_MESSAGES=100       # 上下文窗口消息数 (传给 LLM 的最近 N 条)
-MAX_CONTEXT_CHARS=10000        # 上下文窗口总字符上限 (按 token 粗估)
-MEMORY_SUMMARY_INTERVAL=100    # 每 N 条消息触发一次定期摘要
-MEMORY_CONTEXT_WINDOW=100      # 摘要时注入的前序上下文消息数
-PIPELINE_MAX_CONCURRENCY=8     # 跨会话并发
-PIPELINE_MAX_PENDING=256       # 入口背压上限
-RUNTIME_DEADLINE_SECONDS=120   # 单次 Agent Run deadline
-MODEL_BUDGET_USD=100           # 每 actor 的进程内成本上限
-USE_SDK_LLM=false              # 默认 LangGraph；仅显式需要时启用 Claude Agent SDK
-AGENT_PACKAGES_PATH=./agents   # Agent Package 根目录
-POLICIES_PATH=./policies       # 版本化 Policy-as-Code 根目录
+MAX_CONTEXT_MESSAGES=100
+MAX_CONTEXT_CHARS=30000
+MEMORY_SUMMARY_INTERVAL=100
+MEMORY_CONTEXT_WINDOW=100
+PIPELINE_MAX_CONCURRENCY=8
+PIPELINE_MAX_PENDING=256
+RUNTIME_DEADLINE_SECONDS=120
+MODEL_BUDGET_USD=100
+
+USE_SDK_LLM=false
+MCP_ALLOWED_TOOLS=
+AGENT_PACKAGES_PATH=./agents
+POLICIES_PATH=./policies
+MODEL_POLICIES_PATH=./model-policies
 ```
 
-Agent Package 的目录、Manifest 和发布约束见 [`docs/AGENT_PACKAGES.md`](docs/AGENT_PACKAGES.md)。
-
-> **不知道 Team/Channel ID？** 先运行 `make discover` 自动探测。
-
-### 3. 安装 & 运行
+安装和启动：
 
 ```bash
-# 安装依赖
-make install
-
-# 探测环境 ID（首次配置推荐）
+uv sync --locked --dev
 make discover
-
-# 启动 Agent
 make run
 ```
 
-## 使用指南
+Bot 的触发方式：
 
-### 命令
+1. `@bot`、DM、回复 Bot thread：确定性响应；
+2. 普通频道消息：由模型根据 Package Prompt 决定响应或输出 `<SILENT>`；
+3. “分析链接/Analyze link + URL”：路由到 Link Agent。
 
-| 命令 | 说明 |
-|------|------|
-| `make run` | 启动 Agent，连接 Mattermost 并开始监听 |
-| `make discover` | 探测服务器上的 Team / Channel / User ID |
-| `make install` | 以 editable 模式安装包 |
-| `make test` | 运行默认离线测试集 |
-| `make verify` | 执行与 CI 一致的 Ruff、coverage、mypy 和 wheel smoke 门禁 |
-| `make clean` | 清理缓存和编译文件 |
-
-### 开发与验证
+## 开发与验证
 
 ```bash
-# 按锁文件安装开发依赖
-uv sync --locked --dev
-
-# 提交前执行完整工程门禁
-make verify
+make test       # 默认离线测试
+make verify     # Ruff、coverage、mypy、wheel smoke
 ```
 
-默认测试不连接真实 Mattermost、LLM 或公网；这类验证标记为 `external`，需要显式执行。当前 coverage 分支覆盖率基线为 40%，类型检查覆盖 `src/mmag`。构建出的 wheel 会在临时目录解包，验证包、CLI 模块和内置 `prompts.yml` 均可脱离源码树加载。
-
-### Discover 高级用法
-
-```bash
-# 指定环境文件
-make discover -- --env .env2
-
-# 只看某个 Team
-make discover -- --team my-team
-
-# 探测后自动写入 .env
-make discover -- --update-env
-
-# JSON 输出（方便脚本处理）
-make discover -- --json
-```
-
-### 如何与 Bot 对话
-
-Bot 支持三种触发方式：
-
-1. **@提及** — 在消息中 `@<bot_username>`(由 MM_TOKEN 决定,如 `agent2`),必回复
-2. **DM 私聊** — 直接私聊 Bot，必回复
-3. **智能旁听** — 群聊中自动检测问题、帮忙请求等，按概率响应（默认 15%）
-
-无需斜杠命令，纯自然语言驱动。
+默认测试不访问真实 Mattermost、LLM 或公网。wheel smoke 会验证 Agent Prompt、Policy 和 Model Policy 能脱离源码树加载。
 
 ## 项目结构
 
-```
-├── Makefile                    # 快捷命令
-├── pyproject.toml              # 项目配置
-├── .env                        # 环境配置
-├── prompts.yml                 # 系统提示词模板
-├── src/mmag/
-│   ├── __init__.py             # 包入口 (暴露 Agent/Config)
-│   ├── cli.py                  # CLI 入口
-│   ├── config.py               # 配置加载 (.env)
-│   ├── prompts.py              # 提示词管理
-│   ├── logger.py               # 日志 (控制台 + 按日分文件 + 自动清理)
-│   ├── memory.py               # 记忆业务接口 (Layer 1+2)
-│   ├── memory_compactor.py     # 长期记忆压缩器
-│   ├── infrastructure/
-│   │   └── sqlite/             # SQLite 连接、版本化迁移与 FTS 预处理
-│   ├── runtimes/               # LangGraph 默认 Runtime、HITL 与可选 SDK Adapter
-│   ├── capabilities/           # 单一能力规格、统一执行器与 Runtime bindings
-│   ├── control_plane/          # Inbox/Outbox、Lifecycle、Context、Approval
-│   ├── governance/             # Policy、Secret、Model Gateway、Quota、运维原语
-│   ├── managed_agents.py       # Agent Registry、Router、handoff 与 Link Agent
-│   ├── repositories.py         # 专用 Memory Repository 边界
-│   ├── llm.py                  # Anthropic 模型客户端（图编排位于 runtimes/）
-│   ├── client.py               # Mattermost REST API 客户端 (元数据缓存)
-│   ├── url_analyzer.py         # 链接分析 (GitHub / Trafilatura / SSRF 防护)
-│   ├── mcp_bridge.py           # MCP 外部工具桥接 (.mcp.json)
-│   ├── ws_client.py            # Mattermost WebSocket 协议实现
-│   ├── agent.py                # 核心 Agent (编排消息处理 + 工具调用)
-│   ├── discover.py             # 环境 ID 探测工具
-│   └── tools/                  # 工具注册 + 内置工具集
-│       ├── registry.py
-│       └── builtin.py
-└── docs/
-    ├── adr/                     # 已接受的架构决策记录
-    ├── AI_NATIVE_REFACTORING.md # AI Native 目标架构与设计理由
-    ├── ROADMAP.md               # 当前状态、后续步骤与验收标准
-    ├── TECH_DEBT.md             # 已知技术债清单
-    ├── OPERATIONS.md            # 私有化部署、备份恢复与告警基线
-    └── MATTERMOST_ID_GUIDE.md   # Mattermost ID 层级参考
+```text
+agents/
+  mmchat/
+    agent.yml
+    prompts/
+    schemas/
+    evals/
+  link/
+    agent.yml
+    prompts/
+    schemas/
+    evals/
+
+policies/                  # 默认拒绝的 Policy-as-Code
+model-policies/            # 模型路由、输出预算和采样策略
+
+src/mmag/
+  application/             # Composition root、消息编排、上下文/附件、Delivery
+  agent_system/            # Agent 契约、Registry、Router、通用 Capability Agent
+  agent_packages/          # Manifest、Provider Factory、契约加载与运行时强制
+  capabilities/            # Capability Spec、Registry、bindings、Executor
+  runtimes/                # LangGraph 默认 Runtime、可选 Claude SDK Adapter
+  control_plane/           # Inbox/Outbox、Lifecycle、Approval、DLQ/replay
+  governance/              # Policy、Model Policy、Secret、Quota、运维原语
+  infrastructure/          # 持久化基础设施
+  memory.py                # 记忆业务 Facade
+  memory_compactor.py      # 长期记忆压缩
+  mcp_bridge.py            # MCP discovery → Capability
+  client.py                # Mattermost REST Client
+  ws_client.py             # Mattermost WebSocket Client
+  llm.py                   # Anthropic 模型客户端
+  cli.py                   # CLI 入口
 ```
 
-## 文档导航
+旧的 `agent.py`、`managed_agents.py`、`tools/`、全局 `prompts.yml` 和手写 Agent loop 入口已经删除；新代码不得重新引入这些兼容层。
 
-- [AI Native 重构方案](docs/AI_NATIVE_REFACTORING.md)：目标架构、设计原则与阶段依赖；
-- [实施路线图](docs/ROADMAP.md)：当前完成情况、下一步任务和各阶段退出标准；
-- [技术债清单](docs/TECH_DEBT.md)：具体问题、风险和建议拆分方向；
-- [Runtime 选择 ADR](docs/adr/0001-runtime-selection.md)：LangGraph 默认 Runtime 与可选 SDK 边界；
-- [Capability 授权 ADR](docs/adr/0002-capability-authorization.md)：写能力三态裁决与副作用前审批；
-- [LangGraph HITL ADR](docs/adr/0005-langgraph-native-hitl.md)：checkpoint、interrupt、resume 与生命周期同步；
-- [请求级 Capability Context ADR](docs/adr/0003-request-scoped-capability-context.md)：异步上下文隔离与持久 SDK 桥接策略；
-- [MCP Capability Adapter ADR](docs/adr/0004-mcp-capability-adapter.md)：外部工具发现、双 Runtime binding 与统一 Policy；
-- [资源级 Policy 与恢复 ADR](docs/adr/0006-resource-policy-and-replay.md)：动态资源约束、MCP/URL 隔离和 Inbox replay；
-- [Mattermost ID 指南](docs/MATTERMOST_ID_GUIDE.md)：Team、Channel 和 User ID 的获取与配置。
+## Agent Package 注册规则
 
-## 记忆系统
+```text
+agents/<name>/agent.yml
+agents/<name>/prompts/...
+agents/<name>/schemas/...
+agents/<name>/evals/...
+```
 
-Bot 具备跨会话持久记忆：
+启动时会：
 
-| 类型 | 存储内容 | 说明 |
-|------|----------|------|
-| **消息日志** | 原始消息 + FTS5 索引 | 永久，启动时 backfill 补全历史，供 LLM 检索/回顾 |
-| **用户画像** | 专业领域、偏好风格 | 跟踪每个用户的特征 |
-| **团队知识** | 关键事实 + 置信度 | 从对话中提取并积累 |
-| **对话摘要** | 话题摘要 + 要点 | 长期，定期压缩（不删原消息） |
+1. 扫描 `agents/*/agent.yml`，校验目录名与 Manifest name 一致；
+2. 严格校验 Prompt 变量、JSON Schema 和 eval case；
+3. 解析并校验 `policy_ref`、`model_policy_ref`；
+4. 将 Prompt/Schema/eval/Policy/Model Policy Hash 写入 Package 快照；
+5. 根据 `execution.kind/provider` 选择可信 Provider 并构造 Agent；
+6. 校验唯一默认 Agent、路由冲突和 Capability allowlist 后原子注册。
 
-数据存储在本地 SQLite (`agent_memory.db`)。
+版本保留在 `metadata.version`；源码历史交给 Git，发布历史交给制品仓库。CI 比较目标分支，Package 任意内容变化都必须提升 SemVer 并产生新的 Hash。
 
-## 多环境支持
+## 安全边界
 
-项目可维护多份 `.env` 配置：
+- MCP 默认不连接；`MCP_ALLOWED_TOOLS` 必须精确列出 `mcp_<server>_<tool>`；
+- MCP stdio 子进程只继承最小运行环境，不继承 Mattermost/模型 Secret；
+- Claude SDK 只暴露 in-process MMAG Capability，且每次调用再次匹配当前 Package allowlist；SDK CLI 内置文件/命令工具不对 Bot 开放；
+- URL 分析禁用环境代理和自动重定向，每次跳转重新执行 DNS/IP SSRF 校验；
+- 频道、用户和文件目标使用可信请求 Context 做资源级匹配；
+- Secret 不得写入 Agent Manifest、Prompt、Policy 或日志；
+- 未知 Agent、未知 Capability、缺失 Scope 或未命中 Policy 均拒绝。
 
-| 文件 | 用途 |
-|------|------|
-| `.env` | 主环境（默认加载） |
-| `.env1` | 备选服务器 |
-| `.env2` | 同服务器不同频道 |
-| `.env3` | 本地 Docker 开发 |
+## 文档
 
-切换环境：修改 `discover.py` 中的 `--env` 参数指向对应文件。
-
-## 技术细节
-
-- **WebSocket 协议**：完整实现 Mattermost 官方协议（握手认证、序列号校验、30s 心跳、指数退避重连）
-- **断线续传**：通过 `connection_id` + `sequence_number` 实现断线后恢复
-- **消息永久存储**：`message_log` 表只增不删，启动时 backfill 补全 Mattermost 端所有历史；FTS5 虚表（unicode61）支持中英文 BM25 全文检索
-- **Schema 演进**：启动时按版本顺序执行原子 migration；支持旧库字段补齐、`message_cache` 数据/FTS 迁移、失败回滚及未来版本拒绝
-- **MCP 权限**：外部 MCP 默认不连接，需通过 `MCP_ALLOWED_TOOLS` 精确授权 `mcp_<server>_<tool>`；命中后仍统一进入默认拒绝 Policy，调用默认需审批，stdio 子进程只继承最小运行环境
-- **资源级 Policy**：全局 Bot 不再使用兼容 ALLOW；频道/用户参数必须匹配请求上下文中的真实资源，文件外发进入 LangGraph 原生审批
-- **链接安全**：URL 客户端禁用自动重定向和环境代理，每个重定向目标都重新执行 DNS/IP SSRF 校验
-- **失败恢复**：处理失败的 Inbox 可按频道查询为 DLQ；人工 replay 使用新 `event_id`，保留原失败证据并通过调用方 `replay_id` 幂等
-- **消息可靠性**：重复 `posted` 事件在 Runtime 调用前按持久化 post ID 去重；创建回复使用 `pending_post_id` 对瞬时故障做有界幂等重试
-- **Runtime 边界**：应用层统一使用不可变 `RunRequest` / `AgentResult`；LangGraph 默认持久运行，Claude SDK 仅显式启用
-- **Prompt 资源**：默认使用 wheel 内置 `prompts.yml`；开发时可设置 `PROMPTS_PATH` 显式覆盖
-- **工程门禁**：`make verify` 是本地与 CI 的统一入口，依赖由提交到仓库的 `uv.lock` 固定
-- **长期运行注意**：message_log 持续累积，生产环境建议定期 `VACUUM INTO` 归档老消息（参考月度一次），避免 SQLite 库文件膨胀影响性能（数据保留周期按团队合规要求自行决定）
-- **LLM 适配**：`AsyncAnthropic` 原生异步客户端（SDK 内置 `max_retries=2`）；Agentic Tool Use 循环 + ThinkingBlock 自动过滤
-- **LLM 兼容**：通过 `ANTHROPIC_BASE_URL` 支持 StepFun 等兼容接口；调用失败抛 `LLMError` 由 agent 层转成用户友好提示
+- [Agent Package](docs/AGENT_PACKAGES.md)
+- [AI Native 架构](docs/AI_NATIVE_REFACTORING.md)
+- [Roadmap](docs/ROADMAP.md)
+- [技术债](docs/TECH_DEBT.md)
+- [运维指南](docs/OPERATIONS.md)
+- [架构决策记录](docs/adr/)
 
 ## License
 

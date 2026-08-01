@@ -41,11 +41,11 @@ sync:
 	@echo "✅ 依赖已同步"
 
 lint:
-	uv run ruff check src tests --exclude tests/poc
+	uv run ruff check src tests scripts
 	@echo "✅ Lint 通过"
 
 format:
-	uv run ruff format src tests --exclude tests/poc
+	uv run ruff format src tests scripts
 	@echo "✅ 格式化完成"
 
 test:

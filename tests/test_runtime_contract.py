@@ -43,11 +43,10 @@ def _request(**overrides) -> RunRequest:
 
 def _adapter(adapter_type):
     backend = SimpleNamespace(
-        agent_loop=AsyncMock(return_value="done"),
+        run_agent=AsyncMock(return_value="done"),
         chat=AsyncMock(return_value="recovered"),
     )
-    registry = object()
-    return adapter_type(backend, tool_registry=registry), backend, registry
+    return adapter_type(backend), backend
 
 
 def test_runtime_contract_values_are_immutable():
@@ -85,26 +84,22 @@ def test_runtime_errors_are_classified(error, expected):
 
 @pytest.mark.asyncio
 async def test_claude_adapter_returns_structured_result():
-    adapter, backend, registry = _adapter(ClaudeSDKRuntimeAdapter)
+    adapter, backend = _adapter(ClaudeSDKRuntimeAdapter)
 
     result = await adapter.run(_request())
 
     assert isinstance(adapter, AgentRuntime)
     assert result == AgentResult(text="done", runtime="claude-sdk")
-    backend.agent_loop.assert_awaited_once_with(
+    backend.run_agent.assert_awaited_once_with(
         messages=[{"role": "user", "content": "hello"}],
         system="system",
-        tools=[{"name": "get_posts"}],
-        tool_registry=registry,
-        max_rounds=4,
-        max_tokens=2048,
     )
 
 
 @pytest.mark.asyncio
 async def test_claude_adapter_owns_the_no_tools_fallback():
-    adapter, backend, _registry = _adapter(ClaudeSDKRuntimeAdapter)
-    backend.agent_loop.return_value = "⚠️ 处理超时，请重试"
+    adapter, backend = _adapter(ClaudeSDKRuntimeAdapter)
+    backend.run_agent.return_value = "⚠️ 处理超时，请重试"
 
     result = await adapter.run(_request())
 
@@ -118,10 +113,10 @@ async def test_claude_adapter_owns_the_no_tools_fallback():
 
 @pytest.mark.asyncio
 async def test_claude_adapter_translates_backend_errors():
-    adapter, backend, _registry = _adapter(ClaudeSDKRuntimeAdapter)
+    adapter, backend = _adapter(ClaudeSDKRuntimeAdapter)
     error = SDKLLMError("request failed")
     error.__cause__ = TimeoutError("deadline exceeded")
-    backend.agent_loop.side_effect = error
+    backend.run_agent.side_effect = error
 
     with pytest.raises(RuntimeTimeoutError) as raised:
         await adapter.run(_request())
@@ -132,7 +127,7 @@ async def test_claude_adapter_translates_backend_errors():
 
 @pytest.mark.asyncio
 async def test_expired_deadline_fails_before_calling_backend():
-    adapter, backend, _registry = _adapter(ClaudeSDKRuntimeAdapter)
+    adapter, backend = _adapter(ClaudeSDKRuntimeAdapter)
     context = _request().context
     expired = RunContext(
         trace_id=context.trace_id,
@@ -145,4 +140,4 @@ async def test_expired_deadline_fails_before_calling_backend():
     with pytest.raises(RuntimeTimeoutError):
         await adapter.run(_request(context=expired))
 
-    backend.agent_loop.assert_not_awaited()
+    backend.run_agent.assert_not_awaited()

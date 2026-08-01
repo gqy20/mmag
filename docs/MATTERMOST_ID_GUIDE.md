@@ -222,20 +222,13 @@ print('Bot 成员状态:', 'OK' if 'id' in data else 'NOT MEMBER')
 | 消息被折叠（thread） | 点击 `查看线程` 展开回复 |
 | 缓存问题 | 清除浏览器缓存后刷新 |
 
-### Q2: 回复内容出现 `{bot_username}` 字面量？
+### Q2: 启动时报 Prompt 缺少变量？
 
-这是 **YAML 模板变量未渲染** 的症状。
+Prompt 位于 `agents/<name>/prompts/`，运行时严格渲染。缺变量会拒绝执行，不再把 `{variable}` 原文发给用户。
 
-**原因：** `prompts.yml` 中使用了 `{{var}}`（Jinja2 格式），但代码用 `str.format()` 渲染。双花括号被 Python 当作字面量。
+**原因：** Prompt 使用了 Manifest `required_variables` 未声明的变量，或应用没有提供声明变量。
 
-**修复：** 确保 `prompts.yml` 中所有变量用单花括号 `{var}`：
-```yaml
-# ❌ 错误 (输出字面量 {bot_username})
-system_prompt: "你是 {{bot_username}}"
-
-# ✅ 正确 (渲染为 agent2)
-system_prompt: "你是 {bot_name}"
-```
+**修复：** 同时更新 Prompt 和对应版本的 `agent.yml`，运行 Package/eval 测试后发布新 SemVer；不要直接修改已经发布的版本。
 
 ### Q3: Team ID 和 Channel ID 搞混了？
 
@@ -253,7 +246,7 @@ MM_CHANNEL_ID → 频道 (如 test2)    → 9d7qi63zsir7zjt41pecd3h5oy
 检查日志中的关键标记：
 ```
 [1/5] ✅ 配置加载完成        ← 配置 OK
-[2/5] ✅ 提示词模板已加载      ← prompts.yml OK
+[2/5] ✅ Agent Package 已加载   ← Prompt/Schema/Policy/eval OK
 [3/5] ✅ 记忆系统就绪          ← SQLite OK
        ✅ Bot: @test (ruzf...) ← 身份认证 OK
 [4/5] ✅ WebSocket 已连接      ← 连接成功
@@ -293,9 +286,9 @@ MM_CHANNEL_ID → 频道 (如 test2)    → 9d7qi63zsir7zjt41pecd3h5oy
          ↕ WebSocket (官方协议)
          ↕ REST API (/api/v4/posts)
 ┌─────────────────────────────────────────────────┐
-│              AI Agent (agent.py)                │
+│          MMAG application + AgentRouter          │
 │                                                  │
-│  Config ← .env  |  Prompts ← prompts.yml        │
+│  Config ← .env  |  Prompt ← Agent Package       │
 │  Memory ← SQLite  |  LLM ← StepFun API          │
 │                                                  │
 │  用户: gqy (fdfqdm8nwpri9q1e98kmksoh3r)         │

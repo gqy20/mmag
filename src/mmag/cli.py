@@ -4,7 +4,7 @@ CLI 入口
 
 import asyncio
 
-from .agent import Agent
+from .application import Agent
 from .config import config
 from .logger import get_logger, init_logging
 

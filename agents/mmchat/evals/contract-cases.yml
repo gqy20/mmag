@@ -1,0 +1,10 @@
+version: 1
+cases:
+  - id: explicit-mention
+    intent: mention
+    goal: "@agent2 summarize the decision"
+    expect: succeeded
+  - id: ambient-chat
+    intent: chat
+    goal: "团队正在讨论发布节奏"
+    expect: succeeded

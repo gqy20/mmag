@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/agents/mmchat/input/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "run_id", "intent", "actor", "scope", "goal", "parameters", "context_refs", "artifact_refs"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "intent": {"enum": ["chat", "mention", "conversation"]},
+    "actor": {"type": "object", "additionalProperties": false, "required": ["id"], "properties": {"id": {"type": "string", "minLength": 1}}},
+    "scope": {"type": "object", "additionalProperties": false, "required": ["resource"], "properties": {"resource": {"type": "string", "minLength": 1}}},
+    "goal": {"type": "string", "minLength": 1},
+    "parameters": {"type": "object"},
+    "context_refs": {"type": "array", "items": {"type": "string"}},
+    "artifact_refs": {"type": "array", "items": {"type": "string"}}
+  }
+}

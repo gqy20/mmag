@@ -66,6 +66,7 @@ class LangGraphApprovalCoordinator:
                 "thread_id": payload["thread_id"],
                 "interrupt_id": interruption["id"],
                 "tool_calls": tool_calls,
+                "governance_context": payload.get("governance_context", {}),
                 **(
                     {"capability_context": payload["capability_context"]}
                     if "capability_context" in payload
@@ -134,13 +135,21 @@ class LangGraphApprovalCoordinator:
             trace_id=str(original_context.get("trace_id") or trace_id),
             actor_id=request.requested_by,
             conversation_id=str(
-                original_context.get("conversation_id")
-                or request.scope_id.rsplit("/", 1)[-1]
+                original_context.get("conversation_id") or request.scope_id.rsplit("/", 1)[-1]
             ),
             message_id=str(original_context.get("message_id") or request_id),
             message=str(original_context.get("message") or "approval resume"),
             scope=request.scope_id,
         )
+        governance = payload.get("governance_context", {})
+        if not isinstance(governance, dict):
+            governance = {}
+        allowed_capabilities = governance.get("allowed_capabilities", ())
+        roles = governance.get("roles", ())
+        if not isinstance(allowed_capabilities, (list, tuple)):
+            allowed_capabilities = ()
+        if not isinstance(roles, (list, tuple)):
+            roles = ()
         self._transition_run(thread_id, "running", request_id)
         with (
             bind_capability_context(context),
@@ -152,6 +161,11 @@ class LangGraphApprovalCoordinator:
                         "actor_id": request.requested_by,
                         "conversation_id": context.conversation_id,
                     },
+                    roles=frozenset(str(role) for role in roles if isinstance(role, str) and role),
+                    policy_ref=str(governance.get("policy_ref") or ""),
+                    allowed_capabilities=tuple(
+                        str(name) for name in allowed_capabilities if isinstance(name, str) and name
+                    ),
                 )
             ),
         ):

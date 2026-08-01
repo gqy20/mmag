@@ -1,0 +1,6 @@
+id: reasoning-medium
+version: 1.0.0
+route: default
+model_class: medium-reasoning
+max_output_tokens: 4096
+temperature: 0.2

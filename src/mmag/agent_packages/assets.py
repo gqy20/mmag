@@ -29,6 +29,18 @@ def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def render_prompt(asset: PromptAsset, variables: dict[str, Any]) -> str:
+    """Strictly render one immutable package prompt asset."""
+    missing = asset.variables - variables.keys()
+    if missing:
+        names = ", ".join(sorted(missing))
+        raise PromptContractError(f"prompt {asset.ref!r} is missing variables: {names}")
+    try:
+        return asset.content.format_map(variables)
+    except (KeyError, ValueError) as error:
+        raise PromptContractError(f"prompt {asset.ref!r} could not be rendered: {error}") from error
+
+
 class PromptRegistry:
     def __init__(self, root: Path, declared_variables: tuple[str, ...]):
         self.root = root
@@ -60,15 +72,7 @@ class PromptRegistry:
             raise PromptContractError(f"required prompt variables are not used: {names}")
 
     def render(self, ref: str, variables: dict[str, Any]) -> str:
-        asset = self._assets[ref]
-        missing = asset.variables - variables.keys()
-        if missing:
-            names = ", ".join(sorted(missing))
-            raise PromptContractError(f"prompt {ref!r} is missing variables: {names}")
-        try:
-            return asset.content.format_map(variables)
-        except (KeyError, ValueError) as error:
-            raise PromptContractError(f"prompt {ref!r} could not be rendered: {error}") from error
+        return render_prompt(self._assets[ref], variables)
 
     @property
     def assets(self) -> dict[str, PromptAsset]:

@@ -7,6 +7,7 @@ from mmag.capabilities import (
     CapabilityContext,
     CapabilityEffect,
     CapabilityExecutor,
+    CapabilityRegistry,
     CapabilitySpec,
     get_capability_context,
 )
@@ -26,6 +27,7 @@ from mmag.governance import (
     PolicyEngine,
     PolicyRule,
     bind_governance_context,
+    get_governance_context,
 )
 from mmag.llm import ParsedResponse
 from mmag.runtimes import (
@@ -35,7 +37,6 @@ from mmag.runtimes import (
     RunRequest,
     RuntimeStatus,
 )
-from mmag.tools import ToolRegistry
 
 
 def _request(run_id: str = "run-1") -> RunRequest:
@@ -95,14 +96,14 @@ def _runtime(
         )
     )
     executor = CapabilityExecutor(PolicyCapabilityAuthorizer(policy))
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     registry.register(bind_langgraph_capability(spec, executor=executor))
     backend = AsyncMock()
     backend.complete = AsyncMock(side_effect=responses)
     backend.chat = AsyncMock()
     runtime = LangGraphRuntimeAdapter(
         backend,
-        tool_registry=registry,
+        capability_registry=registry,
         checkpoint_path=str(checkpoint_path) if checkpoint_path else None,
     )
     return runtime, backend.complete
@@ -121,7 +122,13 @@ async def test_native_interrupt_pauses_before_side_effect_and_approve_resumes():
         calls,
         [_tool_turn(), ParsedResponse(texts=["published"])],
     )
-    context = GovernanceContext("user-1", "mattermost:team-1/channel-1")
+    context = GovernanceContext(
+        "user-1",
+        "mattermost:team-1/channel-1",
+        roles=frozenset({"member"}),
+        policy_ref="publish@1.0.0",
+        allowed_capabilities=("publish",),
+    )
 
     with bind_governance_context(context):
         paused = await runtime.run(_request())
@@ -132,6 +139,11 @@ async def test_native_interrupt_pauses_before_side_effect_and_approve_resumes():
     assert payload["kind"] == "tool_approval"
     assert payload["thread_id"] == "run-1"
     assert payload["tool_calls"][0]["capability"] == "publish"
+    assert payload["governance_context"] == {
+        "policy_ref": "publish@1.0.0",
+        "allowed_capabilities": ["publish"],
+        "roles": ["member"],
+    }
 
     with bind_governance_context(context):
         completed = await runtime.resume(
@@ -320,9 +332,11 @@ async def test_approval_resume_restores_original_capability_context(tmp_path: Pa
     store = SQLiteControlPlane(tmp_path / "control.db")
     lifecycle = LifecycleService(store)
     observed_contexts: list[CapabilityContext | None] = []
+    observed_governance: list[GovernanceContext | None] = []
 
     async def resume(thread_id, decisions):
         observed_contexts.append(get_capability_context())
+        observed_governance.append(get_governance_context())
         return AgentResult("done", "langgraph")
 
     gateway = AsyncMock()
@@ -341,7 +355,15 @@ async def test_approval_resume_restores_original_capability_context(tmp_path: Pa
         interruptions=(
             {
                 "id": "interrupt-1",
-                "value": {"thread_id": "run-1", "tool_calls": []},
+                "value": {
+                    "thread_id": "run-1",
+                    "tool_calls": [],
+                    "governance_context": {
+                        "policy_ref": "mmchat@1.0.0",
+                        "allowed_capabilities": ["send_file"],
+                        "roles": ["member"],
+                    },
+                },
             },
         ),
     )
@@ -369,4 +391,8 @@ async def test_approval_resume_restores_original_capability_context(tmp_path: Pa
     )
 
     assert observed_contexts == [original]
+    assert observed_governance[0] is not None
+    assert observed_governance[0].policy_ref == "mmchat@1.0.0"
+    assert observed_governance[0].allowed_capabilities == ("send_file",)
+    assert observed_governance[0].roles == frozenset({"member"})
     store.close()

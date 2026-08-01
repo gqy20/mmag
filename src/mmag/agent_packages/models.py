@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +20,23 @@ class PackageMetadata:
     name: str
     version: str
     description: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionDeclaration:
+    kind: str
+    provider: str
+    capability: str | None = None
+    source_argument: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingDeclaration:
+    default: bool
+    priority: int
+    keywords: tuple[str, ...]
+    requires_url: bool
+    scopes: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +85,8 @@ class AgentManifest:
     api_version: str
     kind: str
     metadata: PackageMetadata
+    execution: ExecutionDeclaration
+    routing: RoutingDeclaration
     accepted_intents: tuple[str, ...]
     prompt: PromptDeclaration
     input_schema_ref: str
@@ -98,6 +117,14 @@ class SchemaAsset:
 
 
 @dataclass(frozen=True, slots=True)
+class EvalAsset:
+    ref: str
+    version: str
+    cases: tuple[Mapping[str, Any], ...]
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class PackageVersionSnapshot:
     agent_name: str
     agent_spec_version: str
@@ -109,6 +136,9 @@ class PackageVersionSnapshot:
     output_schema_version: str
     policy_version: str
     model_policy_version: str
+    policy_hash: str = ""
+    model_policy_hash: str = ""
+    eval_hash: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -122,6 +152,9 @@ class PackageVersionSnapshot:
             "output_schema_version": self.output_schema_version,
             "policy_version": self.policy_version,
             "model_policy_version": self.model_policy_version,
+            "policy_hash": self.policy_hash,
+            "model_policy_hash": self.model_policy_hash,
+            "eval_hash": self.eval_hash,
         }
 
 
@@ -132,3 +165,4 @@ class AgentPackage:
     prompts: Mapping[str, PromptAsset]
     schemas: Mapping[str, SchemaAsset]
     snapshot: PackageVersionSnapshot
+    evals: Mapping[str, EvalAsset] = field(default_factory=lambda: MappingProxyType({}))

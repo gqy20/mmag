@@ -1,12 +1,4 @@
-"""
-Tool dataclass + ToolRegistry — 工具抽象与执行
-
-工具是 LLM 可以自主调用的函数，每个工具包含:
-- name: 工具名（LLM 通过名称调用）
-- description: 自然语言描述（LLM 靠此决定何时调用）
-- input_schema: JSON Schema（校验输入参数）
-- handler: 实际执行函数（支持 sync / async）
-"""
+"""Runtime-visible capability bindings and their canonical registry."""
 
 from __future__ import annotations
 
@@ -14,22 +6,23 @@ import inspect
 import json
 import time
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from ..capabilities import CapabilityAuthorization, CapabilityExecutor, CapabilitySpec
+    from .base import CapabilityAuthorization, CapabilityExecutor, CapabilitySpec
 
-from ..capabilities.sources import enrich_with_sources
 from ..logger import get_logger, trace
+from .sources import enrich_with_sources
 
 log = get_logger(__name__)
 
 
 @dataclass
-class Tool:
-    """单个工具定义"""
+class CapabilityBinding:
+    """One capability projected onto a model runtime surface."""
 
     name: str
     description: str
@@ -39,57 +32,91 @@ class Tool:
     executor: CapabilityExecutor | None = None
 
 
-class ToolRegistry:
-    """工具注册表 — 管理所有可用工具"""
+class CapabilityRegistry:
+    """Canonical runtime registry for built-in and MCP capabilities."""
 
     def __init__(self):
-        self._tools: dict[str, Tool] = {}
+        self._bindings: dict[str, CapabilityBinding] = {}
 
-    def register(self, tool: Tool) -> None:
-        """注册工具"""
-        if tool.name in self._tools:
-            log.warning("工具 '%s' 已存在，将被覆盖", tool.name)
-        self._tools[tool.name] = tool
+    def register(self, binding: CapabilityBinding) -> None:
+        if binding.name in self._bindings:
+            raise ValueError(f"capability binding {binding.name!r} is already registered")
+        self._bindings[binding.name] = binding
         log.info(
-            "工具已注册: %s (%d 参数)", tool.name, len(tool.input_schema.get("properties", {}))
+            "Capability 已注册: %s (%d 参数)",
+            binding.name,
+            len(binding.input_schema.get("properties", {})),
         )
 
     def unregister(self, name: str) -> bool:
         """注销工具，返回是否存在并被删除"""
-        if name in self._tools:
-            del self._tools[name]
+        if name in self._bindings:
+            del self._bindings[name]
             return True
         return False
 
     def unregister_prefix(self, prefix: str) -> int:
         """注销所有 name 以 prefix 开头的工具，返回注销数量"""
-        names = [n for n in self._tools if n.startswith(prefix)]
+        names = [name for name in self._bindings if name.startswith(prefix)]
         for n in names:
-            del self._tools[n]
+            del self._bindings[n]
         return len(names)
 
-    def get_all(self) -> list[Tool]:
-        """获取所有已注册的工具"""
-        return list(self._tools.values())
+    def get_all(self) -> list[CapabilityBinding]:
+        return list(self._bindings.values())
+
+    def get(self, name: str) -> CapabilityBinding:
+        try:
+            return self._bindings[name]
+        except KeyError as error:
+            raise LookupError(f"unknown capability binding {name!r}") from error
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(self._bindings)
+
+    def resolve_names(
+        self,
+        allow: tuple[str, ...],
+        deny: tuple[str, ...] = (),
+        *,
+        additional_names: tuple[str, ...] = (),
+    ) -> tuple[str, ...]:
+        """Resolve manifest patterns against the deployed capability catalog."""
+        candidates = tuple(dict.fromkeys((*self._bindings, *additional_names)))
+        missing = tuple(
+            pattern
+            for pattern in allow
+            if not any(token in pattern for token in "*?[") and pattern not in candidates
+        )
+        if missing:
+            raise LookupError(f"unknown allowed capabilities: {', '.join(sorted(missing))}")
+        return tuple(
+            name
+            for name in candidates
+            if any(fnmatch(name, pattern) for pattern in allow)
+            and not any(fnmatch(name, pattern) for pattern in deny)
+        )
 
     def authorization(
         self, name: str, input_data: dict[str, Any]
     ) -> CapabilityAuthorization | None:
         """Return a capability policy decision without running the tool."""
-        tool = self._tools.get(name)
-        if tool is None or tool.capability is None or tool.executor is None:
+        binding = self._bindings.get(name)
+        if binding is None or binding.capability is None or binding.executor is None:
             return None
-        return tool.executor.authorize(tool.capability, input_data)
+        return binding.executor.authorize(binding.capability, input_data)
 
-    def get_schema_list(self) -> list[dict[str, Any]]:
-        """获取 Anthropic API 格式的工具定义列表（用于 LLM 调用）"""
+    def get_schema_list(self, names: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
+        """Project the selected capability allowlist onto the model tool schema."""
+        selected = set(names) if names is not None else None
         return [
             {
                 "name": t.name,
                 "description": t.description,
                 "input_schema": t.input_schema,
             }
-            for t in self._tools.values()
+            for t in self._bindings.values()
+            if selected is None or t.name in selected
         ]
 
     async def execute(
@@ -101,8 +128,8 @@ class ToolRegistry:
         Returns:
             工具执行的 JSON 字符串结果，或错误信息。
         """
-        tool = self._tools.get(name)
-        if not tool:
+        binding = self._bindings.get(name)
+        if not binding:
             log.warning("%s 未知工具: %s", trace.prefix(), name)
             return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
 
@@ -115,13 +142,13 @@ class ToolRegistry:
         )
 
         try:
-            if approval_granted and tool.capability is not None and tool.executor is not None:
-                capability_result = await tool.executor.execute_approved(
-                    tool.capability, input_data
+            if approval_granted and binding.capability is not None and binding.executor is not None:
+                capability_result = await binding.executor.execute_approved(
+                    binding.capability, input_data
                 )
                 result = capability_result.to_payload()
             else:
-                result = tool.handler(**input_data)
+                result = binding.handler(**input_data)
             # async generator 不是 awaitable，需要先逐项收集。
             if inspect.isasyncgen(result):
                 result = [item async for item in result]

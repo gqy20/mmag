@@ -1,4 +1,4 @@
-id: global-bot
+id: mmchat
 version: 1.0.0
 default_effect: deny
 
@@ -13,7 +13,7 @@ rules:
       - memory:knowledge:read
     resource_arguments:
       channel_id: conversation_id
-    reason: The global Bot may only read the originating Mattermost channel.
+    reason: MMChat may only read the originating Mattermost channel.
 
   - id: read-own-profile
     effect: allow

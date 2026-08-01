@@ -25,9 +25,9 @@ def verify_wheel(wheel: Path) -> None:
 
         environment = os.environ.copy()
         environment["PYTHONPATH"] = str(extracted)
-        environment.pop("PROMPTS_PATH", None)
         environment.pop("AGENT_PACKAGES_PATH", None)
         environment.pop("POLICIES_PATH", None)
+        environment.pop("MODEL_POLICIES_PATH", None)
         subprocess.run(
             [
                 sys.executable,
@@ -38,16 +38,16 @@ def verify_wheel(wheel: Path) -> None:
                     "from pathlib import Path; "
                     "from mmag.agent_packages import AgentPackageRegistry; "
                     "from mmag.config import config; "
-                    "from mmag.governance import PolicyRegistry; "
-                    "from mmag.prompts import PromptManager; "
-                    "prompt = PromptManager().get('system_prompt'); "
-                    "agents = AgentPackageRegistry(); "
-                    "agents.load_directory(Path(config.agent_packages_path)); "
+                    "from mmag.governance import ModelPolicyRegistry, PolicyRegistry; "
                     "policies = PolicyRegistry(); "
                     "policies.load_directory(Path(config.policies_path)); "
-                    "package = agents.get('link'); "
-                    "policies.get(package.manifest.policy_ref); "
-                    "assert __version__ and main and prompt and package.snapshot.package_hash; "
+                    "models = ModelPolicyRegistry(); "
+                    "models.load_directory(Path(config.model_policies_path)); "
+                    "agents = AgentPackageRegistry(policy_registry=policies, model_policy_registry=models); "
+                    "agents.load_directory(Path(config.agent_packages_path)); "
+                    "mmchat = agents.get('mmchat'); "
+                    "link = agents.get('link'); "
+                    "assert __version__ and main and mmchat.prompts and link.snapshot.policy_hash; "
                     "print('wheel import and package resource load: ok')"
                 ),
             ],

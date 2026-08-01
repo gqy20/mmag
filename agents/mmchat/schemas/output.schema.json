@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/agents/mmchat/output/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "agent", "result", "artifacts", "sources", "warnings", "usage", "provenance"],
+  "properties": {
+    "status": {"const": "succeeded"},
+    "agent": {"const": "mmchat"},
+    "result": {"type": "object", "additionalProperties": false, "required": ["text"], "properties": {"text": {"type": "string"}}},
+    "artifacts": {"type": "array", "maxItems": 0},
+    "sources": {"type": "array"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "usage": {"type": "object", "required": ["model_calls", "tool_calls", "cost_usd"], "properties": {"model_calls": {"type": "integer", "minimum": 0}, "tool_calls": {"type": "integer", "minimum": 0}, "cost_usd": {"type": "number", "minimum": 0}}},
+    "provenance": {"type": "object", "additionalProperties": {"type": "string"}}
+  }
+}

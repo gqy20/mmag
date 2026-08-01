@@ -9,7 +9,7 @@
 
 ## 决策
 
-1. 全局 Bot 绑定版本化 `global-bot@1.0.0`，所有未匹配能力默认拒绝；外部 MCP 使用同一个 `CapabilityExecutor`，精确白名单只控制可见性，不代表执行授权。
+1. Capability 根据当前 Agent Package 的 `policy_ref` 动态选择版本化 Policy，所有未匹配能力默认拒绝；`mmchat` 使用 `mmchat@1.0.0`。外部 MCP 使用同一个 `CapabilityExecutor`，精确白名单只控制可见性，不代表执行授权。
 2. `GovernanceContext.resources` 保存由入口解析的可信资源。Policy 的 `resource_arguments` 声明“Capability 参数 → 上下文资源”映射；参数缺失、资源缺失或值不相等都不匹配该规则。
 3. 当前默认策略把频道读取与知识写入限制在来源会话，把画像读取限制为当前 actor；文件外发和所有 MCP 调用要求审批。
 4. MCP stdio 子进程只继承运行必需环境，Server Secret 必须在 `.mcp.json` 中显式引用；日志不输出解析后的 endpoint。

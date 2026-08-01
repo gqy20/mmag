@@ -4,315 +4,146 @@
 >
 > 更新时间：2026-08-01
 >
-> 当前阶段：Agent Package v1 基线完成，正在收口企业执行闭环 P0
->
-> 架构依据：[`AI_NATIVE_REFACTORING.md`](./AI_NATIVE_REFACTORING.md)
-
-本文档是 mmag 的可执行路线图，回答“下一步做什么、先后依赖是什么、做到什么算完成”。目标架构和设计理由由 `AI_NATIVE_REFACTORING.md` 维护，具体问题由 [`TECH_DEBT.md`](./TECH_DEBT.md) 跟踪。
-
-## 1. 当前基线
-
-截至 2026-07-31，已经完成：
-
-- [x] PoC 和真实外部服务测试退出默认 pytest 集合；
-- [x] 建立完全离线的消息主链契约测试；
-- [x] 修复 Runtime 失败提示被发送层静默丢弃的问题；
-- [x] 建立 SQLite schema version 和 forward-only migration；
-- [x] 覆盖新库初始化、旧库升级、FTS 重建、幂等、回滚和未来版本拒绝；
-- [x] 将 schema、migration 和 CJK FTS 预处理从 `Memory` 下沉到 infrastructure；
-- [x] 修复消息/FTS 半事务、Secret 日志和路径前缀越界问题；
-- [x] SDK 与外部 MCP 工具改为显式白名单，未知能力默认拒绝；
-- [x] 建立 GitHub Actions 与 `make verify` 统一工程门禁；
-- [x] 建立 40% 分支覆盖率与 `src/mmag` mypy 基线；
-- [x] 提交 `uv.lock`，固定 CI 与本地开发依赖；
-- [x] 将默认 Prompt 打入 wheel，并在隔离目录验证包、CLI 模块和 Prompt 加载；
-- [x] 重复 posted 事件在 Runtime 前按持久化 post ID 去重；
-- [x] Mattermost 回复使用 `pending_post_id` 对网络错误、超时、429/5xx 做有界幂等重试；
-- [x] 默认离线测试基线达到 `255 passed, 2 deselected`，实际分支覆盖率 `59.15%`；
-- [x] 建立不可变 Runtime 输入/输出与统一错误模型；
-- [x] LangGraph 成为默认 Runtime，接入 SQLite checkpoint、原生 interrupt/resume；
-- [x] 审批支持 approve/edit/reject，并覆盖跨 Runtime 重建恢复；
-- [x] `Agent` 与 `MemoryCompactor` 已只依赖 `AgentRuntime` Port；
-- [x] 建立 Capability 核心契约，八个内置能力均已迁移到单一 Spec；
-- [x] 删除全局 `ToolContext.current_post`，文件能力改用请求级不可变上下文。
-- [x] 外部 MCP discovery 已适配为 Capability，共享 Spec、Policy 和可见性。
-
-下一阶段尚未完成：
-
-- [x] WebSocket 入口、长任务执行和结果投递已解耦；
-- [x] 企业 Context、持久生命周期、Managed Agent 和治理基线已建立。
-
-## 2. 实施原则
-
-1. **依赖顺序优先**：工程门禁 → Runtime → Capability → 执行解耦 → Context → Managed Agent → 治理。
-2. **契约优先**：每个边界先定义类型、错误和测试，再迁移调用方。
-3. **垂直切片**：先迁移一个能力验证全链路，不批量复制新结构。
-4. **兼容迁移**：Mattermost 交互和现有数据库在过渡期保持兼容。
-5. **单一事实来源**：工具 schema、handler、权限和结果格式不能继续在两个 Runtime 中分别维护。
-6. **模块化单体**：没有容量或隔离证据前，不拆微服务，不引入分布式基础设施。
-
-## 3. 推荐实施顺序
-
-```text
-Phase 0 工程门禁
-  ↓
-Runtime 契约与 Adapter
-  ↓
-Capability 单一来源
-  ↓
-入口 / 执行 / 投递解耦
-  ↓
-企业 Context 与任务状态
-  ↓
-Managed Agent 与 Router
-  ↓
-治理、审计与私有化运维
-```
+> 当前阶段：硬迁移完成，进入企业闭环与专业 Agent 阶段
 
-前一阶段的退出标准，是后一阶段开始大规模改动的前置条件。
-
-## 4. Step 1：收口 Phase 0 工程门禁（已完成）
+本文档只维护当前基线、未完成步骤和验收标准。设计理由见 [AI_NATIVE_REFACTORING.md](AI_NATIVE_REFACTORING.md)，具体风险见 [TECH_DEBT.md](TECH_DEBT.md)。
 
-### 目标
+## 当前基线
 
-把当前本地基线固化为自动门禁，并证明发布产物可以脱离源码仓库运行。
+### 工程与持久化
 
-### 工作项
+- [x] 锁定依赖、Ruff、mypy、coverage、wheel smoke 和 CI 统一门禁；
+- [x] 默认测试完全离线，外部测试显式标记；
+- [x] SQLite forward-only migration、FTS、事务回滚、备份恢复原语；
+- [x] Mattermost posted 去重、幂等 Outbox、重试、DLQ 和 replay；
+- [x] 同会话串行、跨会话并发、入口/执行/投递解耦。
 
-- [x] 引入 `pytest-cov`，当前分支覆盖率 `47.73%`，初始阈值 40%；
-- [x] 引入宽松模式 `mypy`，检查 `src/mmag`，当前 33 个源码文件零错误；
-- [x] 建立 `.github/workflows/ci.yml`，使用锁定依赖执行统一门禁；
-- [x] 增加 wheel smoke test：隔离解包后验证 `import mmag`、CLI 模块和 Prompt 加载；
-- [x] 将 `prompts.yml` 打为包资源，并支持 `PROMPTS_PATH` 显式覆盖；
-- [x] 覆盖附件、工具和多轮调用契约；
-- [x] 补齐失败重试和重复事件契约；
-- [x] 提供 `make verify` 统一门禁命令，使本地与 CI 使用相同入口。
+### Runtime 与人在回路
 
-### 实施思路
+- [x] 不可变 `RunRequest` / `AgentResult` 和统一错误语义；
+- [x] LangGraph 作为默认 Runtime；
+- [x] SQLite checkpoint、稳定 thread ID、原生 interrupt/resume；
+- [x] 审批 approve/edit/reject、资格校验、过期与重复恢复保护；
+- [x] Claude Agent SDK 仅作为显式可选 Runtime，不再携带旧手写 Agent loop 参数。
 
-- CI 默认不注入 Mattermost/LLM 密钥，也不访问公网；
-- external 和 PoC 测试保留为手动任务，不作为普通变更的稳定性信号；
-- coverage 首先用于暴露盲区，不为了数字给简单代码堆测试；
-- 类型检查先锁定新增代码和核心契约，历史问题分批收敛；
-- wheel smoke test 在临时隔离环境执行，确保不是依赖 editable install 偶然通过。
+### Capability 与安全
 
-### 退出标准
+- [x] 八个内置能力只有一份 `CapabilitySpec`；
+- [x] `CapabilityRegistry` 统一 LangGraph 与 MCP 的运行时 binding；
+- [x] Policy 默认拒绝，执行前检查 actor/scope/permission/resource；
+- [x] 文件外发和 MCP 副作用进入审批；
+- [x] MCP 精确 allowlist、最小 stdio 环境；
+- [x] URL 重定向逐跳执行 SSRF 校验。
 
-- [x] 干净环境中一条命令可以执行完整工程门禁；
-- [x] CI 默认流程完全离线且稳定；
-- [x] wheel 解包后可以正常导入包与 CLI 模块并加载 Prompt；
-- [x] coverage 和类型检查有明确、不会倒退的基线；
-- [x] SQLite migration 和现有消息主链通过全部回归测试；
-- [x] 失败重试和重复事件行为由契约测试固定。
+### Agent 系统与 Package
 
-## 5. Step 2：建立统一 Runtime 契约（已完成）
+- [x] `application/`、`agent_system/`、`agent_packages/`、`capabilities/` 职责收口；
+- [x] 删除 `agent.py`、`managed_agents.py`、`tools/` 和全局 `prompts.yml`；
+- [x] 默认消息主链强制经过 `AgentRouter`；
+- [x] 删除 research/project/presentation 的硬编码假 Agent；
+- [x] Agent Package 采用扁平 `agents/<name>/agent.yml`，版本只保留在 Manifest；
+- [x] `execution/routing`、可信 Provider Registry、AgentFactory 和原子自动注册；
+- [x] `mmchat` 和 `link` 成为真实 Package，Link 使用通用 Capability Provider；
+- [x] Capability 根据当前 Package Policy 动态授权，不再绑定全局 Bot Policy；
+- [x] Prompt/Schema/eval/Policy/Model Policy 进入 Package Hash 和 provenance；
+- [x] strict Prompt render、输入/输出/Artifact Schema 和预算强制；
+- [x] Model Policy Registry 严格加载并校验 route。
 
-### 目标
+## 实施原则
 
-让应用层只表达“执行一次 Agent Run”，不再依赖 SDK/LangGraph 的参数、返回结构和异常。
+1. 单向硬迁移，不保留旧模块转发层；
+2. Manifest 负责声明，Schema 负责格式，Policy/Executor 负责安全；
+3. 只注册具备 Manifest、Prompt、Schema、Policy、eval 和真实执行器的 Agent；
+4. Agent 之间只传 Artifact ref 和严格 Envelope，不猜测自由文本；
+5. 模块化单体优先，没有容量或隔离证据不拆微服务；
+6. 文件超过 800 行才按稳定职责拆分，避免碎片化。
 
-### 工作项
+## 下一步 1：持久化运行 provenance 与预算
 
-- [x] 定义不可变 `RunContext`：trace、actor、conversation、scope 和 deadline；
-- [x] 定义 `RunRequest`：消息（含多模态 content blocks）、可用能力和执行配置；
-- [x] 定义 `AgentResult`：文本、结构化产物、能力调用、usage 和状态；
-- [x] 定义 `AgentRuntime` Protocol；
-- [x] 统一 timeout、rate-limit、rejected、unavailable 和 internal 错误语义；
-- [x] 为 SDKLLM 和 LangGraph 建立统一 Runtime 边界；
-- [x] 让 `Agent`、`MemoryCompactor` 等调用方依赖 Runtime Port；
-- [x] 修订 Runtime ADR，确立 LangGraph 默认路径并移除 Legacy Adapter。
+优先级：P0。
 
-### 实施思路
+- [ ] 在 AgentRun 保存 Package、Prompt、Schema、Policy、Model Policy 和 eval Hash；
+- [ ] 保存模型调用、Capability 调用、token、cost、repair 和 Artifact usage；
+- [ ] 给 `QuotaLedger` 增加持久化原子 reservation/settlement/release；
+- [ ] 审批 resume 和 DLQ replay 复用原始 Package snapshot；
+- [ ] AuditEvent 记录 route decision、policy decision 和版本信息。
 
-第一轮只包裹现有实现，不同时重写 Agent 循环。先通过 contract tests 证明两个 Adapter 对统一请求和错误语义的行为一致，再逐步迁移调用方。
+退出标准：任意历史 Run 可回答“谁、在什么 scope、使用哪个版本、调用了什么、花费多少、为何允许”，且并发/崩溃不能突破预算。
 
-### 退出标准
+## 下一步 2：让 Model Policy 驱动 Gateway
 
-- [x] 上层代码不导入两套 Runtime 的私有类型和异常；
-- [x] 两个 Adapter 通过同一组契约测试；
-- [x] 切换 Runtime 不改变 Mattermost 路由和投递协议；
-- [x] 每次运行都有稳定的 trace、状态和错误分类。
+优先级：P0。
 
-## 6. Step 3：统一 Capability（已完成）
+- [ ] 将 `model_class` 映射到允许的模型集合；
+- [ ] route/model/max output tokens/temperature 从 snapshot 进入实际调用；
+- [ ] 对不支持的模型参数在启动时失败，不在运行中静默忽略；
+- [ ] 为不同 Agent 建立成本、延迟、质量基线。
 
-### 目标
+退出标准：修改 Model Policy 只能通过新版本生效，每次调用都能复现实际模型参数。
 
-消除 `tools/builtin.py` 与 `sdk_tools.py` 的重复定义，让能力成为可授权、可测试、可审计的一等对象。
+## 下一步 3：执行 eval 发布门禁
 
-### 工作项
+优先级：P0。
 
-- [x] 定义 `CapabilitySpec`、`CapabilityResult` 和 `CapabilityExecutor`；
-- [x] 在 Spec 中声明输入 schema、只读/写入属性、权限、超时和来源策略；
-- [x] 以 `get_channel_info` 完成第一个只读垂直切片；
-- [x] 从同一 Spec 生成 ToolRegistry 与 SDK binding；
-- [x] 统一两条 Runtime 的返回结构、错误和来源信息；
-- [x] 逐个迁移共享内置工具，删除重复 handler/formatter；
-- [x] 收紧 MCP 默认权限和文件路径判断。
-- [x] 外部 MCP 先进入 Capability Catalog/Policy，再生成 LangGraph 与 SDK binding。
+- [ ] contract case 在激活前离线执行；
+- [ ] quality case 定义数据集版本、阈值和评分器版本；
+- [ ] eval 结果 Hash、发布时间和发布人进入发布记录；
+- [ ] 失败 Package 不得生成发布制品或进入部署；
+- [ ] 旧制品可按 Package Hash 原子回滚。
 
-### 实施思路
+退出标准：坏 Prompt、坏 Schema、越权能力和质量回退不能进入新 Run。
 
-不先设计覆盖所有未来 Agent 的万能抽象。首个切片只需要证明“一份 schema + 一份 handler + 多 Runtime binding”成立，再根据第二、第三个能力暴露出的差异扩展协议。
+## 下一步 4：Research Package
 
-当前八个内置能力由同一个有序 Catalog 创建，再派生 LangGraph/SDK binding；每项能力只有一个 Spec、JSON Schema 和 handler。统一执行器负责参数校验、deadline、来源和稳定错误码；`CapabilityAuthorizer` 在副作用前返回允许、拒绝或待审批，LangGraph 将待审批转换为原生 interrupt。
+优先级：P1。
 
-`send_file` 也已成为声明 `mattermost:file:write` 的 Capability。普通异步链路用 `ContextVar` 绑定不可变 `CapabilityContext`；Claude SDK 的持久 MCP reader 无法继承后续 task context，因此 SDK 查询通过实例级锁串行执行，并在查询生命周期内桥接、清理同一份上下文。该设计消除了跨频道覆盖 `current_post` 的竞态，但不等于 Step 4 的跨会话并行调度已经完成。
+- [ ] 定义 research Manifest、只读 Policy、Prompt 和输入/输出 Schema；
+- [ ] 定义 `research-report` Artifact Schema；
+- [ ] 接入来源去重、时效性和证据覆盖 eval；
+- [ ] 将报告持久化到 Artifact Repository；
+- [ ] 覆盖取消、超时、部分来源失败和预算耗尽。
 
-外部 MCP 工具只发现一次：白名单命中的工具被转换为 `CapabilitySpec`，缺少 `readOnlyHint=true` 时保守视为写能力，并声明独立执行权限；随后同一 Spec 与 `CapabilityExecutor` 生成 ToolRegistry/SDK binding。SDK 权限回调由实际绑定集合动态生成，不再硬编码 crawl 能力。原 `sdk_crawl_tools.py` 及其重复 schema/formatter 已删除，crawl 等工具必须通过 `.mcp.json` 和 `MCP_ALLOWED_TOOLS` 显式接入。
+退出标准：Research 只能读允许来源，输出始终是可验证、有来源、有版本的 Artifact。
 
-### 下一步顺序
+## 下一步 5：Presentation Package 与严格 handoff
 
-1. [x] 迁移 `search_knowledge`，验证带可选参数、默认值的本地读取能力；
-2. [x] 迁移 `get_posts`，统一缓存命中、REST 回退、回填与参数上限，并将同步 I/O 移入工作线程；
-3. [x] 迁移 `search_messages`，统一多条件过滤、时间单位、参数上限与结果格式；
-4. [x] 迁移 `get_user_profile`，收口 Memory 与 Mattermost 的组合读取；
-5. [x] 迁移 `analyze_link`，让 `SourcePolicy.AUTO` 真正驱动来源注入；
-6. [x] 迁移 `save_knowledge`，为 `WRITE` 能力接入确定性的权限检查和未来审批钩子；
-7. [x] 将 `send_file` 迁移为受治理的写 Capability，并用请求级不可变上下文消除全局 `ToolContext.current_post`；
-8. [x] 让外部 MCP 进入同一 Catalog/Policy 可见性链路，并删除两套重复工厂与 formatter。
+优先级：P1，依赖下一步 4。
 
-### 退出标准
+- [ ] Presentation 只接受 `research-report` ref；
+- [ ] 输入 Artifact 在执行前校验版本和 scope；
+- [ ] 输出 presentation outline/file Artifact；
+- [ ] 文件交付仍经过审批和 Outbox；
+- [ ] handoff 每一步持久化状态、失败、重试和成本。
 
-- [x] 共享内置能力只有一份 schema、handler 和策略；
-- [x] SDK/LangGraph 对共享内置能力的成功和失败结果等价；
-- [x] 写能力能被确定性识别，后续可挂接审批；
-- [x] MCP 能力可见性不能绕过 Capability Policy。
+退出标准：Research → Presentation 不传自由文本；非法或越权 Artifact 不能进入下游。
 
-## 7. Step 4：解耦入口、执行和投递
+## 下一步 6：反馈、返工与业务闭环
 
-### 目标
+优先级：P1。
 
-支持同会话保序、跨会话并发，以及执行成功后投递失败的独立恢复。
+- [ ] 用户可接受、驳回或请求返工；
+- [ ] 返工创建新 Run，关联原 Artifact，不覆盖历史；
+- [ ] 反馈进入质量数据集但默认不进入 Prompt；
+- [ ] Task 只有在交付被接受或明确终止后才闭环；
+- [ ] 建立任务、AgentRun、Artifact、Delivery、Feedback 的端到端报表。
 
-### 工作项
+退出标准：企业任务从请求到交付、审批、验收、返工和审计形成可查询闭环。
 
-- [x] 定义平台无关的 `InboundEvent`；
-- [x] 建立 Inbox 幂等记录；
-- [x] 按 `conversation_id` 分区调度：同会话串行、跨会话并发；
-- [x] 将附件处理、摘要和长任务移出 WebSocket 读取循环；
-- [x] 建立 Outbox 与独立 Delivery；
-- [x] 增加背压、取消、deadline 和优雅关闭；
-- [x] 删除全局 `current_post`，先用不可变 `CapabilityContext` 贯穿能力调用；
-- [x] Mattermost 事件路径迁移到带 timeout/retry 和连接池的异步 Client。
+## 下一步 7：结构化可观测性与部署验收
 
-### 退出标准
+优先级：P1。
 
-- [x] 慢 LLM 不阻塞其他频道；
-- [x] 同一会话顺序稳定，重复事件不重复回复；
-- [x] 投递失败只重试 Delivery，不重复执行 Agent；
-- [x] 并发测试不存在上下文、附件和 trace 串线；
-- [x] 关闭进程时不丢失已接受但尚未投递的任务。
+- [ ] 统一 Agent/Runtime/Capability/Approval/Delivery 结构化事件字段；
+- [ ] 输出 duration、status、error code、queue depth 和 cost 指标；
+- [ ] 可选接入 OpenTelemetry，控制 label 基数和正文采集；
+- [ ] 完成目标环境容量、备份恢复、升级回滚和灾难演练。
 
-## 8. Step 5：企业 Context 与持久任务状态
+退出标准：告警可定位到 Run/Package/Capability，目标环境有可验证 RPO/RTO。
 
-### 目标
+## 当前明确不做
 
-将“频道消息记忆”升级为有作用域、有来源、可追踪的企业上下文，并建立一套两个 Runtime 共用的持久生命周期。
-
-### Step 5.1：统一生命周期与状态机
-
-统一的是状态转换协议、持久化、幂等和审计规则，不是把所有对象塞进一个巨型状态机。`Task/AgentRun`、`CapabilityCall`、`ApprovalRequest` 和 `Delivery` 各自拥有状态集和转换矩阵，但只能通过同一 `LifecycleService` 发生转换。
-
-工作项：
-
-- [x] 定义五类实体状态、初始态、终态和合法转换；
-- [x] 定义通用 `StateTransition`；
-- [x] 建立 `LifecycleService`，集中处理转换守卫、幂等、乐观版本和终态保护；
-- [x] 通过 migration 持久化当前状态、版本和 append-only 转换历史；
-- [x] 定义 Runtime 结果到 `AgentRunState` 的统一映射；
-- [x] 为 `WAITING_APPROVAL` 保存 Capability 参数快照和恢复令牌；
-- [x] 建立重启恢复与 reconciliation；
-- [x] 增加状态转换、并发竞争、重复事件、非法转换和重启恢复契约测试。
-
-退出标准：
-
-- [x] 生命周期状态通过 `LifecycleService` 改变；
-- [x] 非法转换被确定性拒绝，重复命令不会重复执行副作用；
-- [x] 进程重启后可识别并恢复未完成运行、待审批请求和待投递结果；
-- [x] SDK 与 LangGraph 对外呈现相同的任务生命周期；
-- [x] Agent 执行状态与 Delivery 状态彼此独立。
-
-### Step 5.2：企业 Context 与持久模型
-
-#### 工作项
-
-- [x] 拆分 Message、Profile、Knowledge、Summary 和 URL Cache Repository；
-- [x] 建立最小持久任务、审批、产物、投递和审计模型；
-- [x] 增加 Organization、Project、Customer、Document 和 Decision 的通用映射；
-- [x] 实现 Scope Resolver 与 Context Assembler；
-- [x] 明确 SQLite 单写者、WAL、事务和备份策略；
-- [x] 所有数据模型变化通过 v004 migration 发布。
-
-#### 退出标准
-
-- [x] 上下文可按组织、项目、会话安全检索；
-- [x] Run、Capability Call、Artifact 和 Delivery 可以关联追踪；
-- [x] 任务和运行状态可持久恢复，转换有版本和审计记录；
-- [x] Context Assembler 不依赖 Mattermost 原始事件结构；
-- [x] `Memory` 已成为兼容 Facade，读取职责由专用 Repository 承担。
-
-## 9. Step 6：Managed Agent 与 Router
-
-### 目标
-
-让数字员工通过注册接入，而不是继续扩展核心 `Agent` 的条件分支。
-
-### 工作项
-
-- [x] 定义 `AgentSpec`、`ManagedAgent` 和 `AgentRegistry`；
-- [x] 建立基于意图、权限、作用域、成本和健康度的 Router；
-- [x] 将链接分析升级为第一个 Link Agent；
-- [x] 支持结构化 Artifact 和 Agent handoff；
-- [x] 注册 Research Agent、Project Assistant 和 Presentation Agent。
-- [x] 定义 Agent Package v1 Manifest JSON Schema 与严格 Loader；
-- [x] 建立版本化 Prompt/Schema/Package Registry 和运行时输入输出强制；
-- [x] Link Agent 接入 Package、Artifact Schema、版本 provenance 与专属只读 Policy；
-- [ ] 将 Research/Presentation 从 Python `AgentSpec` 迁移为 Package；
-- [ ] 用 `research-report` 完成 Research → Presentation 结构化 handoff。
-
-### 退出标准
-
-- [x] 新 Agent 可通过注册接入，无需修改协同中枢；
-- [x] Link Agent 的能力、权限、预算和输出均可检查；
-- [x] 多 Agent 任务有明确步骤和状态；
-- [x] 单个 Agent 失败不会破坏整个会话处理。
-
-详细规格、已完成项和后续顺序见 [`AGENT_PACKAGES.md`](./AGENT_PACKAGES.md) 与 [`specs/001-agent-packages`](../specs/001-agent-packages/spec.md)。
-
-## 10. Step 7：治理与私有化生产能力
-
-已建立 Policy Engine、持久审批、脱敏、Secret Provider、Model Gateway、成本配额、审计、metrics、任务级 tracing、数据清理、SQLite 在线备份和私有化部署基线。目标环境的告警后端、容量数值和灾备演练仍属于部署验收，见 [`OPERATIONS.md`](./OPERATIONS.md)。
-
-### 企业闭环 P0 收口
-
-- [x] 过期、重复与 resume token 异常审批禁止恢复执行；
-- [x] 审批接入 Mattermost 请求人/频道管理员/系统管理员资格校验，身份查询失败默认拒绝；
-- [x] Outbox Delivery 跨重试复用持久 Mattermost 幂等键；
-- [x] Inbox 瞬时处理错误使用持久 attempts 做有界重试；
-- [x] AgentRun 与 Task 终态解耦，Task 等待 Delivery 终态；
-- [x] 审批、Inbox 失败/重试、Delivery 终态写入基础 AuditEvent；
-- [x] 建立失败 Inbox 的 DLQ 查询与人工 replay；原失败证据保留，replay 使用新幂等事件 ID；
-- [x] 删除全局 Bot ALLOW，接入频道/用户参数与请求上下文的资源级 Policy；
-- [ ] 将 ScopeResolver、AgentRouter、Package Runner、Artifact Repository 串入消息主链；
-- [ ] 持久化 usage/provenance 并实现原子预算预留；
-- [ ] 建立交付接受、驳回、返工和反馈闭环。
-
-这一阶段的完成标准不是“功能齐全”，而是权限可解释、运行可追踪、数据可治理、故障可恢复。
-
-## 11. 当前不做
-
-- 不因重构直接拆成微服务；
-- 不在 Runtime/Capability 统一前增加多个专业 Agent；
-- 不一次性重写 `agent.py`、`memory.py` 或 `url_analyzer.py`；
-- 不把真实 LLM 或公网测试放进默认 CI；
-- 不用 Prompt 代替确定性的权限和路由规则；
-- 不在缺少数据模型和恢复语义时引入复杂异步队列。
-
-## 12. 文档维护规则
-
-- 完成工作项后，在本文件勾选并更新当前阶段；
-- 代码行为变化同步更新 `README.md` 和 `CHANGELOG.md`；
-- 新技术债先进入 `TECH_DEBT.md`，再决定归属步骤；
-- 架构方向变化同步修改 `AI_NATIVE_REFACTORING.md`；
-- 每个步骤开始前先确认上一步退出标准，未满足项必须显式记录风险；
-- 版本号根据实际交付内容签发，不强行绑定路线图阶段。
+- 不恢复旧 Agent、Tool 或 Prompt 兼容入口；
+- 不为了“多 Agent”数量重新注册没有 Package 契约的占位 Agent；
+- 不用 Prompt 代替权限、审批、幂等和预算；
+- 不在 Artifact/Scope/恢复语义未完成前拆微服务；
+- 不把真实公网或 LLM 测试放进默认 CI。

@@ -1,5 +1,5 @@
 """
-MCP Client Bridge — 读取 .mcp.json，连接外部 MCP Server，注入工具到 ToolRegistry
+MCP Client Bridge — 读取 .mcp.json，连接外部 MCP Server，注入 CapabilityRegistry
 
 和 Claude Code 的 .mcp.json 格式完全兼容，可直接复用 cc_plugins 等项目的配置。
 
@@ -31,7 +31,7 @@ from .capabilities import (
 from .logger import get_logger
 
 if TYPE_CHECKING:
-    from .tools import ToolRegistry
+    from .capabilities import CapabilityRegistry
 
 log = get_logger(__name__)
 
@@ -96,9 +96,7 @@ def _resolve_env_vars(value: Any, env: dict[str, str] | None = None) -> Any:
 def _stdio_environment(configured: Any) -> dict[str, str]:
     """Build a minimal child environment plus values explicitly granted by config."""
     inherited = {
-        name: value
-        for name, value in os.environ.items()
-        if name in _MCP_RUNTIME_ENVIRONMENT
+        name: value for name, value in os.environ.items() if name in _MCP_RUNTIME_ENVIRONMENT
     }
     if not isinstance(configured, dict):
         return inherited
@@ -183,7 +181,7 @@ def read_mcp_config(config_path: str | Path | None = None) -> list[McpConfigItem
 
 
 class MCPClientBridge:
-    """MCP 客户端桥接器 — 连接外部 MCP Server，注册工具到 ToolRegistry
+    """MCP 客户端桥接器 — 连接外部 MCP Server，注册能力到 CapabilityRegistry
 
     用法::
 
@@ -194,7 +192,7 @@ class MCPClientBridge:
 
     def __init__(
         self,
-        registry: ToolRegistry,
+        registry: CapabilityRegistry,
         *,
         allowed_tools: set[str] | frozenset[str] | tuple[str, ...] = (),
         executor: CapabilityExecutor | None = None,
@@ -378,7 +376,7 @@ class MCPClientBridge:
         return registered
 
     async def close_all(self):
-        """关闭所有 MCP 连接，并同步注销注入到 ToolRegistry 的 mcp_* 工具
+        """关闭所有 MCP 连接，并同步注销注入到 CapabilityRegistry 的 mcp_* 能力
 
         避免 session 关闭后 LLM 仍可调用死 session 的工具（会抛连接错误）。
 

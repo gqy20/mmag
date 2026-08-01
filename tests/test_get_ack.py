@@ -18,19 +18,15 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from mmag.agent import Agent  # noqa: E402
+from mmag.application import BotIdentity, MattermostDelivery  # noqa: E402
 from mmag.client import PROP_FROM_BOT, PROP_TRUE  # noqa: E402
 
 
-def _make_agent(bot_user_id: str = "u_bot") -> Agent:
-    """构造最小 Agent 实例 (绕过 __init__)"""
-    agent = Agent.__new__(Agent)
-    agent.bot_user_id = bot_user_id
-    agent.bot_username = "agent2"
-    agent.mm = MagicMock()
-    agent.memory = MagicMock()
-    agent.stats = {"responses": 0, "dropped_messages": 0}
-    return agent
+def _make_delivery(bot_user_id: str = "u_bot") -> MattermostDelivery:
+    mm = MagicMock()
+    memory = MagicMock()
+    stats = {"responses": 0, "dropped_messages": 0}
+    return MattermostDelivery(mm, memory, BotIdentity(bot_user_id, "agent2"), stats)
 
 
 # ---- _send_get_ack ----
@@ -38,11 +34,11 @@ def _make_agent(bot_user_id: str = "u_bot") -> Agent:
 
 class TestSendGetAck:
     def test_sends_get_as_thread_reply(self):
-        a = _make_agent()
+        a = _make_delivery()
         a.mm.send_post.return_value = "post_ack_123"
         post = {"channel_id": "ch1", "id": "msg_abc", "message": "@agent2 hi"}
 
-        asyncio.run(a._send_get_ack(post))
+        asyncio.run(a.send_ack(post))
 
         a.mm.send_post.assert_called_once_with(
             channel_id="ch1",
@@ -52,38 +48,38 @@ class TestSendGetAck:
         )
 
     def test_does_not_log_to_memory(self):
-        a = _make_agent()
+        a = _make_delivery()
         a.mm.send_post.return_value = "post_ack_123"
         post = {"channel_id": "ch1", "id": "msg_abc", "message": "hi"}
 
-        asyncio.run(a._send_get_ack(post))
+        asyncio.run(a.send_ack(post))
 
         a.memory.log_message.assert_not_called()
 
     def test_does_not_increment_stats(self):
-        a = _make_agent()
+        a = _make_delivery()
         a.mm.send_post.return_value = "post_ack_123"
         post = {"channel_id": "ch1", "id": "msg_abc", "message": "hi"}
 
-        asyncio.run(a._send_get_ack(post))
+        asyncio.run(a.send_ack(post))
 
         assert a.stats["responses"] == 0
 
     def test_send_post_exception_does_not_raise(self):
-        a = _make_agent()
+        a = _make_delivery()
         a.mm.send_post.side_effect = RuntimeError("network down")
         post = {"channel_id": "ch1", "id": "msg_abc", "message": "hi"}
 
         # Should not raise
-        asyncio.run(a._send_get_ack(post))
+        asyncio.run(a.send_ack(post))
 
     def test_missing_post_id_sends_empty_root(self):
         """post 没有 id 字段时, root_id 为空 (退化为普通消息)"""
-        a = _make_agent()
+        a = _make_delivery()
         a.mm.send_post.return_value = "post_ack"
         post = {"channel_id": "ch1", "message": "hi"}
 
-        asyncio.run(a._send_get_ack(post))
+        asyncio.run(a.send_ack(post))
 
         call_kwargs = a.mm.send_post.call_args
         assert call_kwargs.kwargs["root_id"] == ""
@@ -95,11 +91,11 @@ class TestSendGetAck:
 class TestTypingLoop:
     def test_cancel_stops_loop_cleanly(self):
         """cancel 后 _typing_loop 正常退出,不抛 CancelledError"""
-        a = _make_agent()
+        a = _make_delivery()
         a.mm.send_typing.return_value = True
 
         async def run():
-            task = asyncio.create_task(a._typing_loop("ch1"))
+            task = asyncio.create_task(a.typing_loop("ch1"))
             await asyncio.sleep(0.1)
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -109,11 +105,11 @@ class TestTypingLoop:
 
     def test_send_typing_exception_does_not_crash(self):
         """单次 send_typing 失败不应中断循环"""
-        a = _make_agent()
+        a = _make_delivery()
         a.mm.send_typing.side_effect = RuntimeError("timeout")
 
         async def run():
-            task = asyncio.create_task(a._typing_loop("ch1"))
+            task = asyncio.create_task(a.typing_loop("ch1"))
             await asyncio.sleep(0.1)
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -124,7 +120,7 @@ class TestTypingLoop:
 
     def test_sends_typing_repeatedly(self):
         """循环期间多次调用 send_typing — 用 side_effect 在第 2 次调用后 cancel"""
-        a = _make_agent()
+        a = _make_delivery()
         calls = []
         task_holder: list = []
 
@@ -137,21 +133,21 @@ class TestTypingLoop:
 
         async def run():
             # Patch sleep to be instant so the loop spins fast
-            import mmag.agent as agent_mod
+            import mmag.application.delivery as delivery_mod
 
-            original = agent_mod.asyncio.sleep
+            original = delivery_mod.asyncio.sleep
 
             async def instant_sleep(seconds):
                 await original(0)
 
-            agent_mod.asyncio.sleep = instant_sleep
+            delivery_mod.asyncio.sleep = instant_sleep
             try:
-                task = asyncio.create_task(a._typing_loop("ch1"))
+                task = asyncio.create_task(a.typing_loop("ch1"))
                 task_holder.append(task)
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             finally:
-                agent_mod.asyncio.sleep = original
+                delivery_mod.asyncio.sleep = original
 
         asyncio.run(run())
         assert len(calls) >= 2

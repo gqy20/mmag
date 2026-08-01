@@ -4,7 +4,7 @@ import subprocess
 import zipfile
 
 
-def test_wheel_contains_default_prompt_resource(tmp_path):
+def test_wheel_contains_flat_agent_prompt_resource(tmp_path):
     subprocess.run(
         ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],
         check=True,
@@ -14,6 +14,6 @@ def test_wheel_contains_default_prompt_resource(tmp_path):
     wheel = next(tmp_path.glob("mmag-*.whl"))
 
     with zipfile.ZipFile(wheel) as archive:
-        prompt = archive.read("mmag/prompts.yml").decode()
+        prompt = archive.read("mmag/agents/mmchat/prompts/system.md").decode()
 
-    assert "system_prompt:" in prompt
+    assert "## 身份" in prompt

@@ -12,7 +12,7 @@
 - `.mcp.json` 仍是外部 Server 的连接配置，`MCP_ALLOWED_TOOLS` 仍是默认拒绝的可见性边界；
 - 每个白名单命中的 discovery 结果先转换为唯一 `CapabilitySpec`；
 - MCP `readOnlyHint=true` 映射为 `READ`，缺失或 false 保守映射为 `WRITE`；权限名为 `mcp:<server>:<tool>:invoke`；
-- 同一 Spec 与 `CapabilityExecutor` 生成 ToolRegistry 和 SDK binding，参数校验、授权、超时、错误及来源策略不再由 transport 单独实现；
+- 同一 Spec 与 `CapabilityExecutor` 生成 CapabilityRegistry 和 SDK binding，参数校验、授权、超时、错误及来源策略不再由 transport 单独实现；
 - Claude SDK 权限回调从实际 binding 集合构造 allowlist，不维护第二份工具名单；
 - 删除 SDK crawl 专用工厂、重复 formatter 和直接依赖。crawl 能力与其他外部 MCP 一样显式配置、发现和授权。
 

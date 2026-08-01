@@ -25,9 +25,8 @@ class ClaudeSDKRuntimeAdapter:
 
     runtime_name = "claude-sdk"
 
-    def __init__(self, backend: Any, *, tool_registry: Any = None) -> None:
+    def __init__(self, backend: Any) -> None:
         self.backend = backend
-        self.tool_registry = tool_registry
 
     async def run(self, request: RunRequest) -> AgentResult:
         remaining = remaining_seconds(request)
@@ -46,14 +45,9 @@ class ClaudeSDKRuntimeAdapter:
 
     async def _execute(self, request: RunRequest) -> AgentResult:
         messages = thaw(request.messages)
-        capabilities = thaw(request.capabilities)
-        text = await self.backend.agent_loop(
+        text = await self.backend.run_agent(
             messages=messages,
             system=request.system_prompt,
-            tools=capabilities,
-            tool_registry=self.tool_registry,
-            max_rounds=request.max_rounds,
-            max_tokens=request.max_tokens,
         )
         text = await recover_exhausted(self.backend, request, messages, text)
         status = (

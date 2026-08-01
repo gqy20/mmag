@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from mmag.tools import Tool, ToolRegistry
+from mmag.capabilities import CapabilityBinding, CapabilityRegistry
 
 
 @pytest.mark.asyncio
@@ -11,9 +11,9 @@ async def test_execute_collects_async_generator_results() -> None:
         yield {"chunk": 1}
         yield {"chunk": 2}
 
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     registry.register(
-        Tool(
+        CapabilityBinding(
             name="stream_results",
             description="Stream results",
             input_schema={"type": "object", "properties": {}},
@@ -28,9 +28,9 @@ async def test_execute_collects_async_generator_results() -> None:
 
 @pytest.mark.asyncio
 async def test_execute_preserves_source_enrichment_for_json_text() -> None:
-    registry = ToolRegistry()
+    registry = CapabilityRegistry()
     registry.register(
-        Tool(
+        CapabilityBinding(
             name="external_search",
             description="search",
             input_schema={"type": "object", "properties": {}},

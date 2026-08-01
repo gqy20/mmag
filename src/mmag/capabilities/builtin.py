@@ -19,7 +19,8 @@ from .link import create_analyze_link_capability
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from .base import CapabilitySpec
+    from .base import CapabilityExecutor, CapabilitySpec
+    from .registry import CapabilityBinding
 
 
 def create_builtin_capabilities(
@@ -38,4 +39,39 @@ def create_builtin_capabilities(
         create_get_user_profile_capability(mm_client, memory),
         create_analyze_link_capability(memory),
         create_send_file_capability(mm_client, context_provider=context_provider),
+    ]
+
+
+def build_builtin_bindings(
+    mm_client,
+    memory,
+    *,
+    executor: CapabilityExecutor | None = None,
+) -> list[CapabilityBinding]:
+    """Project the canonical built-in catalog onto the default runtime surface."""
+    from .bindings import bind_langgraph_capability
+
+    return [
+        bind_langgraph_capability(spec, executor=executor)
+        for spec in create_builtin_capabilities(mm_client, memory)
+    ]
+
+
+def build_sdk_bindings(
+    mm_client,
+    memory,
+    *,
+    context_provider: Callable[[], CapabilityContext | None] = get_capability_context,
+    executor: CapabilityExecutor | None = None,
+) -> list:
+    """Project the canonical built-in catalog onto Claude Agent SDK."""
+    from .bindings import bind_sdk_capability
+
+    return [
+        bind_sdk_capability(spec, executor=executor)
+        for spec in create_builtin_capabilities(
+            mm_client,
+            memory,
+            context_provider=context_provider,
+        )
     ]

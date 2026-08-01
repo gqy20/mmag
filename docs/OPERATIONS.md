@@ -18,7 +18,7 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 
 ## Policy 与网络隔离
 
-- 全局 Bot 使用 `global-bot@1.0.0`，默认效果为 `deny`。`resource_arguments` 将 Capability 参数映射到可信的请求资源；缺参数、缺可信资源或值不一致都会拒绝。
+- 每次 Capability 调用根据当前 Agent Package 的 `policy_ref` 动态选择 Policy；`mmchat` 使用 `mmchat@1.0.0`，默认效果为 `deny`。`resource_arguments` 将 Capability 参数映射到可信请求资源；缺参数、缺可信资源或值不一致都会拒绝。
 - 当前频道资源来自已认证 Mattermost 事件，而不是 Prompt。`get_posts`、消息/知识检索和知识写入不能跨到模型自行提供的其他频道；画像默认只允许读取当前 actor。
 - 文件外发和所有外部 MCP 调用默认进入 LangGraph 审批。审批恢复会还原原始 CapabilityContext，副作用前的用户意图与频道目标不会被审批消息覆盖。
 - MCP stdio 子进程仅继承 `PATH`、语言、临时目录、Home 和 Windows 启动必需变量；其他值必须在 `.mcp.json` 的 Server `env` 中显式声明。环境隔离不是进程沙箱，高风险 Server 仍应放入容器并限制文件系统与网络。

@@ -12,6 +12,8 @@ from mmag.capabilities import (
     SourcePolicy,
     bind_langgraph_capability,
     bind_sdk_capability,
+    build_builtin_bindings,
+    build_sdk_bindings,
     create_analyze_link_capability,
     create_get_channel_info_capability,
     create_get_posts_capability,
@@ -20,8 +22,6 @@ from mmag.capabilities import (
     create_search_knowledge_capability,
     create_search_messages_capability,
 )
-from mmag.sdk_tools import create_sdk_tools
-from mmag.tools import build_builtin_tools
 
 
 def _client():
@@ -51,8 +51,8 @@ def test_get_channel_info_declares_policy_metadata_once():
 def test_builtin_capability_visibility_is_identical_for_both_runtimes():
     client, memory = _client(), MagicMock()
 
-    langgraph_names = [tool.name for tool in build_builtin_tools(client, memory)]
-    sdk_names = [tool.name for tool in create_sdk_tools(client, memory)]
+    langgraph_names = [tool.name for tool in build_builtin_bindings(client, memory)]
+    sdk_names = [tool.name for tool in build_sdk_bindings(client, memory)]
 
     assert langgraph_names == sdk_names
     assert langgraph_names == [

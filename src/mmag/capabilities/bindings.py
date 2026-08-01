@@ -10,16 +10,16 @@ from claude_agent_sdk import tool
 from .base import CapabilityExecutor, CapabilitySpec
 
 if TYPE_CHECKING:
-    from ..tools.registry import Tool
+    from .registry import CapabilityBinding
 
 
 def bind_langgraph_capability(
     spec: CapabilitySpec,
     *,
     executor: CapabilityExecutor | None = None,
-) -> Tool:
-    """Expose a capability through the LangGraph ToolRegistry contract."""
-    from ..tools.registry import Tool
+) -> CapabilityBinding:
+    """Expose a capability through the LangGraph runtime registry."""
+    from .registry import CapabilityBinding
 
     runner = executor or CapabilityExecutor()
 
@@ -27,7 +27,7 @@ def bind_langgraph_capability(
         result = await runner.execute(spec, arguments)
         return result.to_payload()
 
-    return Tool(
+    return CapabilityBinding(
         name=spec.name,
         description=spec.description,
         input_schema=spec.input_schema,

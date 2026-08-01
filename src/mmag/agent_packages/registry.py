@@ -1,58 +1,87 @@
-"""Atomic, version-aware publication of validated Agent Packages."""
+"""Atomic loading of flat, self-versioned Agent Packages."""
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from .errors import ManifestValidationError
 from .loader import AgentPackageLoader
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from ..governance import ModelPolicyRegistry, PolicyRegistry
     from .models import AgentPackage
 
 
 class AgentPackageRegistry:
-    def __init__(self, loader: AgentPackageLoader | None = None):
+    def __init__(
+        self,
+        loader: AgentPackageLoader | None = None,
+        *,
+        policy_registry: PolicyRegistry | None = None,
+        model_policy_registry: ModelPolicyRegistry | None = None,
+    ) -> None:
         self.loader = loader or AgentPackageLoader()
-        self._packages: dict[tuple[str, str], AgentPackage] = {}
-        self._active: dict[str, str] = {}
-
-    def publish(self, package: AgentPackage, *, activate: bool = True) -> None:
-        key = (package.manifest.metadata.name, package.manifest.metadata.version)
-        existing = self._packages.get(key)
-        if existing and existing.snapshot.package_hash != package.snapshot.package_hash:
-            raise ValueError(f"published Agent Package {key!r} is immutable")
-        self._packages[key] = package
-        if activate:
-            self._active[key[0]] = key[1]
+        self.policy_registry = policy_registry
+        self.model_policy_registry = model_policy_registry
+        self._packages: dict[str, AgentPackage] = {}
 
     def load_directory(self, root: Path) -> tuple[AgentPackage, ...]:
-        candidates = tuple(sorted(path.parent for path in root.glob("*/agent.yml")))
-        loaded = tuple(self.loader.load(path) for path in candidates)
-        staged_packages = dict(self._packages)
-        staged_active = dict(self._active)
-        for package in loaded:
-            key = (package.manifest.metadata.name, package.manifest.metadata.version)
-            existing = staged_packages.get(key)
-            if existing and existing.snapshot.package_hash != package.snapshot.package_hash:
-                raise ValueError(f"published Agent Package {key!r} is immutable")
-            staged_packages[key] = package
-            staged_active[key[0]] = key[1]
+        staged_packages: dict[str, AgentPackage] = {}
+        loaded: list[AgentPackage] = []
+        for agent_root in sorted(path for path in root.iterdir() if path.is_dir()):
+            package = self._resolve_governance(self.loader.load(agent_root))
+            name = package.manifest.metadata.name
+            if name != agent_root.name:
+                raise ManifestValidationError(
+                    f"Agent directory {agent_root.name!r} does not match manifest {name!r}"
+                )
+            if name in staged_packages:
+                raise ManifestValidationError(f"duplicate Agent Package {name!r}")
+            staged_packages[name] = package
+            loaded.append(package)
         self._packages = staged_packages
-        self._active = staged_active
-        return loaded
+        return tuple(loaded)
 
-    def get(self, name: str, version: str | None = None) -> AgentPackage:
-        selected_version = version or self._active.get(name)
-        if selected_version is None:
-            raise LookupError(f"unknown Agent Package {name!r}")
+    def get(self, name: str) -> AgentPackage:
         try:
-            return self._packages[(name, selected_version)]
+            return self._packages[name]
         except KeyError as error:
-            raise LookupError(f"unknown Agent Package {name!r}@{selected_version}") from error
+            raise LookupError(f"unknown Agent Package {name!r}") from error
 
-    def versions(self, name: str) -> tuple[str, ...]:
-        return tuple(
-            sorted(version for package_name, version in self._packages if package_name == name)
+    def list(self) -> tuple[AgentPackage, ...]:
+        return tuple(self._packages[name] for name in sorted(self._packages))
+
+    def _resolve_governance(self, package: AgentPackage) -> AgentPackage:
+        policy_hash = ""
+        model_policy_hash = ""
+        if self.policy_registry is not None:
+            policy_hash = self.policy_registry.hash(package.manifest.policy_ref)
+        if self.model_policy_registry is not None:
+            model_policy = self.model_policy_registry.get(package.manifest.model_policy_ref)
+            model_policy_hash = model_policy.sha256
+            if model_policy.route != package.manifest.runtime.route:
+                raise ManifestValidationError(
+                    f"Agent route {package.manifest.runtime.route!r} conflicts with "
+                    f"model policy route {model_policy.route!r}"
+                )
+        if (
+            package.snapshot.policy_hash == policy_hash
+            and package.snapshot.model_policy_hash == model_policy_hash
+        ):
+            return package
+        if not policy_hash and not model_policy_hash:
+            return package
+        digest = hashlib.sha256(package.snapshot.package_hash.encode())
+        digest.update(policy_hash.encode())
+        digest.update(model_policy_hash.encode())
+        snapshot = replace(
+            package.snapshot,
+            package_hash=digest.hexdigest(),
+            policy_hash=policy_hash,
+            model_policy_hash=model_policy_hash,
         )
+        return replace(package, snapshot=snapshot)

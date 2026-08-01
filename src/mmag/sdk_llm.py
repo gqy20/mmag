@@ -2,7 +2,7 @@
 SDK LLM Adapter — 封装 Claude Agent SDK 持久客户端，提供与 LLM 类完全一致的公共 API。
 
 Runtime Adapter 使用的 API:
-  - agent_loop(messages, system, tools, tool_registry, max_rounds) -> str
+  - run_agent(messages, system) -> str
   - chat(messages, system, max_tokens) -> str
 
 生命周期:
@@ -35,7 +35,7 @@ from .logger import get_logger
 from .model_artifacts import strip_model_artifacts
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
 log = get_logger(__name__)
 
@@ -48,38 +48,6 @@ log = get_logger(__name__)
 class SDKLLMError(Exception):
     """SDK LLM 调用失败的领域异常 — 对标 LLMError"""
 
-
-# ============================================================
-# 工具权限控制 — 三层防护: sandbox + 路径白名单 + 工具黑名单
-# ============================================================
-
-# 项目根目录 — 所有文件操作的允许范围边界
-_PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
-
-# 需要路径检查的只读工具（参数含 file_path / path / pattern）
-_PATH_SENSITIVE_TOOLS = frozenset({"Read", "Grep", "Glob", "LSP"})
-
-# 完全不需要路径检查的工具（网络/内部状态）
-_PATH_SAFE_TOOLS = frozenset(
-    {
-        "WebFetch",  # URL 访问，不涉及本地文件
-        "WebSearch",  # 网络搜索，不涉及本地文件
-        "TodoWrite",  # SDK 内部状态，无文件系统操作
-        "Task",  # SDK 内部状态，无文件系统操作
-    }
-)
-
-# 所有允许的 CLI 内置工具
-_CLI_SAFE_TOOLS = _PATH_SENSITIVE_TOOLS | _PATH_SAFE_TOOLS
-
-# 禁止的危险工具（无论什么情况都不允许）
-CLI_DANGEROUS_TOOLS = frozenset(
-    {
-        "Bash",  # 🔴 执行任意 shell 命令
-        "Write",  # 🔴 写入/创建任意文件
-        "Edit",  # 🔴 编辑文件 (sed-like)
-    }
-)
 
 # SDK 内注册到 in-process "mmag" MCP server 的已知能力。
 # 新增工具必须显式加入这里，否则权限回调默认拒绝执行。
@@ -98,147 +66,32 @@ _DEFAULT_MCP_ALLOWED_TOOLS = frozenset(
 )
 
 
-def _resolve_path(path: str | None) -> str | None:
-    """解析路径并返回绝对路径。返回 None 表示无法解析或非法路径。"""
-    if not path or not isinstance(path, str):
-        return None
-    try:
-        p = Path(path).expanduser().resolve()
-        return str(p)
-    except (ValueError, OSError):
-        return None
-
-
-def _is_path_allowed(path: str) -> bool:
-    """严格路径白名单检查：只允许项目根目录及其子目录内的文件。
-
-    阻止:
-      - 绝对路径跳出项目目录 (如 /etc/passwd, ~/.ssh/id_rsa)
-      - symlink 跳出 (resolve() 会解引用)
-      - .. 穿越攻击
-    """
-    resolved = _resolve_path(path)
-    if not resolved:
-        return False
-    resolved_path = Path(resolved)
-    project_root = Path(_PROJECT_ROOT).resolve()
-    if not resolved_path.is_relative_to(project_root):
-        log.warning("路径越界: %s (不在 %s 内)", resolved, _PROJECT_ROOT)
-        return False
-    return True
-
-
-def _extract_paths_from_input(tool_name: str, input_data: dict[str, Any]) -> list[str]:
-    """从工具输入参数中提取所有可能的文件路径。
-
-    不同工具的路径参数名不同:
-      Read:     file_path
-      Grep:     pattern (可能含路径通配)
-      Glob:     pattern (路径通配)
-      LSP:      file_path / uri
-    """
-    paths: list[str] = []
-
-    # 直接路径参数
-    for key in ("file_path", "path", "uri", "directory"):
-        val = input_data.get(key)
-        if val and isinstance(val, str):
-            paths.append(val)
-
-    # pattern 参数 (Grep/Glob 可能是路径模式)
-    pattern = input_data.get("pattern")
-    # 如果 pattern 看起来像路径（含 / 或 . 或 ~），也检查
-    if isinstance(pattern, str) and pattern and any(c in pattern for c in ("/", ".", "~")):
-        paths.append(pattern)
-
-    # include/exclude 文件列表
-    for key in ("include", "exclude", "files"):
-        val = input_data.get(key)
-        if isinstance(val, list):
-            paths.extend(v for v in val if isinstance(v, str))
-        elif isinstance(val, str):
-            paths.append(val)
-
-    return paths
-
-
 async def _tool_permission_callback(
     tool_name: str,
     input_data: dict[str, Any],
     context,  # ToolPermissionContext
     *,
     allowed_mcp_tools: frozenset[str] = _DEFAULT_MCP_ALLOWED_TOOLS,
+    context_provider: Callable[[], CapabilityContext | None] = get_capability_context,
 ) -> Any:
-    """can_use_tool 回调 — 三层动态权限决策。
-
-    层级 1 — MCP 工具: 仅显式 allowlist 中的 mmag 能力放行
-    层级 2 — 危险工具黑名单: Bash/Write/Edit → ❌ 无条件拒绝
-    层级 3 — 安全工具路径检查: Read/Grep/Glob/LSP → 仅允许项目目录内
-    层级 4 — 未知工具 → ❌ 默认拒绝（安全优先）
-    """
+    """Allow only a bound MCP capability visible to the current Package run."""
     from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 
-    # ── 层级 1: MCP 工具 ──
-    if tool_name.startswith("mcp__"):
-        if tool_name in allowed_mcp_tools:
-            log.debug("权限放行 [MCP allowlist]: %s", tool_name)
-            return PermissionResultAllow()
-        log.warning("权限拒绝 [未知 MCP]: %s", tool_name)
+    del input_data, context
+    if not tool_name.startswith("mcp__mmag__") or tool_name not in allowed_mcp_tools:
+        log.warning("SDK 权限拒绝 [未绑定能力]: %s", tool_name)
         return PermissionResultDeny(
-            message=f"MCP 工具 '{tool_name}' 未在 mmag 显式白名单中",
+            message=f"能力 '{tool_name}' 未绑定到 mmag SDK Runtime",
         )
-
-    # ── 层级 2: 危险工具无条件拒绝 ──
-    if tool_name in CLI_DANGEROUS_TOOLS:
-        log.warning(
-            "权限拒绝 [危险]: %s (input=%s)",
-            tool_name,
-            str(input_data)[:200],
-        )
+    active = context_provider()
+    capability_name = tool_name.removeprefix("mcp__mmag__")
+    if active is None or capability_name not in active.allowed_capabilities:
+        log.warning("SDK 权限拒绝 [Package 不可见]: %s", capability_name)
         return PermissionResultDeny(
-            message=f"工具 '{tool_name}' 在 bot 模式下被禁用（安全策略）",
+            message=f"能力 '{capability_name}' 不在当前 Agent Package allowlist",
         )
-
-    # ── 层级 3: 安全工具 + 路径白名单检查 ──
-    if tool_name in _PATH_SAFE_TOOLS:
-        # WebFetch/WebSearch/TodoWrite/Task 不涉及本地文件
-        log.debug("权限放行 [安全-无路径]: %s", tool_name)
-        return PermissionResultAllow()
-
-    if tool_name in _PATH_SENSITIVE_TOOLS:
-        # 提取所有可能的路径参数
-        candidate_paths = _extract_paths_from_input(tool_name, input_data)
-
-        if candidate_paths:
-            # 有路径参数 → 逐个检查
-            for p in candidate_paths:
-                if not _is_path_allowed(p):
-                    log.warning(
-                        "权限拒绝 [路径越界]: %s | tool=%s | path=%s",
-                        tool_name,
-                        tool_name,
-                        p,
-                    )
-                    return PermissionResultDeny(
-                        message=(
-                            f"禁止访问项目外文件: {p}\n"
-                            f"仅允许读取 {_PROJECT_ROOT} 及其子目录下的文件"
-                        ),
-                    )
-            log.debug(
-                "权限放行 [安全-路径OK]: %s (%d 个路径已校验)", tool_name, len(candidate_paths)
-            )
-            return PermissionResultAllow()
-        else:
-            # 无路径参数（罕见但可能）→ 放行（SDK 内部会处理错误）
-            log.debug("权限放行 [安全-无路径]: %s (无路径参数)", tool_name)
-            return PermissionResultAllow()
-
-    # ── 层级 4: 未知工具默认拒绝 ──
-    log.warning("权限拒绝 [未知]: %s", tool_name)
-    return PermissionResultDeny(
-        message=f"未知工具 '{tool_name}' 未在白名单中",
-    )
+    log.debug("SDK 权限放行 [Package allowlist]: %s", capability_name)
+    return PermissionResultAllow()
 
 
 # ============================================================
@@ -271,7 +124,7 @@ class SDKLLM:
         """初始化并连接持久 SDK 客户端。在 Agent.start() 阶段 3.5 调用。
 
         Args:
-            tool_funcs: @tool-decorated 函数列表（来自 create_sdk_tools）
+            tool_funcs: @tool-decorated Capability binding 列表
         """
         self._saved_tool_funcs = tool_funcs  # 保存供 reconnect 使用
 
@@ -345,21 +198,20 @@ class SDKLLM:
                 "- get_posts / search_messages / search_knowledge: 查询 Mattermost 消息和知识库"
                 "- analyze_link: 分析链接内容"
                 "- allowlisted external MCP capabilities: 使用已授权的企业系统"
-                "- Read / Grep / Glob: 阅读和搜索项目文件"
                 "回答简洁、准确、有帮助。"
             ),
             permission_mode="default",
             mcp_servers=mcp_servers,
-            # 不设 allowed_tools → 工具保持可见，执行时由 can_use_tool 做显式策略判断
+            allowed_tools=sorted(visible_mcp_tools),
             # 注意: 必须用 "default" 而非 "bypassPermissions":
             #   1. bypassPermissions 会被 SDK 转为 --dangerously-skip-permissions CLI flag,
             #      该 flag 在 root/sudo 下被 CLI 拒绝运行
             #   2. bypassPermissions 会 shadow can_use_tool 回调 (回调永不执行),
             #      使三层权限防护全部失效
-            disallowed_tools=list(CLI_DANGEROUS_TOOLS),  # 安全网: 黑名单危险工具
             can_use_tool=partial(
                 _tool_permission_callback,
                 allowed_mcp_tools=visible_mcp_tools,
+                context_provider=self.get_capability_context,
             ),
             env=env,
             setting_sources=[],  # 不加载项目 CLAUDE.md
@@ -535,20 +387,14 @@ class SDKLLM:
 
         return raw_text, is_error
 
-    # ---- 公共 API (与 LLM 类签名一致) ----
-
-    async def agent_loop(
+    async def run_agent(
         self,
         messages: list[dict],
         system: str = "",
-        tools: Any = None,  # API 兼容, 忽略 (SDK 内置工具)
-        tool_registry: Any = None,  # API 兼容, 忽略
-        max_rounds: int | None = None,
-        max_tokens: int = 4096,  # API 兼容, 忽略
     ) -> str:
-        """通过 SDK 执行 agentic 循环。公共 API 与 LLM.agent_loop 完全一致。
+        """通过 SDK 执行 agentic 循环。
 
-        SDK 内部处理多轮 tool-use 循环, 本 adapter 只负责:
+        SDK 内部处理多轮 tool-use 循环，本方法只负责：
         1. 构建 content blocks (保留 image blocks)
         2. 调用 query + receive_response
         3. 提取文本 + artifact stripping
@@ -580,7 +426,7 @@ class SDKLLM:
         except SDKLLMError:
             raise
         except Exception as e:
-            log.error("agent_loop 异常: %s", e, exc_info=True)
+            log.error("SDK Agent 执行异常: %s", e, exc_info=True)
             raise SDKLLMError(str(e)) from e
 
     async def chat(self, messages: list[dict], system: str = "", max_tokens: int = 1024) -> str:

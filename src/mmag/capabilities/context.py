@@ -21,6 +21,7 @@ class CapabilityContext:
     message_id: str
     message: str
     scope: str = ""
+    allowed_capabilities: frozenset[str] = frozenset()
 
 
 _CURRENT_CONTEXT: ContextVar[CapabilityContext | None] = ContextVar(

@@ -7,11 +7,24 @@ metadata:
   description: Analyze one URL and return a source-preserving structured artifact.
 
 spec:
+  execution:
+    kind: capability
+    provider: single-v1
+    capability: analyze_link
+    source_argument: url
+
+  routing:
+    default: false
+    priority: 100
+    keywords: [分析链接, 解析链接, 检查链接, 总结链接, analyze-link, link, url, 链接]
+    requires_url: true
+    scopes: ["mattermost:*"]
+
   accepted_intents: [link, url, 链接]
   prompt:
-    system_ref: prompts/v1/system.md
-    task_ref: prompts/v1/task.md
-    output_repair_ref: prompts/v1/output_repair.md
+    system_ref: prompts/system.md
+    task_ref: prompts/task.md
+    output_repair_ref: prompts/output_repair.md
     required_variables:
       - current_time
       - actor_name

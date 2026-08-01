@@ -2,7 +2,7 @@
 统一日志系统 — 分层 Logger + 时间戳分文件 + 自动清理 + 交互追踪
 
 设计原则:
-  - 每个模块用自己的 logger 名 (mmag.config, mmag.llm, mmag.tools ...)
+  - 每个模块用自己的 logger 名 (mmag.application, mmag.runtimes, mmag.capabilities ...)
   - 统一初始化，不再依赖 cli.py 的 if __name__
   - 控制台 + 文件双输出
   - 日志文件按**启动时间戳**命名: logs/mmag-2026-06-11_103549.log
@@ -44,7 +44,7 @@ def get_logger(name: str) -> logging.Logger:
 
     用法:
         from mmag.logger import get_logger
-        log = get_logger(__name__)   # → "mmag.agent" 或 "mmag.tools" 等
+        log = get_logger(__name__)   # → "mmag.application" 或 "mmag.capabilities" 等
     """
     if name.startswith(PKG_NAME + "."):
         full_name = name
@@ -175,7 +175,7 @@ class TraceContext:
     """线程安全的交互追踪上下文
 
     每次用户消息触发一个 trace_id，贯穿：
-      触发 → 上下文构建 → agent_loop(多轮工具调用) → 回复发送
+      触发 → Agent Router → LangGraph/Capability → Outbox 发送
     """
 
     def __init__(self):

@@ -11,6 +11,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from ..capabilities import AuthorizationDecision
+from ..governance import get_governance_context
 from ..llm import LLMError
 from ..model_artifacts import strip_model_artifacts
 from .base import (
@@ -37,8 +38,8 @@ if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph.state import CompiledStateGraph
 
+    from ..capabilities import CapabilityRegistry
     from ..llm import LLM
-    from ..tools import ToolRegistry
 
 
 _EXHAUSTED_TEXT = "⚠️ 处理超时，请重试"
@@ -53,12 +54,12 @@ class LangGraphRuntimeAdapter:
         self,
         backend: LLM,
         *,
-        tool_registry: ToolRegistry,
+        capability_registry: CapabilityRegistry,
         checkpoint_path: str | None = None,
         checkpointer: BaseCheckpointSaver[Any] | None = None,
     ) -> None:
         self.backend = backend
-        self.tool_registry = tool_registry
+        self.capability_registry = capability_registry
         self.checkpoint_path = checkpoint_path
         self._checkpointer = checkpointer
         self._checkpoint_context: AbstractAsyncContextManager[Any] | None = None
@@ -204,7 +205,7 @@ class LangGraphRuntimeAdapter:
     def _review_tools_node(self, state: LangGraphState) -> dict[str, Any]:
         pending: list[dict[str, Any]] = []
         for call in last_tool_calls(state):
-            authorization = self.tool_registry.authorization(call["name"], call["input"])
+            authorization = self.capability_registry.authorization(call["name"], call["input"])
             if authorization and authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL:
                 pending.append(
                     {
@@ -217,11 +218,19 @@ class LangGraphRuntimeAdapter:
         if not pending:
             return {"review_decisions": {}}
 
+        governance = get_governance_context()
         response = interrupt(
             {
                 "kind": "tool_approval",
                 "thread_id": state["thread_id"],
                 "tool_calls": pending,
+                "governance_context": {
+                    "policy_ref": governance.policy_ref if governance is not None else "",
+                    "allowed_capabilities": list(
+                        governance.allowed_capabilities if governance is not None else ()
+                    ),
+                    "roles": list(governance.roles if governance is not None else ()),
+                },
             }
         )
         decisions = response.get("decisions", []) if isinstance(response, Mapping) else []
@@ -236,7 +245,7 @@ class LangGraphRuntimeAdapter:
     async def _tools_node(self, state: LangGraphState) -> dict[str, Any]:
         new_messages: list[dict[str, Any]] = []
         for call in last_tool_calls(state):
-            authorization = self.tool_registry.authorization(call["name"], call["input"])
+            authorization = self.capability_registry.authorization(call["name"], call["input"])
             requires_approval = bool(
                 authorization and authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL
             )
@@ -255,7 +264,7 @@ class LangGraphRuntimeAdapter:
                     new_messages.append(tool_result(call["id"], result))
                     continue
 
-            result = await self.tool_registry.execute(
+            result = await self.capability_registry.execute(
                 call["name"], arguments, approval_granted=approval_granted
             )
             new_messages.append(tool_result(call["id"], result))

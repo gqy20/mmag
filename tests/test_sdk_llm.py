@@ -20,6 +20,7 @@ from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from mmag import sdk_llm  # noqa: E402
+from mmag.capabilities import CapabilityContext  # noqa: E402
 from mmag.sdk_llm import SDKLLM  # noqa: E402
 
 
@@ -216,19 +217,19 @@ class TestMessageStream:
 
 
 class TestPermissionPolicy:
-    def test_path_with_shared_prefix_is_outside_project(self, tmp_path, monkeypatch):
-        project = tmp_path / "project"
-        sibling = tmp_path / "project-private"
-        project.mkdir()
-        sibling.mkdir()
-        monkeypatch.setattr(sdk_llm, "_PROJECT_ROOT", str(project.resolve()))
-
-        assert sdk_llm._is_path_allowed(str(project / "README.md")) is True
-        assert sdk_llm._is_path_allowed(str(sibling / "secret.txt")) is False
-
     @pytest.mark.asyncio
     async def test_known_mmag_mcp_tool_is_allowed(self):
-        decision = await sdk_llm._tool_permission_callback("mcp__mmag__get_posts", {}, None)
+        active = CapabilityContext(
+            "trace",
+            "user",
+            "channel",
+            "post",
+            "message",
+            allowed_capabilities=frozenset({"get_posts"}),
+        )
+        decision = await sdk_llm._tool_permission_callback(
+            "mcp__mmag__get_posts", {}, None, context_provider=lambda: active
+        )
 
         assert isinstance(decision, PermissionResultAllow)
 
@@ -241,18 +242,28 @@ class TestPermissionPolicy:
     @pytest.mark.asyncio
     async def test_permission_callback_uses_runtime_visible_capability_names(self):
         visible = frozenset({"mcp__mmag__mcp_docs_search"})
+        active = CapabilityContext(
+            "trace",
+            "user",
+            "channel",
+            "post",
+            "message",
+            allowed_capabilities=frozenset({"mcp_docs_search"}),
+        )
 
         allowed = await sdk_llm._tool_permission_callback(
             "mcp__mmag__mcp_docs_search",
             {},
             None,
             allowed_mcp_tools=visible,
+            context_provider=lambda: active,
         )
         hidden = await sdk_llm._tool_permission_callback(
             "mcp__mmag__mcp_docs_delete",
             {},
             None,
             allowed_mcp_tools=visible,
+            context_provider=lambda: active,
         )
 
         assert isinstance(allowed, PermissionResultAllow)
@@ -269,9 +280,26 @@ class TestPermissionPolicy:
             return {"content": []}
 
         options = sdk._build_options([search_docs])
+        sdk._active_capability_context = CapabilityContext(
+            "trace",
+            "user",
+            "channel",
+            "post",
+            "message",
+            allowed_capabilities=frozenset({"mcp_docs_search"}),
+        )
 
         visible = await options.can_use_tool("mcp__mmag__mcp_docs_search", {}, None)
         hidden = await options.can_use_tool("mcp__mmag__search_text", {}, None)
 
         assert isinstance(visible, PermissionResultAllow)
         assert isinstance(hidden, PermissionResultDeny)
+        assert options.allowed_tools == ["mcp__mmag__mcp_docs_search"]
+
+    @pytest.mark.asyncio
+    async def test_bound_tool_without_package_context_is_denied(self):
+        decision = await sdk_llm._tool_permission_callback(
+            "mcp__mmag__get_posts", {}, None, context_provider=lambda: None
+        )
+
+        assert isinstance(decision, PermissionResultDeny)

@@ -1,13 +1,12 @@
-"""Strict loader for versioned Agent Package directories."""
+"""Strict loader for flat, self-versioned Agent Package directories."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from importlib.resources import files
-from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from jsonschema import Draft202012Validator
@@ -22,11 +21,17 @@ from .models import (
     BudgetDeclaration,
     CapabilityDeclaration,
     ContextDeclaration,
+    EvalAsset,
+    ExecutionDeclaration,
     PackageMetadata,
     PackageVersionSnapshot,
     PromptDeclaration,
+    RoutingDeclaration,
     RuntimeDeclaration,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _load_manifest_schema() -> dict[str, Any]:
@@ -35,16 +40,11 @@ def _load_manifest_schema() -> dict[str, Any]:
 
 
 def _version_from_ref(ref: str) -> str:
-    if "@" in ref:
-        return ref.rsplit("@", 1)[1]
-    for part in Path(ref).parts:
-        if part.startswith("v") and part[1:].isdigit():
-            return part
-    return "unversioned"
+    return ref.rsplit("@", 1)[1]
 
 
 class AgentPackageLoader:
-    """Load all referenced assets before publishing one immutable package."""
+    """Load every referenced asset before registering one Package."""
 
     def __init__(self) -> None:
         self._validator = Draft202012Validator(_load_manifest_schema())
@@ -86,7 +86,8 @@ class AgentPackageLoader:
 
         prompts = prompt_registry.assets
         schemas = schema_registry.assets
-        package_hash = self._package_hash(raw, prompts, schemas)
+        evals = self._load_evals(package_root)
+        package_hash = self._package_hash(raw, prompts, schemas, evals)
         prompt_hash = hashlib.sha256(
             "".join(prompts[ref].sha256 for ref in prompt_refs).encode()
         ).hexdigest()
@@ -95,12 +96,15 @@ class AgentPackageLoader:
             agent_spec_version=manifest.metadata.version,
             package_hash=package_hash,
             prompt_id=f"{manifest.metadata.name}:system-task",
-            prompt_version=_version_from_ref(manifest.prompt.system_ref),
+            prompt_version=manifest.metadata.version,
             prompt_hash=prompt_hash,
             input_schema_version=schemas[manifest.input_schema_ref].version,
             output_schema_version=schemas[manifest.result_schema_ref].version,
             policy_version=_version_from_ref(manifest.policy_ref),
             model_policy_version=_version_from_ref(manifest.model_policy_ref),
+            eval_hash=hashlib.sha256(
+                "".join(evals[ref].sha256 for ref in sorted(evals)).encode()
+            ).hexdigest(),
         )
         return AgentPackage(
             package_root,
@@ -108,10 +112,11 @@ class AgentPackageLoader:
             MappingProxyType(prompts),
             MappingProxyType(schemas),
             snapshot,
+            MappingProxyType(evals),
         )
 
     @staticmethod
-    def _package_hash(raw: dict, prompts: dict, schemas: dict) -> str:
+    def _package_hash(raw: dict, prompts: dict, schemas: dict, evals: dict) -> str:
         digest = hashlib.sha256(json.dumps(raw, sort_keys=True).encode())
         for ref in sorted(prompts):
             digest.update(ref.encode())
@@ -119,12 +124,60 @@ class AgentPackageLoader:
         for ref in sorted(schemas):
             digest.update(ref.encode())
             digest.update(schemas[ref].sha256.encode())
+        for ref in sorted(evals):
+            digest.update(ref.encode())
+            digest.update(evals[ref].sha256.encode())
         return digest.hexdigest()
+
+    @staticmethod
+    def _load_evals(package_root: Path) -> dict[str, EvalAsset]:
+        assets: dict[str, EvalAsset] = {}
+        for path in sorted((package_root / "evals").glob("*.yml")):
+            try:
+                raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except yaml.YAMLError as error:
+                raise ManifestValidationError(f"invalid eval YAML {path}: {error}") from error
+            if not isinstance(raw, dict) or set(raw) != {"version", "cases"}:
+                raise ManifestValidationError(f"eval {path} must contain only version and cases")
+            if not isinstance(raw["version"], int) or raw["version"] < 1:
+                raise ManifestValidationError(f"eval {path} has an invalid version")
+            if not isinstance(raw["cases"], list) or not raw["cases"]:
+                raise ManifestValidationError(f"eval {path} must contain cases")
+            case_ids: set[str] = set()
+            cases: list[dict] = []
+            for case in raw["cases"]:
+                if not isinstance(case, dict):
+                    raise ManifestValidationError(f"eval {path} case must be a mapping")
+                required = {"id", "intent", "goal"}
+                if not required <= case.keys() or not all(
+                    isinstance(case[key], str) and case[key] for key in required
+                ):
+                    raise ManifestValidationError(f"eval {path} case is missing id/intent/goal")
+                if case["id"] in case_ids:
+                    raise ManifestValidationError(f"eval {path} has duplicate case {case['id']!r}")
+                if ("expect" in case) == ("expect_error" in case):
+                    raise ManifestValidationError(
+                        f"eval {path} case {case['id']!r} needs exactly one expectation"
+                    )
+                case_ids.add(case["id"])
+                cases.append(case)
+            ref = str(path.relative_to(package_root))
+            assets[ref] = EvalAsset(
+                ref,
+                str(raw["version"]),
+                tuple(MappingProxyType(dict(case)) for case in cases),
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+        if not assets:
+            raise ManifestValidationError(f"Agent Package {package_root} has no eval suite")
+        return assets
 
     @staticmethod
     def _parse(raw: dict) -> AgentManifest:
         metadata = raw["metadata"]
         spec = raw["spec"]
+        execution = spec["execution"]
+        routing = spec["routing"]
         prompt = spec["prompt"]
         runtime = spec["runtime"]
         capabilities = spec["capabilities"]
@@ -134,6 +187,19 @@ class AgentPackageLoader:
             raw["api_version"],
             raw["kind"],
             PackageMetadata(metadata["name"], metadata["version"], metadata["description"]),
+            ExecutionDeclaration(
+                execution["kind"],
+                execution["provider"],
+                execution.get("capability"),
+                execution.get("source_argument"),
+            ),
+            RoutingDeclaration(
+                routing["default"],
+                routing["priority"],
+                tuple(routing["keywords"]),
+                routing["requires_url"],
+                tuple(routing["scopes"]),
+            ),
             tuple(spec["accepted_intents"]),
             PromptDeclaration(
                 prompt["system_ref"],

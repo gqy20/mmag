@@ -25,10 +25,22 @@ import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from mmag.agent_packages import AgentPackageLoader  # noqa: E402
+from mmag.application import (  # noqa: E402
+    AttachmentProcessor,
+    BotIdentity,
+    ContextBuilder,
+    is_text_attachment,
+)
 from mmag.config import config  # noqa: E402
 from mmag.llm import LLM  # noqa: E402
 from mmag.memory import Memory  # noqa: E402
-from mmag.prompts import prompts  # noqa: E402
+
+_PACKAGE = AgentPackageLoader().load(
+    Path(__file__).resolve().parents[1] / "agents/mmchat"
+)
+_SYSTEM_PROMPT = _PACKAGE.prompts[_PACKAGE.manifest.prompt.system_ref]
+_TASK_PROMPT = _PACKAGE.prompts[_PACKAGE.manifest.prompt.task_ref]
 
 
 # ============================================================
@@ -79,18 +91,10 @@ def test_image_blocks_construction(tmp_path):
         pytest.skip("服务器没有可用的图片样本, 跳过")
 
     mm = MMClient()
-    memory = Memory(":memory:")
-    from mmag.agent import Agent
-
-    # 实例化 Agent 但跳过 start() (避免起 WS/MCP)
-    agent = Agent.__new__(Agent)  # 不走 __init__, 自己塞必要属性
-    agent.mm = mm
-    agent.memory = memory
-    agent.bot_user_id = ""
-    agent.bot_username = "test_bot"
+    processor = AttachmentProcessor(mm)
 
     image_blocks = asyncio.run(
-        agent._build_attachment_blocks(
+        processor.build_blocks(
             sample["metadata"]["files"],
             max_count=config.max_images_per_msg,
             max_bytes=config.max_image_bytes,
@@ -115,7 +119,6 @@ def test_image_blocks_construction(tmp_path):
 # ============================================================
 def test_context_includes_image_blocks(tmp_path):
     """验证 _build_context 把 _llm_content_blocks 拼到 user message"""
-    from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
@@ -124,13 +127,14 @@ def test_context_includes_image_blocks(tmp_path):
     # Mock MMClient 的方法(避免真连 MM)
     mm.get_channel = lambda cid: {"id": cid, "display_name": "test-ch", "name": "test-ch"}
 
-    agent = Agent.__new__(Agent)
-    agent.mm = mm
-    agent.memory = memory
-    agent.bot_user_id = "BOT_ID"
-    agent.bot_username = "test_bot"
-    agent.working_memory = {"ch1": []}
-    agent.compactor = None  # 不调
+    builder = ContextBuilder(
+        mm,
+        memory,
+        {"ch1": []},
+        BotIdentity("BOT_ID", "test_bot"),
+        _SYSTEM_PROMPT,
+        _TASK_PROMPT,
+    )
 
     # 构造带 image blocks 的 post
     post = {
@@ -149,7 +153,7 @@ def test_context_includes_image_blocks(tmp_path):
             }
         ],
     }
-    ctx = agent._build_context(post)
+    ctx = builder.build(post)
     messages = ctx["messages"]
     # 最后一条 user 消息的 content 必须是 list
     last = messages[-1]
@@ -165,19 +169,20 @@ def test_context_includes_image_blocks(tmp_path):
 
 def test_context_fallback_to_text_when_no_images(tmp_path):
     """无 _llm_content_blocks 时走纯文本路径 (向后兼容)"""
-    from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
     memory = Memory(":memory:")
     mm.get_channel = lambda cid: {"id": cid, "display_name": "test-ch", "name": "test-ch"}
 
-    agent = Agent.__new__(Agent)
-    agent.mm = mm
-    agent.memory = memory
-    agent.bot_user_id = "BOT_ID"
-    agent.bot_username = "test_bot"
-    agent.working_memory = {"ch1": []}
+    builder = ContextBuilder(
+        mm,
+        memory,
+        {"ch1": []},
+        BotIdentity("BOT_ID", "test_bot"),
+        _SYSTEM_PROMPT,
+        _TASK_PROMPT,
+    )
 
     post = {
         "channel_id": "ch1",
@@ -185,7 +190,7 @@ def test_context_fallback_to_text_when_no_images(tmp_path):
         "username": "alice",
         "message": "普通文本消息",
     }
-    ctx = agent._build_context(post)
+    ctx = builder.build(post)
     last = ctx["messages"][-1]
     assert isinstance(last["content"], str), "无 image 时 content 应为 str"
     assert "alice" in last["content"]
@@ -200,7 +205,6 @@ def test_context_fallback_to_text_when_no_images(tmp_path):
 @pytest.mark.slow
 def test_llm_actually_sees_image(tmp_path):
     """端到端: 构造多模态 messages → 调真实 LLM → 验证模型看到图"""
-    from mmag.agent import Agent
     from mmag.client import MMClient
 
     sample = fetch_real_sample()
@@ -212,15 +216,18 @@ def test_llm_actually_sees_image(tmp_path):
         memory = Memory(":memory:")
         llm = LLM()
 
-        agent = Agent.__new__(Agent)
-        agent.mm = mm
-        agent.memory = memory
-        agent.bot_user_id = "BOT_ID"
-        agent.bot_username = "test_bot"
-        agent.working_memory = {sample["channel_id"]: []}
+        processor = AttachmentProcessor(mm)
+        builder = ContextBuilder(
+            mm,
+            memory,
+            {sample["channel_id"]: []},
+            BotIdentity("BOT_ID", "test_bot"),
+            _SYSTEM_PROMPT,
+            _TASK_PROMPT,
+        )
 
         # 1) 下载图 (在同一个 event loop 里)
-        image_blocks = await agent._build_attachment_blocks(
+        image_blocks = await processor.build_blocks(
             sample["metadata"]["files"],
             max_count=config.max_images_per_msg,
             max_bytes=config.max_image_bytes,
@@ -236,7 +243,7 @@ def test_llm_actually_sees_image(tmp_path):
             "message": user_question,
             "_llm_content_blocks": image_blocks,
         }
-        ctx = agent._build_context(post)
+        ctx = builder.build(post)
 
         # 3) 真实调 LLM (同一 loop)
         print(f"\n  调 LLM ({config.anthropic_model})...")
@@ -244,7 +251,7 @@ def test_llm_actually_sees_image(tmp_path):
         last = ctx["messages"][-1]
         print(f"  最后一条 content 块数: {len(last['content'])}")
 
-        system = prompts.get("system_prompt", bot_username=agent.bot_username)
+        system = ctx["system"]
         # step-3.7-flash 偶发只返回 thinking 不返回 text (概率行为),
         # 加 max_tokens + 1 次重试,让测试稳定。生产调用也会自然重试。
         response = ""
@@ -272,7 +279,6 @@ def test_llm_actually_sees_image(tmp_path):
 # ============================================================
 def test_text_only_path_still_works():
     """纯文本消息走老路径, 验证没破坏现有功能"""
-    from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
@@ -281,12 +287,14 @@ def test_text_only_path_still_works():
     memory = Memory(":memory:")
     mm.get_channel = lambda cid: {"id": cid, "display_name": "test", "name": "test"}
 
-    agent = Agent.__new__(Agent)
-    agent.mm = mm
-    agent.memory = memory
-    agent.bot_user_id = "BOT_ID"
-    agent.bot_username = "test_bot"
-    agent.working_memory = {"ch1": []}
+    builder = ContextBuilder(
+        mm,
+        memory,
+        {"ch1": []},
+        BotIdentity("BOT_ID", "test_bot"),
+        _SYSTEM_PROMPT,
+        _TASK_PROMPT,
+    )
 
     post = {
         "channel_id": "ch1",
@@ -294,7 +302,7 @@ def test_text_only_path_still_works():
         "username": "bob",
         "message": "@test_bot 帮我看看这个",
     }
-    ctx = agent._build_context(post)
+    ctx = builder.build(post)
     msgs = ctx["messages"]
     assert msgs[-1]["role"] == "user"
     assert isinstance(msgs[-1]["content"], str)
@@ -312,21 +320,14 @@ def test_text_attachment_downloaded_as_text_block(tmp_path):
     """验证 _build_attachment_blocks 下载 text/* 附件并放入 text content block"""
     from unittest.mock import AsyncMock
 
-    from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(":memory:")
-
-    agent = Agent.__new__(Agent)
-    agent.mm = mm
-    agent.memory = memory
-    agent.bot_user_id = ""
-    agent.bot_username = "test_bot"
+    processor = AttachmentProcessor(mm)
 
     # mock get_file_bytes_async: 返回 markdown 内容
     md_content = "# 会议纪要\n\n## 议题\n1. 项目进度\n2. 预算审批\n\n结论: 通过".encode()
-    agent.mm.get_file_bytes_async = AsyncMock(return_value=(md_content, "text/markdown"))
+    mm.get_file_bytes_async = AsyncMock(return_value=(md_content, "text/markdown"))
 
     file_metas = [
         {
@@ -338,7 +339,7 @@ def test_text_attachment_downloaded_as_text_block(tmp_path):
     ]
 
     blocks = asyncio.run(
-        agent._build_attachment_blocks(
+        processor.build_blocks(
             file_metas, max_count=4, max_bytes=5 * 1024 * 1024, max_text_chars=50000
         )
     )
@@ -359,20 +360,13 @@ def test_json_attachment_downloaded_as_text_block(tmp_path):
     """验证 application/json 附件也被下载为 text block"""
     from unittest.mock import AsyncMock
 
-    from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(":memory:")
-
-    agent = Agent.__new__(Agent)
-    agent.mm = mm
-    agent.memory = memory
-    agent.bot_user_id = ""
-    agent.bot_username = "test_bot"
+    processor = AttachmentProcessor(mm)
 
     json_content = b'{"key": "value", "items": [1, 2, 3]}'
-    agent.mm.get_file_bytes_async = AsyncMock(return_value=(json_content, "application/json"))
+    mm.get_file_bytes_async = AsyncMock(return_value=(json_content, "application/json"))
 
     file_metas = [
         {
@@ -383,9 +377,7 @@ def test_json_attachment_downloaded_as_text_block(tmp_path):
         }
     ]
 
-    blocks = asyncio.run(
-        agent._build_attachment_blocks(file_metas, max_count=4, max_bytes=5 * 1024 * 1024)
-    )
+    blocks = asyncio.run(processor.build_blocks(file_metas, max_count=4, max_bytes=5 * 1024 * 1024))
 
     assert blocks is not None
     text_blocks = [b for b in blocks if b["type"] == "text"]
@@ -400,21 +392,14 @@ def test_text_attachment_truncation(tmp_path):
     """验证超大文本附件被截断"""
     from unittest.mock import AsyncMock
 
-    from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(":memory:")
-
-    agent = Agent.__new__(Agent)
-    agent.mm = mm
-    agent.memory = memory
-    agent.bot_user_id = ""
-    agent.bot_username = "test_bot"
+    processor = AttachmentProcessor(mm)
 
     # 生成 100K 字符的文本
     big_content = ("A" * 100000).encode("utf-8")
-    agent.mm.get_file_bytes_async = AsyncMock(return_value=(big_content, "text/plain"))
+    mm.get_file_bytes_async = AsyncMock(return_value=(big_content, "text/plain"))
 
     file_metas = [
         {
@@ -426,7 +411,7 @@ def test_text_attachment_truncation(tmp_path):
     ]
 
     blocks = asyncio.run(
-        agent._build_attachment_blocks(
+        processor.build_blocks(
             file_metas, max_count=4, max_bytes=5 * 1024 * 1024, max_text_chars=1000
         )
     )
@@ -444,20 +429,13 @@ def test_unsupported_mime_stays_as_placeholder(tmp_path):
     """验证不支持的 MIME (如 PDF) 仍为占位文本, 不尝试下载"""
     from unittest.mock import AsyncMock
 
-    from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(":memory:")
-
-    agent = Agent.__new__(Agent)
-    agent.mm = mm
-    agent.memory = memory
-    agent.bot_user_id = ""
-    agent.bot_username = "test_bot"
+    processor = AttachmentProcessor(mm)
 
     # mock — 不应被调用
-    agent.mm.get_file_bytes_async = AsyncMock(return_value=None)
+    mm.get_file_bytes_async = AsyncMock(return_value=None)
 
     file_metas = [
         {
@@ -468,13 +446,11 @@ def test_unsupported_mime_stays_as_placeholder(tmp_path):
         }
     ]
 
-    blocks = asyncio.run(
-        agent._build_attachment_blocks(file_metas, max_count=4, max_bytes=5 * 1024 * 1024)
-    )
+    blocks = asyncio.run(processor.build_blocks(file_metas, max_count=4, max_bytes=5 * 1024 * 1024))
 
     # PDF 不下载, 应返回 None (无成功 content blocks)
     assert blocks is None
-    agent.mm.get_file_bytes_async.assert_not_called()
+    mm.get_file_bytes_async.assert_not_called()
     print("  ✓ PDF 附件不下载, 保持占位")
 
 
@@ -482,20 +458,13 @@ def test_yaml_attachment_downloaded_as_text_block(tmp_path):
     """验证 application/yaml MIME 的附件被识别为文本文档并下载"""
     from unittest.mock import AsyncMock
 
-    from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(":memory:")
-
-    agent = Agent.__new__(Agent)
-    agent.mm = mm
-    agent.memory = memory
-    agent.bot_user_id = ""
-    agent.bot_username = "test_bot"
+    processor = AttachmentProcessor(mm)
 
     yaml_content = b"tiers:\n  - name: S\n    cost: 100\n  - name: A\n    cost: 80"
-    agent.mm.get_file_bytes_async = AsyncMock(return_value=(yaml_content, "application/yaml"))
+    mm.get_file_bytes_async = AsyncMock(return_value=(yaml_content, "application/yaml"))
 
     file_metas = [
         {
@@ -506,9 +475,7 @@ def test_yaml_attachment_downloaded_as_text_block(tmp_path):
         }
     ]
 
-    blocks = asyncio.run(
-        agent._build_attachment_blocks(file_metas, max_count=4, max_bytes=5 * 1024 * 1024)
-    )
+    blocks = asyncio.run(processor.build_blocks(file_metas, max_count=4, max_bytes=5 * 1024 * 1024))
 
     assert blocks is not None, "YAML 附件应被识别为文本文档"
     text_blocks = [b for b in blocks if b["type"] == "text"]
@@ -521,14 +488,11 @@ def test_yaml_attachment_downloaded_as_text_block(tmp_path):
 
 def test_octet_stream_text_fallback_by_extension(tmp_path):
     """验证 application/octet-stream + .md 扩展名也能被识别为文本"""
-    from mmag.agent import _is_text_attachment
-
-    # 直接测 _is_text_attachment
-    assert _is_text_attachment("application/octet-stream", "notes.md")
-    assert _is_text_attachment("application/octet-stream", "config.yaml")
-    assert _is_text_attachment("application/octet-stream", "data.csv")
-    assert not _is_text_attachment("application/octet-stream", "photo.jpg")
-    assert not _is_text_attachment("application/octet-stream", "archive.zip")
+    assert is_text_attachment("application/octet-stream", "notes.md")
+    assert is_text_attachment("application/octet-stream", "config.yaml")
+    assert is_text_attachment("application/octet-stream", "data.csv")
+    assert not is_text_attachment("application/octet-stream", "photo.jpg")
+    assert not is_text_attachment("application/octet-stream", "archive.zip")
     print("  ✓ octet-stream + 扩展名兜底正确")
 
 
@@ -536,22 +500,15 @@ def test_mixed_image_and_text_attachments(tmp_path):
     """验证图片 + 文本文档混合附件都正确处理"""
     from unittest.mock import AsyncMock
 
-    from mmag.agent import Agent
     from mmag.client import MMClient
 
     mm = MMClient()
-    memory = Memory(":memory:")
-
-    agent = Agent.__new__(Agent)
-    agent.mm = mm
-    agent.memory = memory
-    agent.bot_user_id = ""
-    agent.bot_username = "test_bot"
+    processor = AttachmentProcessor(mm)
 
     # mock: 第一次调用返回图片, 第二次返回文本
     png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
     md_data = b"# Title\n\nSome markdown content"
-    agent.mm.get_file_bytes_async = AsyncMock(
+    mm.get_file_bytes_async = AsyncMock(
         side_effect=[
             (png_data, "image/png"),
             (md_data, "text/markdown"),
@@ -574,7 +531,7 @@ def test_mixed_image_and_text_attachments(tmp_path):
     ]
 
     blocks = asyncio.run(
-        agent._build_attachment_blocks(
+        processor.build_blocks(
             file_metas, max_count=4, max_bytes=5 * 1024 * 1024, max_text_chars=50000
         )
     )

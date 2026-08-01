@@ -17,16 +17,14 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from mmag.agent import Agent  # noqa: E402
+from mmag.application import BotIdentity, MessageHandler  # noqa: E402
 
 
-def _make_agent(bot_user_id: str, bot_username: str = "agent2") -> Agent:
-    """构造一个只够跑 helper 的最小 Agent 实例"""
-    agent = Agent.__new__(Agent)
-    agent.bot_user_id = bot_user_id
-    agent.bot_username = bot_username
-    agent.memory = MagicMock()
-    return agent
+def _make_handler(bot_user_id: str, bot_username: str = "agent2") -> MessageHandler:
+    handler = MessageHandler.__new__(MessageHandler)
+    handler.identity = BotIdentity(bot_user_id, bot_username)
+    handler.memory = MagicMock()
+    return handler
 
 
 class FakeChannel:
@@ -52,51 +50,51 @@ class FakeMM:
 
 class TestIsExplicitInvocation:
     def test_at_mention_returns_true(self):
-        a = _make_agent("u_bot_self")
+        a = _make_handler("u_bot_self")
         a.mm = FakeMM()
         post = {"channel_id": "ch1", "message": "@agent2 帮我看看", "root_id": ""}
-        assert a._is_explicit_invocation(post) is True
+        assert a.is_explicit_invocation(post) is True
 
     def test_at_mention_case_insensitive(self):
-        a = _make_agent("u_bot_self")
+        a = _make_handler("u_bot_self")
         a.mm = FakeMM()
         post = {"channel_id": "ch1", "message": "@AGENT2 help", "root_id": ""}
-        assert a._is_explicit_invocation(post) is True
+        assert a.is_explicit_invocation(post) is True
 
     def test_dm_returns_true(self):
-        a = _make_agent("u_bot_self")
+        a = _make_handler("u_bot_self")
         a.mm = FakeMM(channel_type="D")
         post = {"channel_id": "ch1", "message": "你好", "root_id": ""}
-        assert a._is_explicit_invocation(post) is True
+        assert a.is_explicit_invocation(post) is True
 
     def test_thread_reply_to_me_returns_true(self):
-        a = _make_agent("u_bot_self")
+        a = _make_handler("u_bot_self")
         a.mm = FakeMM()
         a.memory.get_post_user.return_value = "u_bot_self"  # root 是我发的
         post = {"channel_id": "ch1", "message": "补充一下", "root_id": "root_xyz"}
-        assert a._is_explicit_invocation(post) is True
+        assert a.is_explicit_invocation(post) is True
 
     def test_thread_reply_to_others_returns_false(self):
         """thread 回复别人的消息 — 不算显式召唤我"""
-        a = _make_agent("u_bot_self")
+        a = _make_handler("u_bot_self")
         a.mm = FakeMM()
         a.memory.get_post_user.return_value = "u_gqy_other"
         post = {"channel_id": "ch1", "message": "补充一下", "root_id": "root_xyz"}
-        assert a._is_explicit_invocation(post) is False
+        assert a.is_explicit_invocation(post) is False
 
     def test_plain_listen_returns_false(self):
         """群里别人聊天,没 @ 我,不是 thread — 不算显式召唤"""
-        a = _make_agent("u_bot_self")
+        a = _make_handler("u_bot_self")
         a.mm = FakeMM()
         post = {"channel_id": "ch1", "message": "今天天气不错", "root_id": ""}
-        assert a._is_explicit_invocation(post) is False
+        assert a.is_explicit_invocation(post) is False
 
     def test_other_bot_at_returns_false(self):
         """@ 其他 bot 不是我 — 不算显式召唤"""
-        a = _make_agent("u_bot_self", bot_username="agent2")
+        a = _make_handler("u_bot_self", bot_username="agent2")
         a.mm = FakeMM()
         post = {"channel_id": "ch1", "message": "@hz_bot 你来答", "root_id": ""}
-        assert a._is_explicit_invocation(post) is False
+        assert a.is_explicit_invocation(post) is False
 
 
 # ---- _is_silent ----
@@ -104,25 +102,21 @@ class TestIsExplicitInvocation:
 
 class TestIsSilent:
     def test_empty_text_is_silent(self):
-        a = _make_agent("u_bot_self")
-        assert a._is_silent("") is True
-        assert a._is_silent(None) is True
+        assert MessageHandler.is_silent("") is True
+        assert MessageHandler.is_silent(None) is True
 
     def test_silent_marker_first_line(self):
-        a = _make_agent("u_bot_self")
-        assert a._is_silent("<SILENT>") is True
-        assert a._is_silent("<SILENT>\n") is True
-        assert a._is_silent("<SILENT>") is True
+        assert MessageHandler.is_silent("<SILENT>") is True
+        assert MessageHandler.is_silent("<SILENT>\n") is True
+        assert MessageHandler.is_silent("<SILENT>") is True
         # 后面可以有空白
-        assert a._is_silent("<SILENT>\n\n") is True
+        assert MessageHandler.is_silent("<SILENT>\n\n") is True
 
     def test_normal_text_not_silent(self):
-        a = _make_agent("u_bot_self")
-        assert a._is_silent("好的,我看看") is False
-        assert a._is_silent("收到 👍") is False
+        assert MessageHandler.is_silent("好的,我看看") is False
+        assert MessageHandler.is_silent("收到 👍") is False
 
     def test_silent_marker_in_middle_not_silent(self):
         """<SILENT> 必须出现在第一行才视为沉默"""
-        a = _make_agent("u_bot_self")
         text = "我先看看情况\n<SILENT>"
-        assert a._is_silent(text) is False
+        assert MessageHandler.is_silent(text) is False

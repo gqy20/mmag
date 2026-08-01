@@ -112,23 +112,24 @@ Phase 0、Runtime 契约与 Capability 单一来源均已完成：`Agent`、`Mem
 ```mermaid
 flowchart LR
     MM[Mattermost] -->|WebSocket event| WS[WebSocketClient]
-    WS --> A[Agent._on_posted]
-    A --> ATT[附件下载]
-    A --> MEM[(Memory / SQLite)]
-    A --> CTX[Context 构建]
-    CTX --> LG[LangGraph default Runtime]
+    WS --> IN[(Inbox / Scheduler)]
+    IN --> APP[application.MessageHandler]
+    APP --> ROUTER[agent_system.AgentRouter]
+    ROUTER --> PKG[Agent Package Contract]
+    PKG --> LG[LangGraph default Runtime]
     LG --> REVIEW{review_tools}
     REVIEW -->|REQUIRE_APPROVAL| CP[(SQLite checkpoint)]
     CP -->|Command resume| REVIEW
-    REVIEW --> REG[ToolRegistry / MCP Bridge]
-    CTX -. explicit opt-in .-> SDK[Claude Agent SDK]
+    REVIEW --> REG[CapabilityRegistry / MCP Bridge]
+    PKG -. explicit opt-in .-> SDK[Claude Agent SDK]
     SDK --> SDKTOOLS[SDK Tools / in-process MCP]
-    SDKTOOLS --> A
-    REG --> A
-    A -->|REST reply| MM
+    SDKTOOLS --> OUT[(Outbox)]
+    REG --> OUT
+    LG --> OUT
+    OUT -->|REST delivery| MM
 ```
 
-入口在 [`cli.py`](../src/mmag/cli.py)，主要依赖由 [`Agent.__init__`](../src/mmag/agent.py) 直接构造。WebSocket、REST、Memory、两套 LLM、两套工具和 MCP 生命周期全部汇聚到 `Agent`。
+入口在 [`cli.py`](../src/mmag/cli.py)，依赖由 [`application/app.py`](../src/mmag/application/app.py) 组合；消息、上下文、附件和投递分别由应用服务承担。旧的单文件 `agent.py` 已删除。
 
 ### 4.2 当前已有能力
 
@@ -138,19 +139,19 @@ flowchart LR
 | 显式召唤 | @、DM、thread 硬规则 | 可保留为中枢路由规则 |
 | 群聊自主响应 | LLM 输出 `<SILENT>` | 可用，但故障和沉默语义混在一起 |
 | 上下文窗口 | `working_memory` + `_build_context` | 以频道为中心，耦合 MM/Memory/Prompt |
-| 长期记忆 | SQLite 消息、FTS、画像、知识、摘要 | 有价值，但 Repository 和作用域尚未分离 |
+| 长期记忆 | SQLite 消息、FTS、画像、知识、摘要 | Repository 已拆分，Scope/Artifact 主链仍需收口 |
 | 多模态 | 图片、文本附件转 content blocks | 已具备入口侧能力 |
 | LangGraph Runtime | Anthropic API + LangGraph | 当前默认路径，具备持久 checkpoint 与原生 HITL |
 | SDK Agent Loop | Claude Agent SDK | 显式 opt-in 路径，不承担可恢复审批 |
-| 内置工具 | 消息、知识、链接、用户、文件等 | 两套定义，存在漂移风险 |
+| 内置能力 | 消息、知识、链接、用户、文件等 | 单一 Spec，经 CapabilityRegistry/SDK 投影 |
 | MCP | Capability Catalog + MCP Bridge | schema、策略和可见性已有单一来源 |
-| 日志追踪 | 全局 `TraceContext` | 串行可用，并发不安全 |
+| 日志追踪 | ContextVar `TraceContext` | 请求隔离，已记录 route/package/runtime |
 
 ### 4.3 主要架构问题
 
-#### A. `Agent` 是 Facade God Object
+#### A. `Agent` God Object（已解决）
 
-[`agent.py`](../src/mmag/agent.py) 当前超过 1200 行，同时负责：
+旧 `agent.py` 曾超过 1200 行并同时承担：
 
 - 依赖构造和生命周期；
 - Mattermost 事件过滤与解析；
@@ -162,21 +163,21 @@ flowchart LR
 - LLM Runtime 选择；
 - typing、ack、回复与错误降级。
 
-直接按文件大小拆分只能移动代码，不能解决控制权、数据所有权和依赖方向问题。
+该文件已经删除。当前由 `application/app.py` 负责组合，消息、上下文/附件和 Delivery 使用独立应用服务；拆分依据是职责和所有权，不是 300 行阈值。
 
-#### B. Runtime 与工具系统双轨
+#### B. Runtime 与工具系统双轨（已解决）
 
 - [`llm.py`](../src/mmag/llm.py) 只封装模型调用，[`runtimes/langgraph.py`](../src/mmag/runtimes/langgraph.py) 统一图编排；
-- [`sdk_llm.py`](../src/mmag/sdk_llm.py) 使用 Claude Agent SDK，忽略传入的 `tools/tool_registry`；
-- [`tools/builtin.py`](../src/mmag/tools/builtin.py) 和 [`sdk_tools.py`](../src/mmag/sdk_tools.py) 重复声明工具；
-- 工具参数上限、结果格式化和来源增强也存在重复；
+- [`sdk_llm.py`](../src/mmag/sdk_llm.py) 使用 Claude Agent SDK，但不再模拟旧手写 Agent loop 参数；
+- 内置能力由 `capabilities/` 的唯一 Spec 创建，LangGraph 与 SDK 只负责投影 binding；
+- 参数上限、结果格式化、授权和来源增强由 Capability 层统一；
 - MCP 先进入 Capability Catalog，再生成 Runtime binding；SDK 仅作为可选后端。
 
-这不是普通 Adapter，而是两套行为不同的系统。
+LangGraph 是默认 Runtime；SDK 是显式可选后端，不再形成第二套业务契约。
 
-#### C. WebSocket 被业务执行阻塞
+#### C. WebSocket 被业务执行阻塞（已解决）
 
-[`WebSocketClient._dispatch`](../src/mmag/ws_client.py) 直接等待 `_on_posted`。一次消息会串行经历附件下载、SQLite、摘要、LLM、多轮工具和 REST 回复。
+WebSocket 事件现在先持久化到 Inbox，由 conversation scheduler 分发给 `MessageHandler`；Delivery 通过 Outbox 独立完成。
 
 结果包括：
 
@@ -477,7 +478,7 @@ erDiagram
 4. Scope Resolver 解析用户、组织、项目和权限
 5. Context Assembler 构建最小必要上下文
 6. Intent Classifier 判断无需响应 / 中枢直接回答 / 创建任务
-7. Agent Router 选择 AgentSpec
+7. Agent Router 选择 AgentDescriptor / Agent Package
 8. Runtime 执行，Capability 调用逐次经过 Policy
 9. Result Assembler 汇总文本、来源和产物
 10. Outbox 幂等投递到 Mattermost
@@ -629,7 +630,7 @@ infrastructure/adapters → application → domain
 
 - [x] 定义 `AgentRuntime`、`RunRequest`、`AgentResult`；
 - [x] 定义单一 `CapabilitySpec` 和 `CapabilityExecutor`；
-- [x] 从同一 Capability 生成 SDK 与 ToolRegistry binding，并将 MCP discovery 适配为 Capability；
+- [x] 从同一 Capability 生成 SDK 与 CapabilityRegistry binding，并将 MCP discovery 适配为 Capability；
 - [x] 统一能力来源、执行结果和 Policy 入口；
 - [x] Runtime 统一错误、deadline 和 fallback 语义；
 - [x] MemoryCompactor 通过 Runtime Port 调用模型；
@@ -699,11 +700,12 @@ infrastructure/adapters → application → domain
 
 工作项：
 
-- [x] 实现 `AgentSpec`、`ManagedAgent`、`AgentRegistry`；
+- [x] 实现 `AgentDescriptor`、`ManagedAgent`、`AgentRegistry`；
 - [x] 实现基于意图、权限、作用域、成本和健康度的 Router；
 - [x] 将 `analyze_link` 升级为第一个 Link Agent；
 - [x] 实现 Agent handoff 和结构化 Artifact；
-- [x] 注册 Research Agent、Project Assistant、Presentation Agent；
+- [x] 删除无 Package/Schema/Policy 的 Research、Project、Presentation 占位 Agent；
+- [x] `mmchat` 与 `link` 通过扁平 Package、可信 Provider 和 AgentFactory 自动注册；
 - 引入 AgentAssignment 支持个人/项目专属数字员工。
 
 退出标准：
@@ -810,7 +812,7 @@ infrastructure/adapters → application → domain
 
 - [x] 增加 CI，执行 Ruff、默认离线 pytest、coverage 和宽松模式类型检查；
 - [x] 首次采集 branch coverage，设置 40% 的可持续初始阈值；
-- [x] 构建 wheel 后在隔离目录执行包、CLI 模块和 `prompts.yml` 加载 smoke test；
+- [x] 构建 wheel 后在隔离目录执行包、CLI 模块和 Agent Package Prompt 加载 smoke test；
 - [x] 将 external/PoC 测试保留为显式任务，不让密钥和公网依赖进入默认 CI；
 - [x] 覆盖附件、工具和多轮调用；
 - [x] 补齐失败重试和重复事件测试。
@@ -843,13 +845,13 @@ infrastructure/adapters → application → domain
 
 ### 15.4 实施包 C：Capability 单一来源（完成）
 
-目标：消除 `tools/builtin.py` 与 `sdk_tools.py` 的 schema、handler 和格式化逻辑重复。
+目标：让 `capabilities/` 成为 schema、handler、授权和格式化逻辑的单一来源。
 
 实施内容：
 
 - [x] 定义 `CapabilitySpec`、`CapabilityResult`、权限/副作用元数据和执行器；
 - [x] 选择 `get_channel_info` 完成首个只读切片；
-- [x] 从同一 Capability 生成 ToolRegistry/SDK binding，并将 MCP discovery 纳入同一 Catalog/Policy；
+- [x] 从同一 Capability 生成 CapabilityRegistry/SDK binding，并将 MCP discovery 纳入同一 Catalog/Policy；
 - [x] 统一共享内置能力的来源信息、超时和错误字段；
 - [x] 逐个迁移共享内置工具，删除重复实现。
 - [x] 建立单一有序内置 Catalog，SDK/Legacy 不再维护各自的装配清单；

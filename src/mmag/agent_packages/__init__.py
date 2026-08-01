@@ -8,22 +8,34 @@ from .errors import (
     PromptContractError,
     SchemaContractError,
 )
+from .factory import (
+    AgentFactory,
+    AgentProviderRegistry,
+    LangGraphJSONProvider,
+    LangGraphTextProvider,
+    SingleCapabilityProvider,
+)
 from .loader import AgentPackageLoader
 from .models import AgentPackage, PackageVersionSnapshot
 from .registry import AgentPackageRegistry
-from .runtime import ContractManagedAgent, RuntimePackageAgent
+from .runtime import ContractAgentDecorator, PackageAgentRunner
 
 __all__ = [
     "AgentPackage",
     "AgentPackageError",
     "AgentPackageLoader",
     "AgentPackageRegistry",
-    "ContractManagedAgent",
+    "AgentFactory",
+    "AgentProviderRegistry",
+    "ContractAgentDecorator",
     "InvalidAgentOutputError",
+    "LangGraphJSONProvider",
+    "LangGraphTextProvider",
     "ManifestValidationError",
     "PackageReferenceError",
     "PackageVersionSnapshot",
     "PromptContractError",
-    "RuntimePackageAgent",
+    "PackageAgentRunner",
     "SchemaContractError",
+    "SingleCapabilityProvider",
 ]

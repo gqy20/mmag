@@ -8,7 +8,7 @@
 
 ### US1：发布 Agent Package
 
-作为平台工程师，我可以发布一个包含 `agent.yml`、版本化 Prompt、输入/输出/Artifact Schema 和 eval 用例的目录。任何未知字段、逃逸路径、非法 Schema 或 Prompt 变量漂移都会在发布前失败，旧版本内容不能被静默覆盖。
+作为平台工程师，我可以提交一个扁平 Agent Package，其中包含 `agent.yml`、Prompt、输入/输出/Artifact Schema 和 eval 用例。任何未知字段、逃逸路径、非法 Schema 或 Prompt 变量漂移都会在注册前失败；版本保留在 Manifest，历史由 Git 和发布制品保存。
 
 ### US2：执行有契约的 Agent
 
@@ -28,12 +28,14 @@
 - FR-002：Package 引用必须为包根目录内的相对路径，禁止目录穿越与绝对路径。
 - FR-003：Prompt 必须声明 required variables；模板使用未声明变量或声明变量从未使用时拒绝发布。
 - FR-004：每个业务 JSON Schema 必须声明 `x-version`，加载时校验其自身合法性。
-- FR-005：Registry 支持 name/version 查询、active version 与批量原子加载；已发布同版本内容不可变。
+- FR-005：Registry 扫描 `agents/*/agent.yml` 并按 name 批量原子加载；目录名必须与 Manifest name 一致。
 - FR-006：输入、输出和 Artifact 必须在 Agent 边界验证；不合格数据不得进入下一 Agent。
 - FR-007：模型输出修复最多一次，修复阶段不可调用 Capability。
-- FR-008：Manifest allow 与 deny 不得交叉；Runtime 能力来自已知 Catalog 与 allowlist 的精确交集。
+- FR-008：Manifest allow 与 deny 不得交叉；Runtime 能力来自已知 Catalog 与显式 allowlist/pattern 的受限交集。
 - FR-009：Policy Engine 构造器默认 DENY，Policy 引用必须解析到明确版本。
 - FR-010：每个成功输出携带版本 provenance 和 usage。
+- FR-011：Manifest 必须声明 execution Provider 和 routing；未知 Provider、多个默认 Agent 或重复路由拒绝注册。
+- FR-012：Capability 根据当前 Package `policy_ref` 动态裁决，缺失 Package Policy Context 默认拒绝。
 
 ## 非目标
 
@@ -44,7 +46,7 @@
 
 ## 验收标准
 
-- Link Agent 通过 Package Loader、Registry、输入/输出/Artifact 契约与专属默认拒绝 Policy 执行；
-- 非法 Manifest、同版本篡改、非法输入、非法输出与二次修复失败都有离线测试；
+- `mmchat` 与 Link Agent 通过 Package Loader、AgentFactory、Router、输入/输出/Artifact 契约与默认拒绝 Policy 执行；
+- 非法 Manifest、未知 Provider、路由冲突、非法输入、非法输出与二次修复失败都有离线测试；
 - wheel 包含 Agent、Policy 与 Model Policy 声明资源；
 - 全量 `make verify` 通过。
