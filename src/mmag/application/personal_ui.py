@@ -35,7 +35,7 @@ class PersonalWorkspaceUI:
     def __init__(
         self, *, personal_skills: PersonalSkillStore, work_cases: WorkCaseStore,
         interactions: InteractionSessionStore, action_tokens: ActionTokenService | None,
-        audit_store=None, intent_runtime=None, memories=None,
+        audit_store=None, intent_runtime=None, memories=None, personas=None,
     ) -> None:
         self.personal_skills = personal_skills
         self.work_cases = work_cases
@@ -45,6 +45,7 @@ class PersonalWorkspaceUI:
         self.drafts = PersonalSkillDraftBuilder(personal_skills)
         self.intents = WorkspaceIntentResolver(intent_runtime)
         self.memories = memories
+        self.personas = personas
 
     async def consume_message(
         self, post: dict, message: str, scope: Scope,
@@ -334,6 +335,8 @@ class PersonalWorkspaceUI:
             if self.memories is None:
                 raise RuntimeError("personal memory is not configured")
             item = self.memories.revoke(target, owner_id=actor_id)
+            if self.personas is not None:
+                self.personas.archive_by_memory(item.id, owner_id=actor_id)
             self._audit("memory.item", post, scope, item.ref, "revoked")
             return "这条记忆已忘记。"
         if action.startswith("pskill_"):

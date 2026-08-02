@@ -179,6 +179,19 @@ class MemoryItemStore:
             self.connection.commit()
         return int(cursor.rowcount)
 
+    def ids_for_source(
+        self, source_type: str, source_ref: str, *, installation_id: str, tenant_id: str
+    ) -> tuple[str, ...]:
+        rows = self.connection.execute(
+            """SELECT item.id FROM memory_item_sources AS source
+            JOIN memory_items AS item ON item.id=source.memory_id
+            WHERE source.source_type=? AND source.source_ref=?
+              AND item.installation_id=? AND item.tenant_id=?
+              AND item.status IN ('active', 'proposed')""",
+            (source_type, source_ref, installation_id, tenant_id),
+        ).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
     def expire(self, *, owner_id: str) -> int:
         with self.lock:
             count = self._expire_locked(owner_id, time.time())

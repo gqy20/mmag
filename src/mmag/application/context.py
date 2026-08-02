@@ -271,6 +271,7 @@ class ContextBuilder:
         *,
         scope_resolver: MattermostScopeResolver | None = None,
         memory_items=None,
+        personas=None,
     ):
         self.mm = mm_client
         self.memory = memory
@@ -278,6 +279,7 @@ class ContextBuilder:
         self.identity = identity
         self.system_prompt = system_prompt
         self.memory_items = memory_items
+        self.personas = personas
         self.scope_resolver = scope_resolver or MattermostScopeResolver(
             mm_client,
             installation_id=config.mm_installation_id,
@@ -371,10 +373,13 @@ class ContextBuilder:
         current_user_id = str(post.get("user_id") or "")
         access_scope = self.scope_resolver.resolve_post(post)
         personal_mode = access_scope.kind is ScopeKind.PERSONAL
+        persona_ref = str(post.get("_persona_ref") or "")
         personal_preferences = (
-            self.memory.get_personal_preferences(current_user_id) if personal_mode else {}
+            self.memory.get_personal_preferences(current_user_id)
+            if personal_mode and not persona_ref
+            else {}
         )
-        window = self.working_memory.get(channel_id, [])
+        window = [] if persona_ref else self.working_memory.get(channel_id, [])
         system = render_prompt(
             self.system_prompt,
             {
@@ -384,7 +389,7 @@ class ContextBuilder:
                 "current_user_username": post.get("username", "?"),
                 "current_user_profile": (
                     self._profile_summary(current_user_id)
-                    if personal_mode
+                    if personal_mode and not persona_ref
                     else "（共享会话不加载私人画像）"
                 ),
                 "recent_speakers": self._recent_speakers(window, current_user_id),
@@ -392,6 +397,22 @@ class ContextBuilder:
                 "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S (%A)"),
             },
         )
+        persona = None
+        if persona_ref and self.personas is not None:
+            persona = self.personas.get(persona_ref)
+            if (
+                persona.status.value != "active"
+                or persona.installation_id != access_scope.installation_id
+                or persona.tenant_id != access_scope.tenant_id
+            ):
+                raise PermissionError("Digital Persona is unavailable in this tenant")
+            system += (
+                "\n\n[数字人代理回答约束]\n"
+                f"你正在通过 MMAG 代表“{persona.display_name}”回答。"
+                "只能使用下方已发布快照，不得读取或猜测所有者的私人记忆，"
+                "不得调用外部资料补全缺失信息。资料不足时必须明确说明无法回答。"
+                "不要声称自己是真人或正在实时表达所有者观点。"
+            )
 
         messages: list[dict[str, Any]] = []
         previous_ts: float | None = None
@@ -412,16 +433,19 @@ class ContextBuilder:
             f"📍 频道: {channel.get('display_name', channel_id[:8])} | "
             f"id={channel_id} | name={channel.get('name', '')}"
         ]
-        summary = self.memory.get_recent_summary(channel_id)
+        summary = self.memory.get_recent_summary(channel_id) if persona is None else ""
         if summary:
             metadata.append(f"📝 最近讨论摘要: {summary}")
-        knowledge = self.memory.get_relevant_knowledge(channel_id, post.get("message", ""), 3)
+        knowledge = (
+            self.memory.get_relevant_knowledge(channel_id, post.get("message", ""), 3)
+            if persona is None else []
+        )
         if knowledge:
             metadata.append(
                 "📚 相关团队知识:\n"
                 + "\n".join(f"  - {item['key']}: {item['value']}" for item in knowledge)
             )
-        if personal_mode and self.memory_items is not None:
+        if personal_mode and persona is None and self.memory_items is not None:
             personal_memories = self.memory_items.search(
                 str(post.get("message") or ""),
                 installation_id=access_scope.installation_id,
@@ -437,13 +461,22 @@ class ContextBuilder:
                         for item in personal_memories
                     )
                 )
+        if persona is not None:
+            metadata.append(
+                f"🎭 {persona.display_name} 的已发布资料快照（版本 r{persona.revision}）:\n"
+                + "\n".join(
+                    f"  - [{item.get('kind', 'fact')}] {item.get('content', '')}"
+                    for item in persona.published_snapshots
+                )
+            )
         prefix = (
             "["
             + metadata[0]
             + ("\n" + "\n".join(metadata[1:]) if len(metadata) > 1 else "")
             + "]\n"
         )
-        task_goal = f"{prefix}{post.get('username', '?')}: {post.get('message', '')}"
+        question = str(post.get("_persona_question") or post.get("message", ""))
+        task_goal = f"{prefix}{post.get('username', '?')}: {question}"
         text = task_goal
         blocks = post.get("_llm_content_blocks")
         current_content: Any = list(blocks) + [{"type": "text", "text": text}] if blocks else text

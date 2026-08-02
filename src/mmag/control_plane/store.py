@@ -25,6 +25,7 @@ from .models import (
     StateTransition,
 )
 from .personal_skills import PersonalSkillStore
+from .personas import DigitalPersonaStore
 from .quota import QuotaStore
 from .releases import ReleaseStore
 from .runs import AgentRunStore
@@ -52,6 +53,7 @@ class SQLiteControlPlane:
         self.work_cases = WorkCaseStore(self._connection, self._lock)
         self.interactions = InteractionSessionStore(self._connection, self._lock)
         self.memory_items = MemoryItemStore(self._connection, self._lock)
+        self.personas = DigitalPersonaStore(self._connection, self._lock)
 
     def close(self) -> None:
         self._connection.close()

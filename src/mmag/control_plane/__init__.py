@@ -36,6 +36,8 @@ from .models import (
     CapabilityCallState,
     DeliveryRecord,
     DeliveryState,
+    DigitalPersona,
+    DigitalPersonaStatus,
     EnterpriseContext,
     EntityType,
     InboundEvent,
@@ -60,6 +62,7 @@ from .models import (
     WorkCaseStatus,
 )
 from .personal_skills import PersonalSkillStore
+from .personas import DigitalPersonaStore
 from .pipeline import MessagePipeline, PartitionedScheduler
 from .store import SQLiteControlPlane
 from .work_cases import InteractionSessionStore, WorkCaseStore
@@ -80,6 +83,9 @@ __all__ = [
     "ContextAssembler",
     "DeliveryRecord",
     "DeliveryState",
+    "DigitalPersona",
+    "DigitalPersonaStatus",
+    "DigitalPersonaStore",
     "EnterpriseContext",
     "EntityType",
     "InboxRecord",

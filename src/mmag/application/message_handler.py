@@ -36,8 +36,9 @@ from ..runtimes import (
 )
 from ..skill_packages import SkillPackageError
 from .delivery import OUTBOUND_COLLECTOR, MattermostDelivery
+from .persona_ui import PersonaWorkspaceUI
 from .personal_ui import PersonalWorkspaceUI
-from .views import ResponseAction, ResponsePresenter, ResponseView
+from .views import ResponseAction, ResponsePresenter, ResponseSection, ResponseView
 
 if TYPE_CHECKING:
     from ..agent_system import ManagedAgent
@@ -75,6 +76,7 @@ class MessageHandler:
         interactions=None,
         intent_runtime=None,
         memory_items=None,
+        personas=None,
     ) -> None:
         self.mm = mm_client
         self.memory = memory
@@ -105,8 +107,19 @@ class MessageHandler:
                 audit_store=audit_store,
                 intent_runtime=intent_runtime,
                 memories=memory_items,
+                personas=personas,
             )
             if personal_skills is not None and work_cases is not None and interactions is not None
+            else None
+        )
+        self.persona_ui = (
+            PersonaWorkspaceUI(
+                personas=personas,
+                memories=memory_items,
+                action_tokens=action_tokens,
+                audit_store=audit_store,
+            )
+            if personas is not None and memory_items is not None
             else None
         )
         self._action_tasks: set[asyncio.Task] = set()
@@ -154,12 +167,20 @@ class MessageHandler:
     def _revoke_message_memories(self, post_id: str) -> None:
         if not post_id or self.personal_ui is None or self.personal_ui.memories is None:
             return
+        memory_ids = self.personal_ui.memories.ids_for_source(
+            "mattermost_post", post_id,
+            installation_id=self.scope_resolver.installation_id,
+            tenant_id=self.scope_resolver.tenant_id,
+        )
         revoked = self.personal_ui.memories.revoke_source(
             "mattermost_post",
             post_id,
             installation_id=self.scope_resolver.installation_id,
             tenant_id=self.scope_resolver.tenant_id,
         )
+        if self.persona_ui is not None:
+            for memory_id in memory_ids:
+                self.persona_ui.personas.archive_by_memory(memory_id)
         if revoked:
             log_event(
                 log, "memory.source_revoked", status="completed",
@@ -273,6 +294,48 @@ class MessageHandler:
                     await self.delivery.reply_view(
                         post, view, update_post_id=status_post_id
                     )
+                return
+        if self.persona_ui is not None:
+            handled, view = self.persona_ui.consume_owner(post, message, access_scope)
+            if handled:
+                if view is not None:
+                    await self.delivery.reply_view(post, view, update_post_id=status_post_id)
+                return
+            invocation, rejected = self.persona_ui.resolve_question(
+                message,
+                installation_id=access_scope.installation_id,
+                tenant_id=access_scope.tenant_id,
+            )
+            if rejected is not None:
+                self.audit_store.append_audit(
+                    "persona.query", actor_id=user_id, scope_id=access_scope.id,
+                    trace_id=f"mattermost:{post_id}", target="",
+                    decision="rejected", details={
+                        "schema_version": "1.0", "reason": rejected.title,
+                    },
+                )
+                await self.delivery.reply_view(post, rejected, update_post_id=status_post_id)
+                return
+            if invocation is not None:
+                post["_persona_ref"] = invocation.persona_ref
+                post["_persona_question"] = invocation.question
+                post["_persona_display_name"] = invocation.display_name
+                post["_represented_owner"] = invocation.represented_owner
+                post["_persona_hash"] = invocation.persona_hash
+                self.audit_store.append_audit(
+                    "persona.query", actor_id=user_id, scope_id=access_scope.id,
+                    trace_id=f"mattermost:{post_id}", target=invocation.persona_ref,
+                    decision="accepted", details={
+                        "schema_version": "1.0",
+                        "represented_owner": invocation.represented_owner,
+                        "persona_hash": invocation.persona_hash,
+                    },
+                )
+                typing_task = asyncio.create_task(self.delivery.typing_loop(channel_id))
+                try:
+                    await self.respond(post, tag="persona", status_post_id=status_post_id)
+                finally:
+                    typing_task.cancel()
                 return
         approval = self.approval_command(message)
         if approval is not None:
@@ -420,7 +483,11 @@ class MessageHandler:
         stream: MattermostStream | None = None
         try:
             request = self.skill_resolver.prepare_personal_request(request)
-            selection = self.agent_router.route(request)
+            if post.get("_persona_ref"):
+                request = replace(request, prompt=str(post.get("_persona_question") or ""))
+                selection = self.agent_router.default(request)
+            else:
+                selection = self.agent_router.route(request)
             if self._should_stream(selection.agent):
                 stream = self.delivery.stream(
                     post,
@@ -428,8 +495,11 @@ class MessageHandler:
                     post_id=status_post_id,
                 )
             request = replace(request, intent=selection.intent)
-            request = self._resolve_skill(request, selection.agent)
+            if not post.get("_persona_ref"):
+                request = self._resolve_skill(request, selection.agent)
             capability_names = self._effective_capabilities(request, selection.agent)
+            if post.get("_persona_ref"):
+                capability_names = ()
             if self.scope_resolver.resolve_post(post).kind is ScopeKind.CHANNEL:
                 capability_names = tuple(
                     name for name in capability_names if name != "get_user_profile"
@@ -464,7 +534,22 @@ class MessageHandler:
                     run_id=self._run_id(post),
                 )
             )
-            if self.personal_ui is not None and runtime_result.status is RuntimeStatus.COMPLETED:
+            if post.get("_persona_ref"):
+                response_view = replace(
+                    response_view,
+                    title=f"{post.get('_persona_display_name')} · 数字人代理",
+                    sections=(
+                        *response_view.sections,
+                        ResponseSection(
+                            "代理声明",
+                            items=(
+                                "由 MMAG 根据所有者明确发布的资料快照生成，并非本人实时发言。",
+                                f"数字人版本：`{post.get('_persona_ref')}`",
+                            ),
+                        ),
+                    ),
+                )
+            elif self.personal_ui is not None and runtime_result.status is RuntimeStatus.COMPLETED:
                 response_view = self.personal_ui.attach_work_case(
                     post,
                     self.scope_resolver.resolve_post(post),
@@ -564,6 +649,14 @@ class MessageHandler:
                 str(item) for item in preferences.get("preferred_skills", ())
             ),
             requested_personal_skill=str(post.get("_requested_personal_skill") or ""),
+            parameters=(
+                {
+                    "persona_ref": str(post.get("_persona_ref") or ""),
+                    "persona_hash": str(post.get("_persona_hash") or ""),
+                    "represented_owner": str(post.get("_represented_owner") or ""),
+                }
+                if post.get("_persona_ref") else {}
+            ),
             response_style=str(preferences.get("response_style") or ""),
             language=str(preferences.get("language") or ""),
         )
@@ -677,6 +770,27 @@ class MessageHandler:
         scope_id = self.post_scope({"channel_id": channel_id, "user_id": actor_id})
         if scope_id != claims.scope_id:
             raise PermissionError("action belongs to another scope")
+        if claims.action.startswith("persona_"):
+            if self.persona_ui is None:
+                raise RuntimeError("persona workspace is not configured")
+            claims = self.action_tokens.consume(str(token), actor_id=actor_id)
+            scope = self.scope_resolver.resolve_post(
+                {"channel_id": channel_id, "user_id": actor_id}
+            )
+            message = self.persona_ui.handle_action(
+                claims, actor_id=actor_id,
+                post={"channel_id": channel_id, "user_id": actor_id}, scope=scope,
+            )
+            log_event(
+                log, "mattermost.action_completed", status="completed",
+                action=claims.action, action_jti=claims.jti,
+            )
+            return {
+                "update": {"message": message, "props": {
+                    "from_bot": "true", "mmag_kind": "persona", "mmag_status": "completed",
+                }},
+                "ephemeral_text": message,
+            }
         if claims.action.startswith(("pskill_", "case_", "memory_")):
             if self.personal_ui is None:
                 raise RuntimeError("personal workspace is not configured")
@@ -1090,6 +1204,10 @@ class MessageHandler:
         provenance.update(dict(getattr(agent, "platform_provenance", {})))
         if request.skill is not None:
             provenance.update(request.skill.provenance)
+        for key in ("persona_ref", "persona_hash", "represented_owner"):
+            value = request.parameters.get(key)
+            if value:
+                provenance[key] = str(value)
         return provenance
 
     @staticmethod

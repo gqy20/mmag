@@ -585,6 +585,30 @@ def _v016_add_memory_items(connection: sqlite3.Connection) -> None:
     )
 
 
+def _v017_add_digital_personas(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE digital_personas (
+        id TEXT NOT NULL, revision INTEGER NOT NULL, installation_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL, owner_id TEXT NOT NULL, owner_username TEXT NOT NULL,
+        scope_id TEXT NOT NULL, display_name TEXT NOT NULL,
+        allowed_topics TEXT NOT NULL DEFAULT '[]', denied_topics TEXT NOT NULL DEFAULT '[]',
+        response_mode TEXT NOT NULL DEFAULT 'auto',
+        source_memory_ids TEXT NOT NULL DEFAULT '[]',
+        published_snapshots TEXT NOT NULL DEFAULT '[]', sha256 TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft', created_at REAL NOT NULL, updated_at REAL NOT NULL,
+        PRIMARY KEY (id, revision)
+        )"""
+    )
+    connection.execute(
+        """CREATE INDEX idx_persona_owner ON digital_personas
+        (installation_id, tenant_id, owner_id, updated_at DESC)"""
+    )
+    connection.execute(
+        """CREATE INDEX idx_persona_active ON digital_personas
+        (installation_id, tenant_id, status, owner_username)"""
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -681,6 +705,12 @@ DEFAULT_MIGRATIONS = (
         name="add governed memory items",
         checksum=_checksum("v016-add-governed-memory-items-20260802"),
         upgrade=_v016_add_memory_items,
+    ),
+    Migration(
+        version=17,
+        name="add digital personas",
+        checksum=_checksum("v017-add-digital-personas-20260802"),
+        upgrade=_v017_add_digital_personas,
     ),
 )
 

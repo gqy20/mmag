@@ -27,6 +27,8 @@ _ALLOWED_ACTIONS = frozenset(
         "pskill_run", "pskill_edit", "pskill_activate", "pskill_archive",
         "pskill_versions",
         "case_save", "case_good", "case_bad", "case_draft",
+        "memory_forget",
+        "persona_add", "persona_publish", "persona_archive",
     }
 )
 _MAX_TOKEN_BYTES = 8_192

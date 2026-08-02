@@ -275,6 +275,7 @@ class Agent:
             default_package.prompts[default_package.manifest.prompt.system_ref],
             scope_resolver=self.scope_resolver,
             memory_items=self.control_store.memory_items,
+            personas=self.control_store.personas,
         )
         self.message_handler = MessageHandler(
             mm_client=self.mm,
@@ -298,6 +299,7 @@ class Agent:
             interactions=self.control_store.interactions,
             intent_runtime=self.runtime,
             memory_items=self.control_store.memory_items,
+            personas=self.control_store.personas,
         )
         self.capability_probe = MattermostCapabilityProbe(self.mm)
         if self.action_tokens is not None:

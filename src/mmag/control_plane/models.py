@@ -112,6 +112,12 @@ class MemoryItemStatus(StrEnum):
     EXPIRED = "expired"
 
 
+class DigitalPersonaStatus(StrEnum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
 class TaskState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -332,6 +338,31 @@ class MemoryItem:
     @property
     def ref(self) -> str:
         return f"memory://{self.id}"
+
+
+@dataclass(frozen=True, slots=True)
+class DigitalPersona:
+    id: str
+    revision: int
+    installation_id: str
+    tenant_id: str
+    owner_id: str
+    owner_username: str
+    scope_id: str
+    display_name: str
+    allowed_topics: tuple[str, ...]
+    denied_topics: tuple[str, ...]
+    response_mode: str
+    source_memory_ids: tuple[str, ...]
+    published_snapshots: tuple[Mapping[str, Any], ...]
+    sha256: str
+    status: DigitalPersonaStatus = DigitalPersonaStatus.DRAFT
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+    @property
+    def ref(self) -> str:
+        return f"persona://{self.id}@{self.revision}"
 
 
 @dataclass(frozen=True, slots=True)
