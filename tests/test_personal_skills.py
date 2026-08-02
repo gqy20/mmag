@@ -280,9 +280,14 @@ async def test_personal_workspace_understands_natural_management_intent(tmp_path
     run_handled, _, selected = await ui.consume_message(
         post, "用我的竞品研究方法分析 Notion", scope
     )
+    confirm_handled, confirm, _ = await ui.consume_message(
+        post, "把我的竞品研究速报停掉", scope
+    )
 
     assert handled and view is not None and view.title == "我的 Skills"
     assert not run_handled and selected == skill.ref
+    assert confirm_handled and confirm is not None and confirm.title == "请确认操作"
+    assert store.personal_skills.get(skill.ref, owner_id="user-1").status is PersonalSkillStatus.ACTIVE
     store.close()
 
 

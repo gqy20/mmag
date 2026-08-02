@@ -67,7 +67,7 @@ class WorkspaceIntentResolver:
         local = self._local(message, skills)
         if local is not None:
             return local
-        if self.runtime is None or not self._looks_like_workspace_request(message):
+        if self.runtime is None or not self._looks_like_workspace_request(message, skills):
             return IntentDecision(WorkspaceIntent.ORDINARY)
         return await self._classify(message, skills=skills, scope=scope, trace_id=trace_id)
 
@@ -90,11 +90,11 @@ class WorkspaceIntentResolver:
         if target is None:
             return None
         actions = (
-            (WorkspaceIntent.SKILL_ARCHIVE, ("停用", "关闭", "禁用", "archive")),
+            (WorkspaceIntent.SKILL_ARCHIVE, ("停用", "停掉", "关闭", "禁用", "archive")),
             (WorkspaceIntent.SKILL_ACTIVATE, ("启用", "开启", "activate")),
             (WorkspaceIntent.SKILL_EDIT, ("编辑", "修改", "调整", "edit")),
             (WorkspaceIntent.SKILL_VERSIONS, ("版本", "历史", "versions")),
-            (WorkspaceIntent.SKILL_RUN, ("运行", "使用", "调用", "按照", "用", "run")),
+            (WorkspaceIntent.SKILL_RUN, ("运行", "使用", "调用", "执行", "按照", "用", "run")),
         )
         for intent, words in actions:
             if any(word in normalized for word in words):
@@ -198,11 +198,18 @@ class WorkspaceIntentResolver:
         return IntentDecision(intent, target_ref, confidence, needs_input)
 
     @staticmethod
-    def _looks_like_workspace_request(message: str) -> bool:
+    def _looks_like_workspace_request(
+        message: str, skills: tuple[PersonalSkill, ...]
+    ) -> bool:
         normalized = WorkspaceIntentResolver._normalize(message)
-        return any(
+        if any(
             word in normalized
             for word in ("skill", "技能", "能力", "方法", "案例", "沉淀", "习惯")
+        ):
+            return True
+        return any(
+            WorkspaceIntentResolver._normalize(skill.name) in normalized
+            for skill in skills
         )
 
     @staticmethod
