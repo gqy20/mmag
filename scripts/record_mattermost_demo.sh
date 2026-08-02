@@ -15,6 +15,13 @@ VIEWPORT_WIDTH=1600
 VIEWPORT_HEIGHT=900
 VIDEO_WIDTH=2560
 VIDEO_HEIGHT=1440
+PROCESS_SPEED=8
+TITLE_DURATION=2.5
+CHAPTER_DURATION=1.5
+NARRATION_MODEL="${MMAG_RECORD_SPEECH_MODEL:-speech-2.8-hd}"
+NARRATION_VOICE="${MMAG_RECORD_VOICE:-Chinese (Mandarin)_Reliable_Executive}"
+NARRATION_SPEED="${MMAG_RECORD_SPEECH_SPEED:-1.08}"
+NARRATION_PITCH="${MMAG_RECORD_SPEECH_PITCH:--1}"
 
 usage() {
   printf '%s\n' \
@@ -110,12 +117,16 @@ if ((DRY_RUN)); then
   printf 'Recording configuration is valid.\n'
   printf 'Mattermost: %s\n' "$MM_URL"
   printf 'Bot: @%s\n' "${MM_RECORD_BOT#@}"
+  printf 'Process playback: %sx\n' "$PROCESS_SPEED"
+  printf 'Chapter cards: %ss\n' "$CHAPTER_DURATION"
+  printf 'Narration: %s | %s | speed=%s | pitch=%s\n' \
+    "$NARRATION_MODEL" "$NARRATION_VOICE" "$NARRATION_SPEED" "$NARRATION_PITCH"
   printf 'Shot list:\n'
   printf '  - %s\n' "${SHOT_LIST[@]}"
   exit 0
 fi
 
-for command in playwright-cli ffmpeg ffprobe fc-match node rg uv; do
+for command in playwright-cli ffmpeg ffprobe fc-match mmx node rg uv; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'Required command is unavailable: %s\n' "$command" >&2
     exit 2
@@ -129,6 +140,8 @@ RAW_DIR="$RUN_DIR/raw"
 EDIT_DIR="$RUN_DIR/edit"
 LOG_DIR="$RUN_DIR/logs"
 mkdir -p "$RAW_DIR" "$EDIT_DIR" "$LOG_DIR"
+CLIP_MANIFEST="$RUN_DIR/clips.tsv"
+: >"$CLIP_MANIFEST"
 AUTH_STATE_DIR="$(mktemp -d)"
 AUTH_STATE_FILE="$AUTH_STATE_DIR/mattermost-auth.json"
 
@@ -272,7 +285,8 @@ SEND_JS='async page => {
       const replyButton = rootPost.getByRole("button", {name: /\d+ repl(?:y|ies)/}).first();
       await replyButton.waitFor({state: "visible", timeout: 15000});
       await replyButton.click();
-      await page.getByRole("region", {name: /^Thread /}).waitFor({state: "visible", timeout: 10000});
+      const threadRegion = page.getByRole("region", {name: /^Thread /});
+      await threadRegion.waitFor({state: "visible", timeout: 10000});
       return rootPostId;
     }
     await page.waitForTimeout(250);
@@ -327,7 +341,6 @@ APPROVE_JS='async page => {
   const config = await page.evaluate(() => ({
     approval: sessionStorage.getItem("mmag-demo-approval-id") || "",
     rootPostId: sessionStorage.getItem("mmag-demo-root-post-id") || "",
-    url: sessionStorage.getItem("mmag-demo-url") || "",
   }));
   const approval = config.approval;
   const rootPostId = config.rootPostId;
@@ -335,19 +348,17 @@ APPROVE_JS='async page => {
   if (!rootPostId) throw new Error("No request post ID was captured");
   const threadRegion = page.getByRole("region", {name: /^Thread /});
   await threadRegion.waitFor({state: "visible", timeout: 10000});
-  const composer = threadRegion.getByRole("textbox", {name: "Reply to this thread..."});
-  await composer.waitFor({state: "visible", timeout: 30000});
-  const message = `批准 ${approval}`;
-  await composer.fill(message);
+  const approvalCommand = `批准 ${approval}`;
+  await threadRegion.getByText(approvalCommand, {exact: true}).last().waitFor({
+    state: "visible",
+    timeout: 30000,
+  });
+  const approveButton = threadRegion.getByRole("button", {name: "批准"}).last();
+  await approveButton.waitFor({state: "visible", timeout: 30000});
+  await approveButton.scrollIntoViewIfNeeded();
   await page.waitForTimeout(1000);
-  const postResponsePromise = page.waitForResponse(
-    response => response.request().method() === "POST" && /\/api\/v4\/posts(?:\?|$)/.test(response.url()),
-    {timeout: 15000}
-  );
-  await composer.press("Enter");
-  const postResponse = await postResponsePromise;
-  if (!postResponse.ok()) throw new Error(`Mattermost approval post failed: ${postResponse.status()}`);
-  await page.getByText(message, {exact: true}).last().waitFor({state: "visible", timeout: 15000});
+  await approveButton.click();
+  await approveButton.waitFor({state: "hidden", timeout: 30000});
   await page.waitForTimeout(2500);
 }'
 
@@ -365,12 +376,26 @@ HOLD_JS='async page => {
     await replyButton.click();
     threadRegion = page.getByRole("region", {name: /^Thread /});
     await threadRegion.waitFor({state: "visible", timeout: 10000});
-    }
+  }
   const composer = threadRegion.getByRole("textbox", {name: "Reply to this thread..."});
   await composer.waitFor({state: "visible", timeout: 30000});
   await composer.scrollIntoViewIfNeeded();
   const holdMs = await page.evaluate(() => Number(sessionStorage.getItem("mmag-demo-hold-ms") || 5000));
   await page.waitForTimeout(holdMs);
+}'
+
+# shellcheck disable=SC2016
+EXPAND_THREAD_JS='async page => {
+  const threadRegion = page.getByRole("region", {name: /^Thread /});
+  if (!await threadRegion.isVisible()) return false;
+  const expand = page.getByRole("button", {name: "Expand Sidebar Icon"});
+  if (!await expand.count() || !await expand.isVisible()) return false;
+  await expand.click();
+  await page.getByRole("button", {name: "Collapse Sidebar Icon"}).waitFor({
+    state: "visible",
+    timeout: 10000,
+  });
+  return true;
 }'
 
 # Verify actual Mattermost file attachments through the authenticated browser context.
@@ -444,20 +469,17 @@ SHOW_PPT_PREVIEW_JS='async page => {
   if (!files.rootPostId) throw new Error("PPT request post ID is missing");
   const threadRegion = page.getByRole("region", {name: /^Thread /});
   await threadRegion.waitFor({state: "visible", timeout: 10000});
-  const thumbnail = threadRegion.locator(`img[src*="${previewId}"]`).last();
-  await thumbnail.waitFor({state: "visible", timeout: 30000});
-  await thumbnail.scrollIntoViewIfNeeded();
-  await thumbnail.click();
-  await page.waitForFunction(
-    id => [...document.images].some(image => {
-      const rect = image.getBoundingClientRect();
-      return image.src.includes(id) && rect.width >= 800 && rect.height >= 400;
-    }),
-    previewId,
-    {timeout: 15000}
-  );
+  const previewLink = threadRegion.getByRole("link", {name: "file thumbnail preview.png"});
+  await previewLink.waitFor({state: "visible", timeout: 30000});
+  await previewLink.scrollIntoViewIfNeeded();
+  await previewLink.click();
+  const dialog = page.getByRole("dialog", {name: /^preview\.png /});
+  await dialog.waitFor({state: "visible", timeout: 15000});
+  const preview = dialog.locator(`img[src*="${previewId}"]`);
+  await preview.waitFor({state: "visible", timeout: 15000});
   await page.waitForTimeout(7000);
-  await page.keyboard.press("Escape");
+  await dialog.getByRole("button", {name: "Close"}).click();
+  await dialog.waitFor({state: "hidden", timeout: 10000});
   await threadRegion.getByRole("textbox", {name: "Reply to this thread..."}).scrollIntoViewIfNeeded();
   await page.waitForTimeout(2500);
 }'
@@ -475,9 +497,6 @@ pw sessionstorage-set mmag-demo-team-id "${MM_TEAM_ID:-}" >/dev/null
 pw run-code "$OPEN_DM_JS" >/dev/null
 pw state-save "$AUTH_STATE_FILE" >/dev/null
 
-declare -a CLIP_PATHS=()
-declare -a CLIP_SPEEDS=()
-declare -a CLIP_LABELS=()
 CLIP_INDEX=0
 REQUEST_ROOT_ID=""
 WAIT_RESULT=""
@@ -488,8 +507,13 @@ result_value() {
   awk '/^### Result/{getline; gsub(/\r/, ""); gsub(/^"|"$/, ""); print; exit}'
 }
 
+expand_thread() {
+  pw run-code "$EXPAND_THREAD_JS" >/dev/null
+}
+
 start_clip() {
   pw resize "$VIEWPORT_WIDTH" "$VIEWPORT_HEIGHT" >/dev/null
+  expand_thread
   pw run-code "async page => { await page.video().start({size: {width: $VIEWPORT_WIDTH, height: $VIEWPORT_HEIGHT}}); }" >/dev/null
   if [[ -n "$REQUEST_ROOT_ID" ]]; then
     pw sessionstorage-set mmag-demo-root-post-id "$REQUEST_ROOT_ID" >/dev/null
@@ -498,17 +522,14 @@ start_clip() {
 
 stop_clip() {
   local name="$1"
-  local speed="$2"
-  local label="$3"
+  local label="$2"
   CLIP_INDEX=$((CLIP_INDEX + 1))
   local path
   path="$RAW_DIR/$(printf '%02d' "$CLIP_INDEX")-$name.webm"
   local path_json
   path_json="$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$path")"
   pw run-code "async page => { await page.video().stop({path: $path_json}); }" >/dev/null
-  CLIP_PATHS+=("$path")
-  CLIP_SPEEDS+=("$speed")
-  CLIP_LABELS+=("$label")
+  printf '%s\t%s\n' "$path" "$label" >>"$CLIP_MANIFEST"
 }
 
 send_clip() {
@@ -531,16 +552,16 @@ send_clip() {
   fi
   MMAG_DEMO_SEEN_APPROVALS=""
   pw sessionstorage-set mmag-demo-root-post-id "$REQUEST_ROOT_ID" >/dev/null
+  expand_thread
   pw run-code "$HOLD_JS" >/dev/null
-  stop_clip "$name" 1 "$label"
+  stop_clip "$name" "$label"
 }
 
 wait_clip() {
   local name="$1"
-  local speed="$2"
-  local label="$3"
+  local label="$2"
   local output
-  export MMAG_DEMO_MARKER="$4"
+  export MMAG_DEMO_MARKER="$3"
   export MMAG_DEMO_TIMEOUT_MS=300000
   start_clip
   pw sessionstorage-set mmag-demo-url "$MM_URL" >/dev/null
@@ -553,7 +574,7 @@ wait_clip() {
     printf 'Could not capture the browser recording state.\n' >&2
     exit 1
   fi
-  stop_clip "$name" "$speed" "$label"
+  stop_clip "$name" "$label"
 }
 
 approve_clip() {
@@ -569,7 +590,7 @@ approve_clip() {
     printf '%s\n' "$output" | sed -n '/^### Error/,/^### Ran Playwright code/p' | sed '$d' >&2
     exit 1
   fi
-  stop_clip "$1" 1 "$2"
+  stop_clip "$1" "$2"
 }
 
 finish_with_approvals() {
@@ -580,7 +601,7 @@ finish_with_approvals() {
   local stop_after_approval="${5:-0}"
   local count=0
   while true; do
-    wait_clip "$prefix-wait-$count" 5 "$label" "$marker"
+    wait_clip "$prefix-wait-$count" "$label" "$marker"
     local state approval_id
     IFS='|' read -r state approval_id <<<"$WAIT_RESULT"
     if [[ "$state" == "final" ]]; then
@@ -611,14 +632,14 @@ MMCHAT_MARKER="DEMO-MMCHAT-02-$DEMO_RUN_ID"
 send_clip \
   "default-get" \
   "默认 get：请求已进入处理" \
-  "@${MM_RECORD_BOT#@} 请从 Agent、Skill、Capability、Policy 四个层次说明 MMAG 如何防止模型自行扩大权限，并给出一个审批示例。请保留编号 $MMCHAT_MARKER。" \
+  "@${MM_RECORD_BOT#@} 无需调用工具，请直接从 Agent、Skill、Capability、Policy 四个层次简要说明 MMAG 如何防止模型自行扩大权限，并给出一个审批示例。请保留编号 $MMCHAT_MARKER。" \
   "$MMCHAT_MARKER"
 finish_with_approvals "mmchat" "真实 AI 生成等待" "$MMCHAT_MARKER" 0
 export MMAG_DEMO_HOLD_MS=7000
 start_clip
 pw sessionstorage-set mmag-demo-hold-ms "$MMAG_DEMO_HOLD_MS" >/dev/null
 pw run-code "$HOLD_JS" >/dev/null
-stop_clip "mmchat-result" 1 "检查真实回复内容"
+stop_clip "mmchat-result" "检查真实回复内容"
 
 PROJECT_MARKER="DEMO-PROJECT-03-$DEMO_RUN_ID"
 send_clip \
@@ -642,7 +663,7 @@ if ((SKIP_PPT == 0)); then
   start_clip
   pw sessionstorage-set mmag-demo-hold-ms "$MMAG_DEMO_HOLD_MS" >/dev/null
   pw run-code "$HOLD_JS" >/dev/null
-  stop_clip "project-result" 1 "Project 决策回读成功"
+  stop_clip "project-result" "Project 决策回读成功"
 fi
 
 if ((SKIP_PPT == 0)); then
@@ -664,91 +685,36 @@ if ((SKIP_PPT == 0)); then
     printf 'Verified PPT attachments did not return both file IDs.\n' >&2
     exit 1
   fi
-  stop_clip "ppt-files-wait" 5 "核验真实预览图与 PPTX 附件"
+  stop_clip "ppt-files-wait" "核验真实预览图与 PPTX 附件"
 
   start_clip
   pw sessionstorage-set mmag-demo-preview-file-id "$MMAG_DEMO_PREVIEW_FILE_ID" >/dev/null
   pw sessionstorage-set mmag-demo-pptx-file-id "$MMAG_DEMO_PPTX_FILE_ID" >/dev/null
   pw sessionstorage-set mmag-demo-root-post-id "$REQUEST_ROOT_ID" >/dev/null
   pw run-code "$SHOW_PPT_PREVIEW_JS" >/dev/null
-  stop_clip "ppt-preview" 1 "Mattermost 原生 PPT 预览"
+  stop_clip "ppt-preview" "Mattermost 原生 PPT 预览"
 
   export MMAG_DEMO_HOLD_MS=5000
   start_clip
   pw sessionstorage-set mmag-demo-hold-ms "$MMAG_DEMO_HOLD_MS" >/dev/null
   pw run-code "$HOLD_JS" >/dev/null
-  stop_clip "final-evidence" 1 "preview.png 与 deck.pptx 交付证据"
+  stop_clip "final-evidence" "preview.png 与 deck.pptx 交付证据"
 fi
-
-TITLE_FONT='Sarasa Gothic SC SemiBold'
-CAPTION_FONT='Sarasa UI SC SemiBold'
-
-require_font_face() {
-  local query="$1"
-  local expected_family="$2"
-  local expected_style="$3"
-  local match family style file
-  match="$(fc-match -f '%{family[0]}|%{style[0]}|%{file}\n' "$query" | head -1)"
-  IFS='|' read -r family style file <<<"$match"
-  if [[ "$family" != "$expected_family" || "$style" != "$expected_style" || ! -f "$file" ]]; then
-    printf 'Required video font is unavailable: %s (%s %s); resolved to: %s\n' \
-      "$query" "$expected_family" "$expected_style" "${match:-no match}" >&2
-    exit 1
-  fi
-  printf 'video_font=%s|%s|%s\n' "$family" "$style" "$file"
-}
-
-require_font_face "$TITLE_FONT" 'Sarasa Gothic SC' 'SemiBold'
-require_font_face "$CAPTION_FONT" 'Sarasa UI SC' 'SemiBold'
-
-TITLE_MP4="$EDIT_DIR/00-title.mp4"
-END_MP4="$EDIT_DIR/99-end.mp4"
-ffmpeg -y -v error -f lavfi -i color=c=0x111827:s=${VIDEO_WIDTH}x${VIDEO_HEIGHT}:d=5:r=25 \
-  -vf "drawtext=font='$TITLE_FONT':text='MMAG 企业智能体真实演示':fontcolor=white:fontsize=84:x=(w-text_w)/2:y=575,drawtext=font='$CAPTION_FONT':text='Mattermost · Agent · Skill · Approval · PPT Artifact':fontcolor=0x93c5fd:fontsize=46:x=(w-text_w)/2:y=695" \
-  -an -c:v libx264 -pix_fmt yuv420p "$TITLE_MP4"
-
-NORMALIZED=("$TITLE_MP4")
-for index in "${!CLIP_PATHS[@]}"; do
-  input="${CLIP_PATHS[$index]}"
-  speed="${CLIP_SPEEDS[$index]}"
-  label="${CLIP_LABELS[$index]}"
-  output="$EDIT_DIR/$(printf '%02d' "$((index + 1))").mp4"
-  ffmpeg -y -v error -i "$input" \
-    -vf "setpts=PTS/$speed,fps=25,scale=${VIDEO_WIDTH}:${VIDEO_HEIGHT}:force_original_aspect_ratio=decrease,pad=${VIDEO_WIDTH}:${VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=0x111827,drawtext=font='$TITLE_FONT':text='$label':fontcolor=white:fontsize=42:box=1:boxcolor=black@0.65:boxborderw=22:x=48:y=48" \
-    -an -c:v libx264 -preset medium -crf 22 -pix_fmt yuv420p "$output"
-  NORMALIZED+=("$output")
-done
 
 if ((SKIP_PPT)); then
-  END_SUMMARY='默认 get · 真实 Agent · 人工审批 · 知识写入'
   FINAL_NAME='mmag-real-agent-demo-no-ppt-2k.mp4'
 else
-  END_SUMMARY='默认 get · 真实 Agent · 人工审批 · PPT 预览与附件'
   FINAL_NAME='mmag-real-e2e-demo-2k.mp4'
 fi
-ffmpeg -y -v error -f lavfi -i color=c=0x111827:s=${VIDEO_WIDTH}x${VIDEO_HEIGHT}:d=5:r=25 \
-  -vf "drawtext=font='$TITLE_FONT':text='真实流程完成':fontcolor=white:fontsize=88:x=(w-text_w)/2:y=585,drawtext=font='$CAPTION_FONT':text='$END_SUMMARY':fontcolor=0x86efac:fontsize=46:x=(w-text_w)/2:y=710" \
-  -an -c:v libx264 -pix_fmt yuv420p "$END_MP4"
-NORMALIZED+=("$END_MP4")
-
-CONCAT_FILE="$EDIT_DIR/concat.txt"
-: >"$CONCAT_FILE"
-for path in "${NORMALIZED[@]}"; do
-  printf "file '%s'\n" "$path" >>"$CONCAT_FILE"
-done
-
-FINAL_VIDEO="$RUN_DIR/$FINAL_NAME"
-ffmpeg -y -v error -f concat -safe 0 -i "$CONCAT_FILE" -c copy -movflags +faststart "$FINAL_VIDEO"
-ffmpeg -v error -i "$FINAL_VIDEO" -f null -
-
-DURATION="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$FINAL_VIDEO")"
-SIZE="$(stat -c '%s' "$FINAL_VIDEO")"
-CHECKSUM="$(sha256sum "$FINAL_VIDEO" | awk '{print $1}')"
-printf 'video=%s\n' "$FINAL_VIDEO"
-printf 'duration_seconds=%s\n' "$DURATION"
-printf 'size_bytes=%s\n' "$SIZE"
-printf 'sha256=%s\n' "$CHECKSUM"
-
-awk -v duration="$DURATION" 'BEGIN { if (duration > 195) exit 1 }' || {
-  printf 'Warning: final video exceeds the 3m15s upper target; review wait acceleration.\n' >&2
-}
+uv run python "$PROJECT_ROOT/scripts/render_mattermost_demo.py" \
+  --run-dir "$RUN_DIR" \
+  --output-name "$FINAL_NAME" \
+  --speed "$PROCESS_SPEED" \
+  --title-duration "$TITLE_DURATION" \
+  --chapter-duration "$CHAPTER_DURATION" \
+  --speech-model "$NARRATION_MODEL" \
+  --voice "$NARRATION_VOICE" \
+  --speech-speed "$NARRATION_SPEED" \
+  --speech-pitch "$NARRATION_PITCH" \
+  --width "$VIDEO_WIDTH" \
+  --height "$VIDEO_HEIGHT"
