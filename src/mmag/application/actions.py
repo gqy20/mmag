@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
 
+from ..logger import get_logger, log_event
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
     from concurrent.futures import Future
@@ -29,6 +31,7 @@ _ALLOWED_ACTIONS = frozenset(
 )
 _MAX_TOKEN_BYTES = 8_192
 _MAX_REQUEST_BYTES = 65_536
+log = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,7 +227,14 @@ class ActionCallbackServer:
                     result = future.result(timeout=20)
                     body = json.dumps(result, ensure_ascii=False).encode()
                     self.send_response(200)
-                except Exception:
+                except Exception as error:
+                    log_event(
+                        log,
+                        "mattermost.action_callback",
+                        level=40,
+                        status="failed",
+                        error_code=type(error).__name__,
+                    )
                     body = json.dumps(
                         {"ephemeral_text": "操作未完成，请使用文本命令重试。"},
                         ensure_ascii=False,

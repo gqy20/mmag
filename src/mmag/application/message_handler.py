@@ -73,6 +73,7 @@ class MessageHandler:
         personal_skills=None,
         work_cases=None,
         interactions=None,
+        intent_runtime=None,
     ) -> None:
         self.mm = mm_client
         self.memory = memory
@@ -101,6 +102,7 @@ class MessageHandler:
                 interactions=interactions,
                 action_tokens=action_tokens,
                 audit_store=audit_store,
+                intent_runtime=intent_runtime,
             )
             if personal_skills is not None and work_cases is not None and interactions is not None
             else None
@@ -242,7 +244,7 @@ class MessageHandler:
             self.memory.update_profile_from_message(user_id, post["username"], post)
         log_event(log, "message.accepted", status="accepted", attachment_count=len(file_metas))
         if self.personal_ui is not None:
-            handled, view, personal_ref = self.personal_ui.consume_message(
+            handled, view, personal_ref = await self.personal_ui.consume_message(
                 post, message, access_scope
             )
             if personal_ref:
@@ -450,6 +452,12 @@ class MessageHandler:
                     request,
                     selection.agent.descriptor.name,
                     response_view,
+                    provenance=self._output_provenance(
+                        output,
+                        request,
+                        getattr(selection.agent, "package", None),
+                        selection.agent,
+                    ),
                 )
         except (AgentPackageError, AgentRuntimeError, SkillPackageError) as error:
             log_event(
@@ -638,6 +646,13 @@ class MessageHandler:
         actor_id = str(payload.get("user_id") or "")
         channel_id = str(payload.get("channel_id") or "")
         claims = self.action_tokens.verify(str(token or ""))
+        log_event(
+            log,
+            "mattermost.action_received",
+            status="accepted",
+            action=claims.action,
+            action_jti=claims.jti,
+        )
         if channel_id != claims.conversation_id:
             raise PermissionError("action belongs to another conversation")
         scope_id = self.post_scope({"channel_id": channel_id, "user_id": actor_id})
@@ -656,6 +671,25 @@ class MessageHandler:
                 post={"channel_id": channel_id, "user_id": actor_id},
                 scope=scope,
             )
+            log_event(
+                log,
+                "mattermost.action_completed",
+                status="completed",
+                action=claims.action,
+                action_jti=claims.jti,
+            )
+            if claims.action.startswith("pskill_"):
+                return {
+                    "update": {
+                        "message": message,
+                        "props": {
+                            "from_bot": "true",
+                            "mmag_kind": "personal_workspace",
+                            "mmag_status": "completed",
+                        },
+                    },
+                    "ephemeral_text": message,
+                }
             return {"ephemeral_text": message}
         if claims.action not in {"approve", "reject"}:
             raise ValueError("action is not supported by this callback")
@@ -670,6 +704,13 @@ class MessageHandler:
         self._action_tasks.add(task)
         task.add_done_callback(self._action_tasks.discard)
         decision = "已批准，正在继续执行。" if claims.action == "approve" else "已拒绝。"
+        log_event(
+            log,
+            "mattermost.action_completed",
+            status="completed",
+            action=claims.action,
+            action_jti=claims.jti,
+        )
         return {
             "update": {
                 "message": decision,

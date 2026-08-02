@@ -251,6 +251,7 @@ class PersonalSkill:
     instruction: str
     template: str
     sha256: str
+    source_case_ids: tuple[str, ...] = ()
     status: PersonalSkillStatus = PersonalSkillStatus.DRAFT
 
     @property
@@ -270,10 +271,16 @@ class WorkCase:
     agent_name: str = ""
     skill_ref: str = ""
     personal_skill_ref: str = ""
+    source_run_id: str = ""
+    source_message_id: str = ""
+    goal_hash: str = ""
+    result_hash: str = ""
+    provenance: Mapping[str, Any] = field(default_factory=dict)
     artifact_refs: tuple[str, ...] = ()
     feedback: str = ""
     status: WorkCaseStatus = WorkCaseStatus.CANDIDATE
     created_at: float = 0.0
+    updated_at: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

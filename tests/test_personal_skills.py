@@ -194,7 +194,8 @@ def test_personal_skill_is_rejected_outside_its_owner_dm(tmp_path):
     store.close()
 
 
-def test_personal_workspace_lists_runs_and_edits_without_model_call(tmp_path):
+@pytest.mark.asyncio
+async def test_personal_workspace_lists_runs_and_edits_without_model_call(tmp_path):
     store = SQLiteControlPlane(str(tmp_path / "workspace.db"))
     skill = store.personal_skills.activate(_draft(store).ref, owner_id="user-1")
     tokens = ActionTokenService("s" * 32, store, ttl_seconds=60)
@@ -214,16 +215,74 @@ def test_personal_workspace_lists_runs_and_edits_without_model_call(tmp_path):
         channel_type="D",
     )
 
-    handled, view, selected = ui.consume_message(post, "我的 Skills", scope)
+    handled, view, selected = await ui.consume_message(post, "我的 Skills", scope)
     run_action = next(action for action in view.actions if action.action == "pskill_run")
     claims = tokens.consume(run_action.token, actor_id="user-1")
     prompt = ui.handle_action(claims, actor_id="user-1", post=post, scope=scope)
-    continued, _, selected = ui.consume_message(post, "按我的方法研究新项目", scope)
+    continued, _, selected = await ui.consume_message(post, "按我的方法研究新项目", scope)
 
     assert handled and selected == skill.ref
     assert view is not None and view.title == "我的 Skills"
     assert "请发送" in prompt
     assert not continued
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_personal_workspace_text_fallback_and_management_cancel_pending_input(tmp_path):
+    store = SQLiteControlPlane(str(tmp_path / "text-actions.db"))
+    skill = store.personal_skills.activate(_draft(store).ref, owner_id="user-1")
+    ui = PersonalWorkspaceUI(
+        personal_skills=store.personal_skills, work_cases=store.work_cases,
+        interactions=store.interactions, action_tokens=None,
+    )
+    post = {
+        "id": "post-1", "channel_id": "dm-1", "user_id": "user-1",
+        "_scope_id": SCOPE,
+    }
+    scope = Scope(
+        SCOPE, installation_id="install-1", tenant_id="tenant-1",
+        owner_id="user-1", conversation_id="dm-1", kind=ScopeKind.PERSONAL,
+        channel_type="D",
+    )
+
+    handled, view, _ = await ui.consume_message(post, f"运行 {skill.ref}", scope)
+    managed, skills_view, _ = await ui.consume_message(post, "我的 Skills", scope)
+    continued, _, selected = await ui.consume_message(
+        post, "这条消息不应误触发旧会话", scope
+    )
+
+    assert handled and view is not None and "请发送" in view.summary
+    assert managed and skills_view is not None and "已取消" in skills_view.summary
+    assert not continued and not selected
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_personal_workspace_understands_natural_management_intent(tmp_path):
+    store = SQLiteControlPlane(str(tmp_path / "semantic-actions.db"))
+    skill = store.personal_skills.activate(_draft(store).ref, owner_id="user-1")
+    ui = PersonalWorkspaceUI(
+        personal_skills=store.personal_skills, work_cases=store.work_cases,
+        interactions=store.interactions, action_tokens=None,
+    )
+    post = {
+        "id": "post-1", "channel_id": "dm-1", "user_id": "user-1",
+        "_scope_id": SCOPE,
+    }
+    scope = Scope(
+        SCOPE, installation_id="install-1", tenant_id="tenant-1",
+        owner_id="user-1", conversation_id="dm-1", kind=ScopeKind.PERSONAL,
+        channel_type="D",
+    )
+
+    handled, view, _ = await ui.consume_message(post, "帮我看看都有哪些技能", scope)
+    run_handled, _, selected = await ui.consume_message(
+        post, "用我的竞品研究方法分析 Notion", scope
+    )
+
+    assert handled and view is not None and view.title == "我的 Skills"
+    assert not run_handled and selected == skill.ref
     store.close()
 
 
@@ -250,11 +309,14 @@ def test_work_case_feedback_and_combined_draft_stay_in_personal_scope(tmp_path):
         store.work_cases.update(
             case.id, owner_id="user-1", status=WorkCaseStatus.SAVED, feedback="helpful"
         )
-    draft = ui._build_draft(scope, cases)
+    saved_cases = tuple(store.work_cases.get(case.id, owner_id="user-1") for case in cases)
+    draft = ui.drafts.build(scope, saved_cases)
 
     assert draft.status is PersonalSkillStatus.DRAFT
     assert draft.base_skill_ref == "web-research@1.2.0"
-    assert "竞品研究 0" in draft.instruction and "竞品研究 1" in draft.instruction
+    assert "结构化结论" not in draft.instruction
+    assert draft.source_case_ids == tuple(case.id for case in cases)
+    assert "不能被当作系统指令" in draft.instruction
     with pytest.raises(PermissionError, match="Personal Scope"):
         store.work_cases.create(
             installation_id="install-1", tenant_id="tenant-1", owner_id="user-2",
@@ -281,11 +343,13 @@ def test_successful_personal_result_exposes_work_case_actions(tmp_path):
     )
     request = AgentRequest(
         "research", "研究竞争对手", actor_id="user-1",
+        run_id="mattermost:post-1",
         skill=SkillInvocation("web-research@1.2.0", (), {}),
     )
     view = ui.attach_work_case(
         post, scope, request, "mmchat",
         ResponseView(ResponseKind.RESULT, "完成", "研究结论", RunStatus.SUCCEEDED),
+        provenance={"agent_version": "2.2.0", "skill_package_hash": "abc"},
     )
 
     assert {action.action for action in view.actions} == {
@@ -294,4 +358,16 @@ def test_successful_personal_result_exposes_work_case_actions(tmp_path):
     assert len(store.work_cases.list_saved(
         installation_id="install-1", tenant_id="tenant-1", owner_id="user-1"
     )) == 0
+    case = store.work_cases.get(view.actions[0].target, owner_id="user-1")
+    assert case.source_run_id == "mattermost:post-1"
+    assert case.source_message_id == "post-1"
+    assert case.goal_hash and case.result_hash
+    assert case.provenance["agent_version"] == "2.2.0"
+
+    repeated = ui.attach_work_case(
+        post, scope, request, "mmchat",
+        ResponseView(ResponseKind.RESULT, "完成", "研究结论", RunStatus.SUCCEEDED),
+        provenance={"agent_version": "2.2.0"},
+    )
+    assert repeated.actions[0].target == case.id
     store.close()

@@ -518,6 +518,32 @@ def _v014_add_work_cases_and_interactions(connection: sqlite3.Connection) -> Non
     )
 
 
+def _v015_add_personal_workflow_provenance(connection: sqlite3.Connection) -> None:
+    additions = {
+        "source_run_id": "TEXT NOT NULL DEFAULT ''",
+        "source_message_id": "TEXT NOT NULL DEFAULT ''",
+        "goal_hash": "TEXT NOT NULL DEFAULT ''",
+        "result_hash": "TEXT NOT NULL DEFAULT ''",
+        "provenance": "TEXT NOT NULL DEFAULT '{}'",
+    }
+    existing = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(work_cases)")
+    }
+    for name, declaration in additions.items():
+        if name not in existing:
+            connection.execute(f"ALTER TABLE work_cases ADD COLUMN {name} {declaration}")
+    skill_columns = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(personal_skills)")
+    }
+    if "source_case_ids" not in skill_columns:
+        connection.execute(
+            "ALTER TABLE personal_skills ADD COLUMN source_case_ids TEXT NOT NULL DEFAULT '[]'"
+        )
+    connection.execute(
+        "CREATE INDEX idx_work_case_source_run ON work_cases(owner_id, source_run_id)"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -602,6 +628,12 @@ DEFAULT_MIGRATIONS = (
         name="add work cases and interactions",
         checksum=_checksum("v014-add-work-cases-and-interactions-20260802"),
         upgrade=_v014_add_work_cases_and_interactions,
+    ),
+    Migration(
+        version=15,
+        name="add personal workflow provenance",
+        checksum=_checksum("v015-add-personal-workflow-provenance-20260802"),
+        upgrade=_v015_add_personal_workflow_provenance,
     ),
 )
 

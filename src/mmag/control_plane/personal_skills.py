@@ -44,6 +44,7 @@ class PersonalSkillStore:
         auto_select: bool = False,
         template: str = "",
         skill_id: str = "",
+        source_case_ids: Iterable[str] = (),
     ) -> PersonalSkill:
         self._validate_identity(installation_id, tenant_id, owner_id, scope_id)
         name = self._bounded_text(name, "name", 80, required=True)
@@ -56,6 +57,9 @@ class PersonalSkillStore:
             raise ValueError("personal Skill preferred Agent is invalid")
         intents = self._terms(activation_intents, "activation intent")
         keywords = self._terms(activation_keywords, "activation keyword")
+        case_ids = tuple(dict.fromkeys(str(item) for item in source_case_ids if str(item)))
+        if len(case_ids) > 20 or any(not re.fullmatch(r"[a-f0-9]{32}", item) for item in case_ids):
+            raise ValueError("personal Skill source WorkCase IDs are invalid")
         identifier = skill_id or uuid.uuid4().hex
         if not re.fullmatch(r"[a-f0-9]{32}", identifier):
             raise ValueError("personal Skill id is invalid")
@@ -78,6 +82,7 @@ class PersonalSkillStore:
                 auto_select,
                 instruction,
                 template,
+                case_ids,
             )
             now = time.time()
             self.connection.execute(
@@ -85,8 +90,8 @@ class PersonalSkillStore:
                 (id, revision, installation_id, tenant_id, owner_id, scope_id,
                  name, description, base_skill_ref, preferred_agent,
                  activation_intents, activation_keywords, auto_select,
-                 instruction, template, sha256, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)""",
+                 instruction, template, sha256, source_case_ids, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)""",
                 (
                     identifier,
                     revision,
@@ -104,6 +109,7 @@ class PersonalSkillStore:
                     instruction,
                     template,
                     digest,
+                    json.dumps(case_ids, ensure_ascii=False),
                     now,
                     now,
                 ),
@@ -247,5 +253,6 @@ class PersonalSkillStore:
             instruction=row["instruction"],
             template=row["template"],
             sha256=row["sha256"],
+            source_case_ids=tuple(json.loads(row["source_case_ids"])),
             status=PersonalSkillStatus(row["status"]),
         )

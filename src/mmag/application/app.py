@@ -295,6 +295,7 @@ class Agent:
             personal_skills=self.control_store.personal_skills,
             work_cases=self.control_store.work_cases,
             interactions=self.control_store.interactions,
+            intent_runtime=self.runtime,
         )
         self.capability_probe = MattermostCapabilityProbe(self.mm)
         if self.action_tokens is not None:
