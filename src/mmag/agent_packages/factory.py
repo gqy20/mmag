@@ -120,7 +120,9 @@ class DeepAgentProvider:
             }
             system_prompt = (
                 prepared.system_prompt
-                if prepared is not None and prepared.system_prompt
+                if package.manifest.routing.default
+                and prepared is not None
+                and prepared.system_prompt
                 else render_prompt(package.prompts[prompt.system_ref], variables)
             )
             selected_names = request.skill.capabilities if request.skill is not None else names

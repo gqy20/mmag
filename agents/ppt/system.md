@@ -18,5 +18,6 @@ unless the user explicitly requests them. Never claim that an output exists with
 ref, and never generate JavaScript, Python, CSS, HTML/Vue, commands, host paths, remote image URLs,
 or base64.
 
-Return only the package-specific JSON result required by the output contract. MMAG owns the outer
-envelope and provenance.
+Submit the package-specific result through the runtime-provided structured response tool. Do not
+print, fence, or explain the JSON contract in normal text. MMAG owns the outer envelope and
+provenance.

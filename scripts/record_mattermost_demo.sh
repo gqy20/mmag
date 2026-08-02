@@ -304,18 +304,18 @@ WAIT_NEXT_JS='async page => {
     }
     const thread = await response.json();
     const posts = Object.values(thread.posts || {}).filter(post => post.id !== rootPostId);
+    const terminal = posts.find(post => ["result", "error"].includes(post.props?.mmag_kind));
+    if (terminal) {
+      await threadRegion.getByRole("textbox", {name: "Reply to this thread..."}).scrollIntoViewIfNeeded();
+      await page.waitForTimeout(750);
+      return terminal.props.mmag_kind === "result" ? "final|" : "error|";
+    }
     const ids = posts.flatMap(post => [...String(post.message || "").matchAll(pattern)].map(item => item[1]));
     const next = ids.find(id => !seen.has(id));
     if (next) {
       await threadRegion.getByRole("textbox", {name: "Reply to this thread..."}).scrollIntoViewIfNeeded();
       await page.waitForTimeout(750);
       return `approval|${next}`;
-    }
-    const terminal = posts.find(post => ["result", "error"].includes(post.props?.mmag_kind));
-    if (terminal) {
-      await threadRegion.getByRole("textbox", {name: "Reply to this thread..."}).scrollIntoViewIfNeeded();
-      await page.waitForTimeout(750);
-      return terminal.props.mmag_kind === "result" ? "final|" : "error|";
     }
     await page.waitForTimeout(500);
   }
@@ -635,7 +635,7 @@ if ((SKIP_PPT == 0)); then
   send_clip \
     "project-verify-request" \
     "验证知识真正写入" \
-    "项目助理：查询刚才确认的默认 ACK 决策，并保留编号 $PROJECT_VERIFY_MARKER。" \
+    "项目助理：只读查询刚才确认的默认 ACK 决策，并在回复中保留编号 $PROJECT_VERIFY_MARKER。不得写入或修改知识库。" \
     "$PROJECT_VERIFY_MARKER"
   finish_with_approvals "project-verify" "知识读取等待" "$PROJECT_VERIFY_MARKER" 0
   export MMAG_DEMO_HOLD_MS=7000

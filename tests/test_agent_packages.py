@@ -27,7 +27,7 @@ from mmag.governance import (
     PolicyRegistry,
     RegistryPolicyAuthorizer,
 )
-from mmag.runtimes import AgentResult
+from mmag.runtimes import AgentResult, RunContext, RunRequest
 from mmag.skill_packages import SkillPackageRegistry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,9 +88,9 @@ def test_registry_loads_current_agent_packages():
     assert {(item.manifest.metadata.name, item.manifest.metadata.version) for item in registry.list()} == {
         ("link", "2.0.0"),
         ("mmchat", "2.1.0"),
-        ("ppt", "3.1.0"),
-        ("project", "2.0.0"),
-        ("report", "2.1.0"),
+        ("ppt", "3.1.1"),
+        ("project", "2.0.1"),
+        ("report", "2.1.1"),
     }
     assert len(registry.get("mmchat").snapshot.skill_set_hash) == 64
 
@@ -126,6 +126,34 @@ class StubRuntime:
     async def run(self, request):
         del request
         return AgentResult("unused", "stub")
+
+
+def test_specialized_agent_uses_its_package_prompt_over_conversation_prompt():
+    packages, _, model_policies = _package_registry()
+    package = packages.get("project")
+    provider = DeepAgentProvider(
+        ModelGateway({"default": StubRuntime()}),
+        CapabilityRegistry(),
+        model_policies,
+    )
+    prepared = RunRequest(
+        context=RunContext("trace-1", "user-1", "channel-1", "mattermost:team/channel"),
+        messages=({"role": "user", "content": "current task"},),
+        system_prompt="conversation-agent prompt",
+    )
+
+    request = provider._request_factory(package, ())(  # noqa: SLF001
+        AgentRequest(
+            "project",
+            "current task",
+            actor_id="user-1",
+            runtime_request=prepared,
+        ),
+        MagicMock(),
+    )
+
+    assert request.system_prompt.startswith("You are MMAG's governed Project Agent.")
+    assert "conversation-agent prompt" not in request.system_prompt
 
 
 def test_factory_constructs_every_manifest_without_provider_registry():

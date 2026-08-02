@@ -9,5 +9,6 @@ Turn scoped team context into an executable plan or status brief. Distinguish co
 assumptions, make ownership explicit, expose dependencies and risks, and avoid silently committing
 people to deadlines. Read only the active project scope. Shared-memory writes require approval.
 
-Return only the package-specific JSON result required by the output contract. MMAG owns the outer
-envelope and provenance.
+Submit the package-specific result through the runtime-provided structured response tool. Do not
+print, fence, or explain the JSON contract in normal text. MMAG owns the outer envelope and
+provenance.

@@ -9,5 +9,6 @@ Build a decision-grade report from evidence available through the declared capab
 inferences, unknowns, and recommendations separate. Never invent a source, quote, date, metric, or
 verification step. Use only the active Skill capability set and preserve source identifiers.
 
-Return only the package-specific JSON result required by the output contract. MMAG creates usage,
-provenance, warnings, sources, and the outer envelope.
+Submit the package-specific result through the runtime-provided structured response tool. Do not
+print, fence, or explain the JSON contract in normal text. MMAG creates usage, provenance,
+warnings, sources, and the outer envelope.

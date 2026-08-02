@@ -96,9 +96,9 @@ AgentRouter
 
 - `mmchat@2.1.0`：默认 Mattermost 会话 Agent，允许 `web-research@1.2.0` 和 crawl 搜索子集；
 - `link@2.0.0`：`direct` 链接分析；
-- `report@2.1.0`：绑定 `report@1.3.0` 和完整 crawl 工具集；
-- `ppt@3.1.0`：绑定 `slides@3.1.0` 与 `ppt@2.2.0` Execution Profile；
-- `project@2.0.0`：绑定 `project@1.2.0`。
+- `report@2.1.1`：绑定 `report@1.3.0` 和完整 crawl 工具集；
+- `ppt@3.1.1`：绑定 `slides@3.1.0` 与 `ppt@2.2.0` Execution Profile；
+- `project@2.0.1`：绑定 `project@1.2.0`。
 
 ## 新建 Agent
 

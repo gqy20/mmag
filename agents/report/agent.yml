@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: report
-  version: 2.1.0
+  version: 2.1.1
   description: Produce evidence-aware, structured research reports within the active scope.
 
 spec:

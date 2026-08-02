@@ -215,7 +215,7 @@
 - [ ] 输入 Artifact 在执行前校验版本和 scope；
 - [x] 定义 `slides@2.2.0` Skill、受控 Markdown、注册主题、PptxGenJS 原生对象渲染、严格 Presentation Bundle 契约与默认 PPTX 审批交付；
 - [x] 定义 `ppt@2.2.0` Agent Manifest 和默认拒绝 Policy，PPTX 默认进入审批交付；
-- [x] Presentation Package `ppt@3.1.0` 绑定 `ppt@2.2.0` Execution Profile、锁定的 PptxGenJS bundle、高层 `ppt.build` 与受治理 Workspace；
+- [x] Presentation Package `ppt@3.1.1` 绑定 `ppt@2.2.0` Execution Profile、锁定的 PptxGenJS bundle、高层 `ppt.build` 与受治理 Workspace；
 - [x] 通过执行平面输出规范化 Markdown、可编辑 PPTX 与直接 PNG 预览 Artifact；
 - [x] 同一份 Markdown/Theme 生成 PPTX 与首页 PNG，不再以 LibreOffice/PDF 作为预览前置；
 - [x] PPTX 默认经过 LangGraph 审批和 Outbox 交付；

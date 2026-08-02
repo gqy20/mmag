@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: project
-  version: 2.0.0
+  version: 2.0.1
   description: Turn scoped team context into actionable project plans and status briefs.
 
 spec:
