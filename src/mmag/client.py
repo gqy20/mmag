@@ -22,6 +22,7 @@ CHANNEL_TYPE_LABELS: dict[str, str] = {
     "O": "公开",
     "P": "私有",
     "D": "私聊",
+    "G": "群组私聊",
 }
 
 

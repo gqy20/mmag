@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from ..client import PROP_FROM_BOT, PROP_TRUE
 from ..config import config
-from ..control_plane import OutboundMessage
+from ..control_plane import MattermostScopeResolver, OutboundMessage
 from ..logger import get_logger
 
 if TYPE_CHECKING:
@@ -36,6 +36,7 @@ class MattermostDelivery:
         *,
         artifacts: ArtifactRepository | None = None,
         outbox_store=None,
+        scope_resolver: MattermostScopeResolver | None = None,
     ):
         self.mm = mm_client
         self.memory = memory
@@ -43,6 +44,11 @@ class MattermostDelivery:
         self.stats = stats
         self.artifacts = artifacts
         self.outbox_store = outbox_store
+        self.scope_resolver = scope_resolver or MattermostScopeResolver(
+            mm_client,
+            installation_id=config.mm_installation_id,
+            tenant_id=config.mm_tenant_id,
+        )
         from .render import MattermostRenderer
 
         self.renderer = MattermostRenderer(
@@ -114,7 +120,13 @@ class MattermostDelivery:
         if not post_id:
             log.error("send_post 返回 None! channel=%s", post["channel_id"][:8])
             return None
-        self._record(post_id, post["channel_id"], message, self.thread_root(post))
+        self._record(
+            post_id,
+            post["channel_id"],
+            message,
+            self.thread_root(post),
+            self.scope(post),
+        )
         return post_id
 
     async def reply_view(
@@ -229,7 +241,13 @@ class MattermostDelivery:
             )
         if not post_id:
             raise RuntimeError("Mattermost delivery failed")
-        self._record(post_id, channel_id, outbound.text, outbound.root_id)
+        self._record(
+            post_id,
+            channel_id,
+            outbound.text,
+            outbound.root_id,
+            outbound.scope_id,
+        )
         return post_id
 
     @staticmethod
@@ -237,10 +255,16 @@ class MattermostDelivery:
         return str(post.get("root_id") or post.get("id") or "")
 
     def scope(self, post: dict) -> str:
-        team_id = self.mm.get_channel(post["channel_id"]).get("team_id") or "-"
-        return f"mattermost:{team_id}/{post['channel_id']}"
+        return self.scope_resolver.resolve_post(post).id
 
-    def _record(self, post_id: str, channel_id: str, text: str, root_id: str = "") -> None:
+    def _record(
+        self,
+        post_id: str,
+        channel_id: str,
+        text: str,
+        root_id: str = "",
+        scope_id: str = "",
+    ) -> None:
         self.stats["responses"] += 1
         if not self.memory.log_message(
             {
@@ -252,6 +276,7 @@ class MattermostDelivery:
                 "create_at": int(time.time() * 1000),
                 "type": "",
                 "root_id": root_id,
+                "_scope_id": scope_id,
             }
         ):
             self.stats["dropped_messages"] += 1

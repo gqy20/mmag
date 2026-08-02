@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..agent_system import AgentDescriptor, CapabilityAgent, RuntimeAgent
 from ..capabilities import CapabilityEffect
+from ..control_plane import scope_resource_id
 from ..runtimes import RunContext, RunRequest
 from ..skill_packages import project_skill_files
 from .assets import render_prompt
@@ -105,7 +106,7 @@ class DeepAgentProvider:
             conversation_id = (
                 prepared.context.conversation_id
                 if prepared is not None
-                else request.scope.rsplit("/", 1)[-1]
+                else scope_resource_id(request.scope)
             )
             prompt = package.manifest.prompt
             if prompt.system_ref is None:

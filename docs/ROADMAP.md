@@ -4,7 +4,7 @@
 >
 > 更新时间：2026-08-02
 >
-> 当前阶段：Deep Agents 原生主链完成，进入 Workspace/Sandbox 与企业闭环阶段
+> 当前阶段：Deep Agents 原生主链完成，进入身份隔离、Workspace/Sandbox 与企业闭环阶段
 
 本文档只维护当前基线、未完成步骤和验收标准。设计理由见 [AI_NATIVE_REFACTORING.md](AI_NATIVE_REFACTORING.md)，具体风险见 [TECH_DEBT.md](TECH_DEBT.md)。
 
@@ -48,7 +48,7 @@
 - [x] Prompt/Schema/eval/Policy/Model Policy 进入 Package Hash 和 provenance；
 - [x] Agent Manifest 绑定 Skill 精确版本，Skill Set Hash 进入 Agent 快照；
 - [x] 运行时能力收窄为 Agent、Skill 与 Policy 的交集；
-- [x] `web-research@1.2.0` 作为可复用 Skill，由 `mmchat@2.1.0` 激活；
+- [x] `web-research@1.2.0` 作为可复用 Skill，由 `mmchat@2.2.0` 激活；
 - [x] 选中 Skill 投影到 StateBackend，由 Deep Agents SkillsMiddleware 原生渐进披露并随 checkpoint 恢复；
 - [x] strict Prompt render、输入/输出/Artifact Schema 和预算强制；
 - [x] Model Policy Registry 严格加载并校验 route。
@@ -338,6 +338,77 @@
 退出标准：Deep Agents 是模型驱动 Agent 的唯一 Harness，LangGraph 是唯一 checkpoint/HITL Runtime；
 确定性 Agent 使用 `direct`；PPT 可通过真实 Workspace 形成闭环；本地完整 Shell 被明确标记为非
 Sandbox；切换远程 Sandbox 只替换 Execution Backend。
+
+## 下一步 12：Mattermost 身份、Scope 与个人空间隔离
+
+优先级：P0；这是个人工作台、多用户长期记忆和企业多租户上线的前置条件。
+
+### 当前边界
+
+- [x] 入站消息以 Mattermost `post.user_id` 作为可信 `actor_id`，并贯穿 Agent Run、Capability、审批和审计；
+- [x] 频道消息、摘要和团队知识按 `channel_id` 组织，Artifact 读取要求精确匹配当前 `scope_id`；
+- [x] 审批回调使用签名、短时、一次性 Token，并在执行前重新检查审批资格；
+- [x] Scope 已包含稳定的 Installation、Tenant、Scope Kind 和个人 Owner；DM 使用 Personal Scope，
+  O/P/G 使用 Channel Scope，不再以 Team 充当租户；
+- [x] 用户画像以及现有消息、知识、摘要和 URL 缓存查询已按 Installation + Tenant 分区；
+- [x] 普通频道不再注入或投影当前用户私人画像；
+- [ ] 个人案例、个人长期记忆和 Skill 草稿还没有独立 PersonalSpace；消息编辑/删除、成员退出和用户停用
+  尚未同步清理上下文、索引和后台任务权限；
+- [x] LangGraph Checkpoint 恢复强制匹配原 actor、scope、installation 和 tenant；
+- [ ] 本地完整 Shell 是 Demo 例外，Run 目录约定不能构成生产级文件系统隔离。
+
+### 实施内容
+
+- [x] 增加稳定的 `MM_INSTALLATION_ID` 与 `MM_TENANT_ID`，建立可信 `Principal` 和类型化 `Scope`；
+  身份与 Scope 只能由服务端根据认证事件派生，模型、Manifest 和工具参数不能指定；
+- [x] 正确识别 Mattermost `O/P/D/G`：Bot DM 进入个人模式，公开频道、私有频道和 GM 进入共享模式；
+  修复配置 `MM_TEAM_ID` 后 DM/GM 被拒绝的问题；
+- [x] 当前个人模式可加载本人画像和 DM 上下文；共享模式只加载频道/项目上下文，不注入或投影私人画像；
+- [x] 将用户画像升级为 Installation + Tenant + User 联合身份，现有 Memory Repository 查询固定绑定
+  当前 Installation/Tenant；
+- [ ] 新增 PersonalSpace、WorkCase、PersonalMemory 和 SkillDraft，并让群聊私人操作转入 DM 或私有交付；
+- [x] 为现有 SQLite FTS、缓存、Artifact 和 Checkpoint 增加 Tenant/Scope 查询或终局校验；
+- [ ] 后续向量索引必须使用相同 Scope 分区，不能先全库召回再在应用层过滤；
+- [ ] Bot Token 只代表服务身份，不继承为发消息用户的权限；读取、恢复、审批、分享和交付前通过
+  Mattermost 成员关系/角色及 MMAG Policy 做动态影子授权，授权查询失败时默认拒绝；
+- [ ] 消费 `post_edited`、`post_deleted`、成员关系和用户状态事件，及时更新或撤销消息、摘要、索引、
+  缓存与后台任务权限；MMAG 保留策略不得绕过 Mattermost/企业数据保留要求；
+- [ ] 个人 Artifact 默认只交付到本人 DM；发布到项目或频道时创建带 provenance 的新版本并显式审批，
+  不原地放宽原对象 Scope；
+- [ ] 覆盖跨用户 WorkCase/Artifact/检索、DM 空 `team_id`、退出私有频道、删除消息、伪造 actor/scope、
+  Checkpoint 越权恢复和个人结果误投公共频道等负向验收。
+
+退出标准：同一 Mattermost 实例中的任意两个用户、频道和企业租户不能通过消息上下文、检索、Artifact、
+Checkpoint、审批或执行目录越界读取彼此数据；权限撤销和源消息删除可传播；群聊只使用共享上下文，个人
+上下文只在受控个人模式中使用。
+
+## 目标业务场景
+
+以下场景先作为产品与架构对接目标，具体交互、数据来源和验收用例后续分别细化。
+
+### 场景一：个人工作台与 Skill 沉淀
+
+用户在 Bot DM 中调用受允许的 Skill 完成典型工作，把输入、过程、结果和反馈沉淀为私有 WorkCase，并可
+生成个人 Skill 草稿。当前 Agent/Skill/Artifact 基础可复用，但必须先完成 PersonalSpace、个人检索隔离、
+显式发布和生产 Sandbox。
+
+### 场景二：基于历史工作的个人数字人
+
+用户显式选择可使用的历史消息、文档、案例和回答边界，形成带来源、保留策略和撤销能力的个人数字人；
+面向他人回答时明确数字人身份，对高风险承诺或外发内容请求本人确认。当前用户画像较浅，仍缺授权采集、
+私有知识索引、代答策略和持续反馈闭环。
+
+### 场景三：多人群聊中的主动总结与回答
+
+Agent 在公开/私有频道或 GM 中按触发规则主动接入，使用当前频道有权访问的消息完成会议总结、问题回答和
+待办提取，不读取任何成员的私人空间。当前频道上下文、摘要、Thread 和展示能力已具备基础，仍需补充主动
+触发治理、成员变更同步、来源可追溯和会议结果沉淀。
+
+### 场景四：业务提交、辅助判断与真人审批
+
+下级提交结构化业务材料后，Agent 完成完整性检查、前置总结、风险提示和建议，再通过 Mattermost 交互组件
+请求具备资格的真人作最终决定；决定、理由、返工、Artifact 和业务状态全程可审计。当前 LangGraph HITL、
+按钮审批、Artifact 和审计已有基础，仍缺业务对象 Schema、组织审批关系、条件化审批链和验收/返工终态闭环。
 
 ## 当前明确不做
 

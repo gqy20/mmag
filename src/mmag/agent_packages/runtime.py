@@ -21,6 +21,7 @@ from ..capabilities import (
     bind_capability_context,
     get_capability_context,
 )
+from ..control_plane import scope_resource_id
 from ..governance import GovernanceContext, bind_governance_context, get_governance_context
 from ..logger import log_context
 from ..runtimes import RunRequest, RuntimeStatus
@@ -184,7 +185,7 @@ def _package_capability_context(
             if parent is not None
             else runtime_context.conversation_id
             if runtime_context is not None
-            else request.scope.rsplit("/", 1)[-1]
+            else scope_resource_id(request.scope)
         ),
         message_id=parent.message_id if parent is not None else "",
         message=parent.message if parent is not None else request.prompt,
@@ -192,6 +193,12 @@ def _package_capability_context(
         allowed_capabilities=frozenset(allowed_capabilities),
         run_id=(runtime_context.run_id if runtime_context is not None else request.run_id),
         allowed_execution_profiles=frozenset(package.execution_profiles),
+        installation_id=(runtime_context.installation_id if runtime_context is not None else ""),
+        tenant_id=(runtime_context.tenant_id if runtime_context is not None else ""),
+        scope_kind=(runtime_context.scope_kind if runtime_context is not None else ""),
+        owner_id=(runtime_context.owner_id if runtime_context is not None else ""),
+        team_id=(runtime_context.team_id if runtime_context is not None else ""),
+        channel_type=(runtime_context.channel_type if runtime_context is not None else ""),
     )
 
 

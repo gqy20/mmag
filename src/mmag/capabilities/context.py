@@ -24,6 +24,12 @@ class CapabilityContext:
     allowed_capabilities: frozenset[str] = frozenset()
     run_id: str = ""
     allowed_execution_profiles: frozenset[str] = frozenset()
+    installation_id: str = ""
+    tenant_id: str = ""
+    scope_kind: str = ""
+    owner_id: str = ""
+    team_id: str = ""
+    channel_type: str = ""
 
 
 _CURRENT_CONTEXT: ContextVar[CapabilityContext | None] = ContextVar(

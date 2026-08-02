@@ -187,7 +187,8 @@ async def test_router_passes_provider_neutral_request_and_capability_context():
         nonlocal observed
         observed = get_capability_context()
         assert isinstance(request, RunRequest)
-        assert request.context.scope == "mattermost:team-1/channel-1"
+        assert request.context.scope == "mattermost:default:default:chn:channel-1"
+        assert request.context.scope_kind == "channel"
         return AgentResult(text="任务完成", runtime="test")
 
     runtime.run.side_effect = observe
@@ -197,4 +198,30 @@ async def test_router_passes_provider_neutral_request_and_capability_context():
     assert observed.actor_id == "user-1"
     assert observed.conversation_id == "channel-1"
     assert observed.message_id == "post-1"
+    handler.memory.update_profile_from_message.assert_not_called()
     assert get_capability_context() is None
+
+
+@pytest.mark.asyncio
+async def test_direct_message_uses_personal_scope_even_with_team_filter():
+    handler, runtime = _make_handler("个人任务完成")
+    handler.mm.get_channel.return_value = {
+        "id": "dm-1",
+        "name": "user-1__bot-1",
+        "display_name": "",
+        "type": "D",
+        "team_id": "",
+    }
+    event = _posted_event()
+    post = event["data"]["post"]
+    post["channel_id"] = "dm-1"
+    post["message"] = "整理我的工作案例"
+
+    with patch.multiple(config, mm_channel_id="", mm_team_id="team-1"):
+        await handler.process_posted_event(event)
+
+    request = runtime.run.await_args.args[0]
+    assert request.context.scope == "mattermost:default:default:usr:user-1"
+    assert request.context.scope_kind == "personal"
+    assert request.context.owner_id == "user-1"
+    handler.memory.update_profile_from_message.assert_called_once()

@@ -46,6 +46,12 @@ class RunContext:
     scope: str
     deadline: datetime | None = None
     run_id: str = ""
+    installation_id: str = ""
+    tenant_id: str = ""
+    scope_kind: str = ""
+    owner_id: str = ""
+    team_id: str = ""
+    channel_type: str = ""
 
 
 class RunEventKind(StrEnum):

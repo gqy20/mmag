@@ -88,7 +88,7 @@ def test_versioned_policy_registry_enforces_mmchat_resources_and_writes():
 
     registry = PolicyRegistry()
     registry.load_directory(Path(__file__).resolve().parents[1] / "policies")
-    engine = registry.get("mmchat@1.3.0")
+    engine = registry.get("mmchat@1.4.0")
     get_posts = CapabilitySpec(
         "get_posts",
         "read",
@@ -105,7 +105,7 @@ def test_versioned_policy_registry_enforces_mmchat_resources_and_writes():
     )
     context = GovernanceContext(
         "u1",
-        "mattermost:team-1/channel-1",
+        "mattermost:install-1:tenant-1:chn:channel-1",
         resources={"conversation_id": "channel-1", "actor_id": "u1"},
     )
 
@@ -114,10 +114,30 @@ def test_versioned_policy_registry_enforces_mmchat_resources_and_writes():
     approval = engine.evaluate(_write_spec(), {"filename": "report.md"}, context)
     mcp_approval = engine.evaluate(external_mcp, {"query": "policy"}, context)
 
+    profile = CapabilitySpec(
+        "get_user_profile",
+        "profile",
+        {"type": "object"},
+        lambda: None,
+        permission="memory:user_profile:read",
+    )
+    shared_profile = engine.evaluate(profile, {"user_id": "u1"}, context)
+    personal_profile = engine.evaluate(
+        profile,
+        {"user_id": "u1"},
+        GovernanceContext(
+            "u1",
+            "mattermost:install-1:tenant-1:usr:u1",
+            resources={"conversation_id": "dm-1", "actor_id": "u1"},
+        ),
+    )
+
     assert allowed.effect is PolicyEffect.ALLOW
     assert denied.effect is PolicyEffect.DENY
     assert approval.effect is PolicyEffect.DENY
     assert mcp_approval.effect is PolicyEffect.REQUIRE_APPROVAL
+    assert shared_profile.effect is PolicyEffect.DENY
+    assert personal_profile.effect is PolicyEffect.ALLOW
 
 
 @pytest.mark.asyncio
@@ -140,9 +160,9 @@ async def test_registry_authorizer_uses_current_package_policy_and_allowlist():
     )
     context = GovernanceContext(
         "u1",
-        "mattermost:team-1/channel-1",
+        "mattermost:install-1:tenant-1:chn:channel-1",
         resources={"conversation_id": "channel-1"},
-        policy_ref="mmchat@1.3.0",
+        policy_ref="mmchat@1.4.0",
         allowed_capabilities=("get_posts",),
     )
 

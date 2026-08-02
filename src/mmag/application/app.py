@@ -29,6 +29,7 @@ from ..control_plane import (
     LangGraphApprovalCoordinator,
     LifecycleService,
     MattermostApprovalAuthorizer,
+    MattermostScopeResolver,
     MessagePipeline,
     SQLiteControlPlane,
 )
@@ -75,7 +76,11 @@ class Agent:
     def __init__(self) -> None:
         _validate_database_paths(config.memory_db_path, config.checkpoint_db_path)
         self.mm = MMClient()
-        self.memory = Memory(config.memory_db_path)
+        self.memory = Memory(
+            config.memory_db_path,
+            installation_id=config.mm_installation_id,
+            tenant_id=config.mm_tenant_id,
+        )
         self.control_store = SQLiteControlPlane(config.memory_db_path)
         lifecycle = LifecycleService(self.control_store)
         approvals = ApprovalService(self.control_store, lifecycle)
@@ -224,6 +229,11 @@ class Agent:
         self.stats = {"messages": 0, "responses": 0, "dropped_messages": 0}
         self.working_memory: dict[str, list] = {}
         self.identity = BotIdentity()
+        self.scope_resolver = MattermostScopeResolver(
+            self.mm,
+            installation_id=config.mm_installation_id,
+            tenant_id=config.mm_tenant_id,
+        )
         self.compactor = MemoryCompactor(
             memory=self.memory,
             runtime=self.runtime,
@@ -241,6 +251,7 @@ class Agent:
             self.stats,
             artifacts=self.artifact_repository,
             outbox_store=self.control_store,
+            scope_resolver=self.scope_resolver,
         )
         attachment_processor = AttachmentProcessor(self.mm)
         if default_package.manifest.prompt.system_ref is None:
@@ -251,6 +262,7 @@ class Agent:
             self.working_memory,
             self.identity,
             default_package.prompts[default_package.manifest.prompt.system_ref],
+            scope_resolver=self.scope_resolver,
         )
         self.message_handler = MessageHandler(
             mm_client=self.mm,
@@ -268,6 +280,7 @@ class Agent:
             delivery=self.delivery,
             stats=self.stats,
             action_tokens=self.action_tokens,
+            scope_resolver=self.scope_resolver,
         )
         self.capability_probe = MattermostCapabilityProbe(self.mm)
         if self.action_tokens is not None:

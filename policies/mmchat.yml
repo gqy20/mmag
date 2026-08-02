@@ -1,5 +1,5 @@
 id: mmchat
-version: 1.3.0
+version: 1.4.0
 default_effect: deny
 
 rules:
@@ -19,9 +19,10 @@ rules:
     effect: allow
     actions: [get_user_profile]
     permissions: [memory:user_profile:read]
+    scopes: ["mattermost:*:*:usr:*"]
     resource_arguments:
       user_id: actor_id
-    reason: User profile access is restricted to the requesting actor.
+    reason: Private profile access is restricted to the requesting actor in personal mode.
 
   - id: analyze-public-link
     effect: allow

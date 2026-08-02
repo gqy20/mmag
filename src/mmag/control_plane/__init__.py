@@ -11,7 +11,13 @@ from .approval_policy import (
     MattermostApprovalAuthorizer,
     StaticApprovalAuthorizer,
 )
-from .context import AssembledContext, ContextAssembler, ScopeResolver
+from .context import (
+    AssembledContext,
+    ContextAssembler,
+    MattermostScopeResolver,
+    ScopeResolver,
+    scope_resource_id,
+)
 from .langgraph_approval import LangGraphApprovalCoordinator
 from .lifecycle import (
     InvalidTransitionError,
@@ -34,7 +40,9 @@ from .models import (
     InboxRecord,
     LifecycleEntity,
     OutboundMessage,
+    Principal,
     Scope,
+    ScopeKind,
     StateTransition,
     Task,
     TaskState,
@@ -69,12 +77,16 @@ __all__ = [
     "LifecycleService",
     "LangGraphApprovalCoordinator",
     "MessagePipeline",
+    "MattermostScopeResolver",
     "MattermostApprovalAuthorizer",
     "OutboundMessage",
     "PartitionedScheduler",
     "SQLiteControlPlane",
+    "Principal",
     "Scope",
+    "ScopeKind",
     "ScopeResolver",
+    "scope_resource_id",
     "StateTransition",
     "Task",
     "TaskState",

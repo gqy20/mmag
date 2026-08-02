@@ -92,6 +92,10 @@ def test_fresh_database_migrates_to_latest_schema():
         row["name"] for row in conn.execute("PRAGMA table_info(inbox_events)").fetchall()
     }
     assert {"attempts", "next_attempt_at"} <= inbox_columns
+    profile_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(user_profiles)").fetchall()
+    }
+    assert {"installation_id", "tenant_id", "user_id"} <= profile_columns
     conn.close()
 
 

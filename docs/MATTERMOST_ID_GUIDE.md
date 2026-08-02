@@ -103,6 +103,8 @@ http://localhost:8065/{team_name}/channels/{channel_name}
 
 MM_URL=http://localhost:8065          # Mattermost 地址
 MM_TOKEN=wqg8uwefeby3mjjp8p838uhigr # Bot Token (必填)
+MM_INSTALLATION_ID=corp-mm-prod       # 稳定的 Mattermost 部署标识
+MM_TENANT_ID=corp                     # MMAG 企业租户标识；不能用 Team ID 替代
 
 # 监听范围 (二选一或都填)
 MM_TEAM_ID=mqtoperfh3y3z8boad7axaut4h     # Team ID (团队级别过滤)
@@ -110,7 +112,7 @@ MM_CHANNEL_ID=9d7qi63zsir7jzt41pecd3h5oy    # Channel ID (频道级别过滤, �
 
 # 填写规则:
 #   - 两个都填 → 只监听该 Team 下该频道的消息
-#   - 只填 TEAM_ID → 监听该 Team 下所有频道
+#   - 只填 TEAM_ID → 监听该 Team 下普通频道，并保留 Bot 的 DM/GM 入口
 #   - 只填 CHANNEL_ID → 只监听该频道 (不检查 Team)
 #   - 都不填 → 监听所有消息 (不推荐, 噪音大)
 

@@ -398,14 +398,23 @@ class SQLiteControlPlane:
         with self._lock:
             self._connection.execute(
                 """INSERT OR REPLACE INTO scopes
-                (id, organization_id, project_id, customer_id, conversation_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)""",
+                (id, organization_id, project_id, customer_id, conversation_id,
+                 platform, installation_id, tenant_id, kind, owner_id, team_id,
+                 channel_type, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     scope.id,
                     scope.organization_id,
                     scope.project_id,
                     scope.customer_id,
                     scope.conversation_id,
+                    scope.platform,
+                    scope.installation_id,
+                    scope.tenant_id,
+                    scope.kind.value,
+                    scope.owner_id,
+                    scope.team_id,
+                    scope.channel_type,
                     time.time(),
                 ),
             )

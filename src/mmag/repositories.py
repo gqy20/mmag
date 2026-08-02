@@ -14,19 +14,25 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class MessageRepository:
     connection: sqlite3.Connection
+    installation_id: str
+    tenant_id: str
 
     def contains(self, message_id: str) -> bool:
         if not message_id:
             return False
         row = self.connection.execute(
-            "SELECT 1 FROM message_log WHERE id=?", (message_id,)
+            """SELECT 1 FROM message_log
+            WHERE installation_id=? AND tenant_id=? AND id=?""",
+            (self.installation_id, self.tenant_id, message_id),
         ).fetchone()
         return row is not None
 
     def recent(self, conversation_id: str, limit: int) -> list[dict]:
         rows = self.connection.execute(
-            "SELECT * FROM message_log WHERE channel_id=? ORDER BY create_at DESC LIMIT ?",
-            (conversation_id, limit),
+            """SELECT * FROM message_log
+            WHERE installation_id=? AND tenant_id=? AND channel_id=?
+            ORDER BY create_at DESC LIMIT ?""",
+            (self.installation_id, self.tenant_id, conversation_id, limit),
         ).fetchall()
         return [dict(row) for row in reversed(rows)]
 
@@ -34,14 +40,17 @@ class MessageRepository:
         if not message_id:
             return None
         row = self.connection.execute(
-            "SELECT user_id FROM message_log WHERE id=?", (message_id,)
+            """SELECT user_id FROM message_log
+            WHERE installation_id=? AND tenant_id=? AND id=?""",
+            (self.installation_id, self.tenant_id, message_id),
         ).fetchone()
         return str(row["user_id"]) if row else None
 
     def latest_timestamp(self, conversation_id: str) -> float:
         row = self.connection.execute(
-            "SELECT MAX(create_at) AS ts FROM message_log WHERE channel_id=?",
-            (conversation_id,),
+            """SELECT MAX(create_at) AS ts FROM message_log
+            WHERE installation_id=? AND tenant_id=? AND channel_id=?""",
+            (self.installation_id, self.tenant_id, conversation_id),
         ).fetchone()
         return float(row["ts"]) if row and row["ts"] else 0.0
 
@@ -49,10 +58,14 @@ class MessageRepository:
 @dataclass(frozen=True, slots=True)
 class ProfileRepository:
     connection: sqlite3.Connection
+    installation_id: str
+    tenant_id: str
 
     def get(self, user_id: str, *, decode: bool = False) -> dict:
         row = self.connection.execute(
-            "SELECT * FROM user_profiles WHERE user_id=?", (user_id,)
+            """SELECT * FROM user_profiles
+            WHERE installation_id=? AND tenant_id=? AND user_id=?""",
+            (self.installation_id, self.tenant_id, user_id),
         ).fetchone()
         profile = dict(row) if row else {}
         if not profile or not decode:
@@ -68,12 +81,15 @@ class ProfileRepository:
 @dataclass(frozen=True, slots=True)
 class KnowledgeRepository:
     connection: sqlite3.Connection
+    installation_id: str
+    tenant_id: str
 
     def recent(self, scope_id: str, limit: int = 10) -> list[dict]:
         rows = self.connection.execute(
-            """SELECT * FROM team_knowledge WHERE channel_id=?
+            """SELECT * FROM team_knowledge
+            WHERE installation_id=? AND tenant_id=? AND channel_id=?
             ORDER BY updated_at DESC LIMIT ?""",
-            (scope_id, limit),
+            (self.installation_id, self.tenant_id, scope_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -81,13 +97,15 @@ class KnowledgeRepository:
 @dataclass(frozen=True, slots=True)
 class SummaryRepository:
     connection: sqlite3.Connection
+    installation_id: str
+    tenant_id: str
 
     def latest(self, conversation_id: str) -> str:
         row = self.connection.execute(
             """SELECT summary FROM conversation_segments
-            WHERE channel_id=? AND status='active'
+            WHERE installation_id=? AND tenant_id=? AND channel_id=? AND status='active'
             ORDER BY started_at DESC LIMIT 1""",
-            (conversation_id,),
+            (self.installation_id, self.tenant_id, conversation_id),
         ).fetchone()
         return str(row["summary"]) if row else ""
 
@@ -95,11 +113,17 @@ class SummaryRepository:
 @dataclass(frozen=True, slots=True)
 class URLCacheRepository:
     connection: sqlite3.Connection
+    installation_id: str
+    tenant_id: str
 
     def get(self, url: str) -> dict | None:
         if not url:
             return None
-        row = self.connection.execute("SELECT * FROM url_cache WHERE url=?", (url,)).fetchone()
+        row = self.connection.execute(
+            """SELECT * FROM url_cache
+            WHERE installation_id=? AND tenant_id=? AND url=?""",
+            (self.installation_id, self.tenant_id, url),
+        ).fetchone()
         if not row:
             return None
         value = dict(row)
@@ -122,11 +146,16 @@ class MemoryRepositories:
     urls: URLCacheRepository
 
     @classmethod
-    def create(cls, connection: sqlite3.Connection) -> MemoryRepositories:
+    def create(
+        cls,
+        connection: sqlite3.Connection,
+        installation_id: str = "default",
+        tenant_id: str = "default",
+    ) -> MemoryRepositories:
         return cls(
-            MessageRepository(connection),
-            ProfileRepository(connection),
-            KnowledgeRepository(connection),
-            SummaryRepository(connection),
-            URLCacheRepository(connection),
+            MessageRepository(connection, installation_id, tenant_id),
+            ProfileRepository(connection, installation_id, tenant_id),
+            KnowledgeRepository(connection, installation_id, tenant_id),
+            SummaryRepository(connection, installation_id, tenant_id),
+            URLCacheRepository(connection, installation_id, tenant_id),
         )

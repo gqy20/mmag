@@ -40,3 +40,17 @@ def test_log_message_rolls_back_main_row_when_fts_write_fails():
     assert row is None
     assert memory._conn.in_transaction is False
     memory.close()
+
+
+def test_user_profiles_are_isolated_by_installation_and_tenant(tmp_path):
+    database = tmp_path / "memory.db"
+    first = Memory(str(database), installation_id="install-a", tenant_id="tenant-a")
+    second = Memory(str(database), installation_id="install-a", tenant_id="tenant-b")
+    post = {"message": "请整理我的技术方案", "create_at": 1_753_929_600_000}
+
+    first.update_profile_from_message("same-user", "alice", post)
+
+    assert first.get_user_profile("same-user")["username"] == "alice"
+    assert second.get_user_profile("same-user") == {}
+    first.close()
+    second.close()

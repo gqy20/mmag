@@ -16,11 +16,23 @@ log = get_logger(__name__)
 class Memory:
     """SQLite 持久化记忆"""
 
-    def __init__(self, db_path: str):
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        installation_id: str = "default",
+        tenant_id: str = "default",
+    ):
+        if not installation_id or not tenant_id:
+            raise ValueError("memory installation and tenant IDs are required")
         self.db_path = db_path
+        self.installation_id = installation_id
+        self.tenant_id = tenant_id
         self._database = SQLiteDatabase(db_path)
         self._conn = self._database.connect()
-        self.repositories = MemoryRepositories.create(self._conn)
+        self.repositories = MemoryRepositories.create(
+            self._conn, installation_id, tenant_id
+        )
 
     # ---- 消息日志（永久存储,供检索/回顾）----
 
@@ -51,7 +63,9 @@ class Memory:
         try:
             # 0) 先检查是否已存在(避免依赖 cur.rowcount 的不可靠语义)
             existing = self._conn.execute(
-                "SELECT 1 FROM message_log WHERE id=?", (post_id,)
+                """SELECT 1 FROM message_log
+                WHERE installation_id=? AND tenant_id=? AND id=?""",
+                (self.installation_id, self.tenant_id, post_id),
             ).fetchone()
             if existing:
                 return False  # 已存在,跳过
@@ -59,9 +73,13 @@ class Memory:
             # 1) 写主表
             self._conn.execute(
                 """INSERT INTO message_log
-                   (id, channel_id, user_id, username, message, create_at, post_type, root_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (installation_id, tenant_id, scope_id, id, channel_id, user_id,
+                    username, message, create_at, post_type, root_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
+                    self.installation_id,
+                    self.tenant_id,
+                    str(post.get("_scope_id") or ""),
                     post_id,
                     post.get("channel_id", ""),
                     post.get("user_id", ""),
@@ -119,8 +137,10 @@ class Memory:
         if order not in ("DESC", "ASC"):
             order = "DESC"
         rows = self._conn.execute(
-            f"SELECT * FROM message_log WHERE channel_id=? ORDER BY create_at {order} LIMIT ?",
-            (channel_id, limit),
+            f"""SELECT * FROM message_log
+            WHERE installation_id=? AND tenant_id=? AND channel_id=?
+            ORDER BY create_at {order} LIMIT ?""",
+            (self.installation_id, self.tenant_id, channel_id, limit),
         ).fetchall()
         # 摘要(ASC)按原序返回,普通(DESC)反转成正序
         return [dict(r) for r in rows] if order == "ASC" else [dict(r) for r in reversed(rows)]
@@ -155,8 +175,8 @@ class Memory:
             return self._search_messages_fts(query, channel_id, user_id, before_ts, after_ts, limit)
 
         # ---- 路径 2: 纯条件过滤(无关键词)----
-        clauses = []
-        params: list = []
+        clauses = ["m.installation_id = ?", "m.tenant_id = ?"]
+        params: list = [self.installation_id, self.tenant_id]
         if channel_id:
             clauses.append("m.channel_id = ?")
             params.append(channel_id)
@@ -170,7 +190,7 @@ class Memory:
             clauses.append("m.create_at > ?")
             params.append(after_ts)
 
-        where = " AND ".join(clauses) if clauses else "1=1"
+        where = " AND ".join(clauses)
         params.append(limit)
         rows = self._conn.execute(
             f"SELECT m.* FROM message_log m WHERE {where} ORDER BY m.create_at DESC LIMIT ?",
@@ -192,8 +212,12 @@ class Memory:
         tokenized = _cjk_tokenize_for_fts(query)
         fts_query = " ".join(f'"{tok}"' for tok in tokenized.split() if tok)
 
-        clauses = ["message_log_fts MATCH ?"]
-        params: list = [fts_query]
+        clauses = [
+            "message_log_fts MATCH ?",
+            "m.installation_id = ?",
+            "m.tenant_id = ?",
+        ]
+        params: list = [fts_query, self.installation_id, self.tenant_id]
 
         if channel_id:
             clauses.append("m.channel_id = ?")
@@ -252,8 +276,12 @@ class Memory:
         LIKE 是子串匹配,query 里 "部署" 会匹配 "部署流程" / "重新部署" 等,
         对中英文都直接可用,不需要 CJK 预分词 (预分词只对 FTS5 词项匹配有意义)。
         """
-        clauses = ["m.message LIKE ?"]
-        params: list = [f"%{query}%"]
+        clauses = [
+            "m.message LIKE ?",
+            "m.installation_id = ?",
+            "m.tenant_id = ?",
+        ]
+        params: list = [f"%{query}%", self.installation_id, self.tenant_id]
 
         if channel_id:
             clauses.append("m.channel_id = ?")
@@ -303,10 +331,12 @@ class Memory:
             now = time.time()
             self._conn.execute(
                 """INSERT OR REPLACE INTO url_cache
-                   (url, url_hash, kind, status, title, summary, content, metadata,
-                    fetched_at, expires_at, error)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (installation_id, tenant_id, url, url_hash, kind, status, title,
+                    summary, content, metadata, fetched_at, expires_at, error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
+                    self.installation_id,
+                    self.tenant_id,
                     url,
                     hashlib.sha256(url.encode("utf-8")).hexdigest()[:16],
                     info.get("kind", "unknown"),
@@ -380,7 +410,9 @@ class Memory:
 
         # ---- 构建更新数据 ----
         existing = self._conn.execute(
-            "SELECT * FROM user_profiles WHERE user_id=?", (user_id,)
+            """SELECT * FROM user_profiles
+            WHERE installation_id=? AND tenant_id=? AND user_id=?""",
+            (self.installation_id, self.tenant_id, user_id),
         ).fetchone()
 
         if existing:
@@ -425,8 +457,17 @@ class Memory:
                    _question_count=?,
                    message_count=message_count+1,
                    last_interaction=?
-                   WHERE user_id=?""",
-                (new_topics, new_hours, style, q_count, now, user_id),
+                   WHERE installation_id=? AND tenant_id=? AND user_id=?""",
+                (
+                    new_topics,
+                    new_hours,
+                    style,
+                    q_count,
+                    now,
+                    self.installation_id,
+                    self.tenant_id,
+                    user_id,
+                ),
             )
         else:
             # 首次创建画像
@@ -439,10 +480,12 @@ class Memory:
 
             self._conn.execute(
                 """INSERT INTO user_profiles
-                   (user_id, username, first_seen, message_count,
+                   (installation_id, tenant_id, user_id, username, first_seen, message_count,
                     topics, active_hours, style, _question_count, notes, last_interaction)
-                   VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
                 (
+                    self.installation_id,
+                    self.tenant_id,
                     user_id,
                     username,
                     now,
@@ -630,8 +673,9 @@ class Memory:
     def add_knowledge(self, channel_id: str, key: str, value: str, confidence: float = 0.5):
         now = time.time()
         existing = self._conn.execute(
-            "SELECT id, mentioned_count FROM team_knowledge WHERE channel_id=? AND key=?",
-            (channel_id, key),
+            """SELECT id, mentioned_count FROM team_knowledge
+            WHERE installation_id=? AND tenant_id=? AND channel_id=? AND key=?""",
+            (self.installation_id, self.tenant_id, channel_id, key),
         ).fetchone()
         if existing:
             rowid = existing["id"]
@@ -647,9 +691,19 @@ class Memory:
             )
         else:
             cursor = self._conn.execute(
-                """INSERT INTO team_knowledge (channel_id, key, value, confidence, updated_at, mentioned_count)
-                   VALUES (?, ?, ?, ?, ?, 1)""",
-                (channel_id, key, value, confidence, now),
+                """INSERT INTO team_knowledge
+                   (installation_id, tenant_id, channel_id, key, value, confidence,
+                    updated_at, mentioned_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+                (
+                    self.installation_id,
+                    self.tenant_id,
+                    channel_id,
+                    key,
+                    value,
+                    confidence,
+                    now,
+                ),
             )
             # 同步写入 FTS5 虚拟表（CJK 预分词）
             rowid = cursor.lastrowid
@@ -678,12 +732,12 @@ class Memory:
                 SELECT tk.*, rank
                 FROM team_knowledge tk
                 INNER JOIN team_knowledge_fts fts ON tk.id = fts.rowid
-                WHERE tk.channel_id=?
+                WHERE tk.installation_id=? AND tk.tenant_id=? AND tk.channel_id=?
                   AND team_knowledge_fts MATCH ?
                 ORDER BY rank
                 LIMIT ?
                 """,
-                (channel_id, fts_query, limit),
+                (self.installation_id, self.tenant_id, channel_id, fts_query, limit),
             ).fetchall()
 
             results = []
@@ -697,9 +751,10 @@ class Memory:
             log.debug("FTS5 查询异常 (%s), fallback 全量返回: %s", channel_id, e)
             # FTS5 查询失败时降级为全量返回（让 LLM 自己筛选）
             rows = self._conn.execute(
-                "SELECT * FROM team_knowledge WHERE channel_id=? "
+                """SELECT * FROM team_knowledge
+                WHERE installation_id=? AND tenant_id=? AND channel_id=? """
                 "ORDER BY mentioned_count DESC LIMIT ?",
-                (channel_id, limit * 2),
+                (self.installation_id, self.tenant_id, channel_id, limit * 2),
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -711,9 +766,12 @@ class Memory:
         now = time.time()
         self._conn.execute(
             """INSERT INTO conversation_segments
-               (channel_id, started_at, topic, summary, participants, key_points)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (installation_id, tenant_id, channel_id, started_at, topic, summary,
+                participants, key_points)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
+                self.installation_id,
+                self.tenant_id,
                 channel_id,
                 now - 300,
                 topic,

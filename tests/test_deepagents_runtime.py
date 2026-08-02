@@ -268,6 +268,7 @@ async def test_deep_agent_interrupts_before_side_effect_and_resumes():
             {
                 "decisions": [{"type": "approve"}],
                 "runtime_snapshot": paused.interruptions[0]["value"]["runtime_snapshot"],
+                "access_context": {"actor_id": "user-1", "scope": "scope-1"},
             },
         )
 
@@ -296,6 +297,7 @@ async def test_native_model_limit_persists_across_approval_resume():
                 {
                     "decisions": [{"type": "approve"}],
                     "runtime_snapshot": paused.interruptions[0]["value"]["runtime_snapshot"],
+                    "access_context": {"actor_id": "user-1", "scope": "scope-1"},
                 },
             )
 
@@ -317,7 +319,11 @@ async def test_deep_agent_rebuilds_graph_from_approval_snapshot():
     with bind_governance_context(context):
         completed = await second.resume(
             "durable-run",
-            {"decisions": [{"type": "approve"}], "runtime_snapshot": snapshot},
+            {
+                "decisions": [{"type": "approve"}],
+                "runtime_snapshot": snapshot,
+                "access_context": {"actor_id": "user-1", "scope": "scope-1"},
+            },
         )
     await second.close()
 
@@ -350,6 +356,7 @@ async def test_native_callbacks_write_content_free_model_and_tool_audits(tmp_pat
             {
                 "decisions": [{"type": "approve"}],
                 "runtime_snapshot": paused.interruptions[0]["value"]["runtime_snapshot"],
+                "access_context": {"actor_id": "user-1", "scope": "scope-1"},
             },
         )
 
@@ -361,3 +368,22 @@ async def test_native_callbacks_write_content_free_model_and_tool_audits(tmp_pat
     assert {item.decision for item in policy_audits} == {"require_approval"}
     assert all("publish" not in str(item.details) for item in model_audits)
     assert all("approved" not in str(item.details) for item in tool_audits)
+
+
+@pytest.mark.asyncio
+async def test_deep_agent_rejects_cross_scope_resume():
+    calls: list[str] = []
+    runtime = _runtime(calls, _tool_call(), AIMessage(content="done"))
+    with bind_governance_context(GovernanceContext("user-1", "scope-1")):
+        paused = await runtime.run(_request(runtime, "isolated-run"))
+        with pytest.raises(PermissionError, match="scope"):
+            await runtime.resume(
+                "isolated-run",
+                {
+                    "decisions": [{"type": "approve"}],
+                    "runtime_snapshot": paused.interruptions[0]["value"]["runtime_snapshot"],
+                    "access_context": {"actor_id": "user-1", "scope": "scope-2"},
+                },
+            )
+
+    assert calls == []

@@ -71,6 +71,13 @@ class EntityType(StrEnum):
     DELIVERY = "delivery"
 
 
+class ScopeKind(StrEnum):
+    PERSONAL = "personal"
+    CHANNEL = "channel"
+    PROJECT = "project"
+    TASK = "task"
+
+
 class TaskState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -147,6 +154,25 @@ class Scope:
     project_id: str = ""
     customer_id: str = ""
     conversation_id: str = ""
+    platform: str = ""
+    installation_id: str = ""
+    tenant_id: str = ""
+    kind: ScopeKind = ScopeKind.CHANNEL
+    owner_id: str = ""
+    team_id: str = ""
+    channel_type: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Principal:
+    platform: str
+    installation_id: str
+    tenant_id: str
+    actor_id: str
+
+    def __post_init__(self) -> None:
+        if not all((self.platform, self.installation_id, self.tenant_id, self.actor_id)):
+            raise ValueError("principal identity is incomplete")
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,6 +9,7 @@ from ..capabilities import CapabilityContext, bind_capability_context
 from ..governance import GovernanceContext, bind_governance_context
 from ..runtimes import RuntimeStatus
 from ..skill_packages import SkillContext, bind_skill_context
+from .context import scope_resource_id
 from .models import EntityType
 
 if TYPE_CHECKING:
@@ -61,6 +62,12 @@ class LangGraphApprovalCoordinator:
                 "message_id": capability_context.message_id,
                 "message": capability_context.message,
                 "run_id": capability_context.run_id,
+                "installation_id": capability_context.installation_id,
+                "tenant_id": capability_context.tenant_id,
+                "scope_kind": capability_context.scope_kind,
+                "owner_id": capability_context.owner_id,
+                "team_id": capability_context.team_id,
+                "channel_type": capability_context.channel_type,
             }
         approval = self.approvals.request(
             names or "langgraph_tool_batch",
@@ -141,12 +148,18 @@ class LangGraphApprovalCoordinator:
             trace_id=str(original_context.get("trace_id") or trace_id),
             actor_id=request.requested_by,
             conversation_id=str(
-                original_context.get("conversation_id") or request.scope_id.rsplit("/", 1)[-1]
+                original_context.get("conversation_id") or scope_resource_id(request.scope_id)
             ),
             message_id=str(original_context.get("message_id") or request_id),
             message=str(original_context.get("message") or "approval resume"),
             scope=request.scope_id,
             run_id=str(original_context.get("run_id") or thread_id),
+            installation_id=str(original_context.get("installation_id") or ""),
+            tenant_id=str(original_context.get("tenant_id") or ""),
+            scope_kind=str(original_context.get("scope_kind") or ""),
+            owner_id=str(original_context.get("owner_id") or ""),
+            team_id=str(original_context.get("team_id") or ""),
+            channel_type=str(original_context.get("channel_type") or ""),
         )
         governance = payload.get("governance_context", {})
         if not isinstance(governance, dict):
@@ -167,15 +180,25 @@ class LangGraphApprovalCoordinator:
             else nullcontext()
         )
         context = CapabilityContext(
-            context.trace_id,
-            context.actor_id,
-            context.conversation_id,
-            context.message_id,
-            context.message,
-            context.scope,
-            frozenset(str(name) for name in allowed_capabilities if isinstance(name, str) and name),
-            context.run_id,
-            frozenset(str(ref) for ref in execution_profiles if isinstance(ref, str) and ref),
+            trace_id=context.trace_id,
+            actor_id=context.actor_id,
+            conversation_id=context.conversation_id,
+            message_id=context.message_id,
+            message=context.message,
+            scope=context.scope,
+            allowed_capabilities=frozenset(
+                str(name) for name in allowed_capabilities if isinstance(name, str) and name
+            ),
+            run_id=context.run_id,
+            allowed_execution_profiles=frozenset(
+                str(ref) for ref in execution_profiles if isinstance(ref, str) and ref
+            ),
+            installation_id=context.installation_id,
+            tenant_id=context.tenant_id,
+            scope_kind=context.scope_kind,
+            owner_id=context.owner_id,
+            team_id=context.team_id,
+            channel_type=context.channel_type,
         )
         self._transition_run(thread_id, "running", request_id)
         try:
@@ -189,6 +212,12 @@ class LangGraphApprovalCoordinator:
                         resources={
                             "actor_id": request.requested_by,
                             "conversation_id": context.conversation_id,
+                            "installation_id": context.installation_id,
+                            "tenant_id": context.tenant_id,
+                            "scope_kind": context.scope_kind,
+                            "owner_id": context.owner_id,
+                            "team_id": context.team_id,
+                            "channel_type": context.channel_type,
                         },
                         roles=frozenset(
                             str(role) for role in roles if isinstance(role, str) and role
@@ -207,6 +236,12 @@ class LangGraphApprovalCoordinator:
                     {
                         "decisions": decisions,
                         "runtime_snapshot": payload.get("runtime_snapshot", {}),
+                        "access_context": {
+                            "actor_id": request.requested_by,
+                            "scope": request.scope_id,
+                            "installation_id": context.installation_id,
+                            "tenant_id": context.tenant_id,
+                        },
                     },
                 )
         except Exception as error:

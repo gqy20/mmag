@@ -268,6 +268,7 @@ class DeepAgentRuntime:
     async def resume(self, thread_id: str, decision: Mapping[str, Any]) -> AgentResult:
         command = dict(decision)
         snapshot = command.pop("runtime_snapshot", None)
+        access_context = command.pop("access_context", None)
         session = self._sessions.get(thread_id)
         if session is None:
             if not isinstance(snapshot, Mapping):
@@ -281,6 +282,7 @@ class DeepAgentRuntime:
                 deliveries=deliveries,
             )
             self._sessions[thread_id] = session
+        _verify_resume_access(session.request, access_context)
         try:
             result = await session.graph.ainvoke(
                 Command[Any](resume=thaw(command)),
@@ -552,6 +554,9 @@ class DeepAgentRuntime:
                 "thread_id": thread_id,
                 "actor_id": request.context.actor_id,
                 "scope": request.context.scope,
+                "installation_id": request.context.installation_id,
+                "tenant_id": request.context.tenant_id,
+                "scope_kind": request.context.scope_kind,
                 **dict(request.metadata),
             },
         }
@@ -690,6 +695,12 @@ def _runtime_snapshot(request: RunRequest, session: _RunSession) -> Mapping[str,
             "scope": context.scope,
             "deadline": context.deadline.isoformat() if context.deadline else None,
             "run_id": context.run_id,
+            "installation_id": context.installation_id,
+            "tenant_id": context.tenant_id,
+            "scope_kind": context.scope_kind,
+            "owner_id": context.owner_id,
+            "team_id": context.team_id,
+            "channel_type": context.channel_type,
         },
         "messages": thaw(request.messages),
         "system_prompt": request.system_prompt,
@@ -727,6 +738,12 @@ def _restore_runtime_snapshot(
             scope=str(context.get("scope") or ""),
             deadline=datetime.fromisoformat(deadline) if isinstance(deadline, str) else None,
             run_id=str(context.get("run_id") or ""),
+            installation_id=str(context.get("installation_id") or ""),
+            tenant_id=str(context.get("tenant_id") or ""),
+            scope_kind=str(context.get("scope_kind") or ""),
+            owner_id=str(context.get("owner_id") or ""),
+            team_id=str(context.get("team_id") or ""),
+            channel_type=str(context.get("channel_type") or ""),
         ),
         messages=tuple(snapshot.get("messages") or ()),
         system_prompt=str(snapshot.get("system_prompt") or ""),
@@ -745,3 +762,20 @@ def _restore_runtime_snapshot(
         _mapping_items(snapshot.get("artifacts")),
         _mapping_items(snapshot.get("deliveries")),
     )
+
+
+def _verify_resume_access(
+    request: RunRequest,
+    access_context: Any,
+) -> None:
+    if not isinstance(access_context, Mapping):
+        raise PermissionError("Deep Agents resume is missing its trusted access context")
+    expected = {
+        "actor_id": request.context.actor_id,
+        "scope": request.context.scope,
+        "installation_id": request.context.installation_id,
+        "tenant_id": request.context.tenant_id,
+    }
+    for key, value in expected.items():
+        if value and str(access_context.get(key) or "") != value:
+            raise PermissionError(f"Deep Agents resume {key} does not match its checkpoint")

@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from .client import PROP_FROM_BOT, PROP_SUMMARY, PROP_TRUE
+from .control_plane import MattermostScopeResolver, ScopeKind
 from .logger import get_logger, log_context, log_event
 from .runtimes import AgentRuntime, RunContext, RunRequest
 
@@ -218,13 +219,28 @@ class MemoryCompactor:
         )
 
         try:
+            scope_id = str(messages[-1].get("scope_id") or "")
+            if not scope_id:
+                scope_id = MattermostScopeResolver.scope_id(
+                    self.config.mm_installation_id,
+                    self.config.mm_tenant_id,
+                    ScopeKind.CHANNEL,
+                    channel_id,
+                )
             result = await self.runtime.run(
                 RunRequest(
                     context=RunContext(
                         trace_id=log_context.get("trace_id", log_context.new_trace_id()),
                         actor_id="mmag:memory-compactor",
                         conversation_id=channel_id,
-                        scope=f"mattermost:channel/{channel_id}",
+                        scope=scope_id,
+                        installation_id=self.config.mm_installation_id,
+                        tenant_id=self.config.mm_tenant_id,
+                        scope_kind=(
+                            MattermostScopeResolver.parse(scope_id)[2].value
+                            if scope_id.startswith("mattermost:")
+                            else ScopeKind.CHANNEL.value
+                        ),
                     ),
                     messages=({"role": "user", "content": prompt},),
                     system_prompt=(

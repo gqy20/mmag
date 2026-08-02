@@ -13,7 +13,13 @@ from ..agent_packages import AgentPackageError
 from ..agent_system import AgentOutput, AgentRequest
 from ..capabilities import CapabilityContext, bind_capability_context
 from ..config import config
-from ..control_plane import InboundEvent, MessagePipeline, OutboundMessage
+from ..control_plane import (
+    InboundEvent,
+    MattermostScopeResolver,
+    MessagePipeline,
+    OutboundMessage,
+    ScopeKind,
+)
 from ..governance import GovernanceContext, bind_governance_context
 from ..logger import get_logger, log_context, log_event
 from ..runtimes import (
@@ -62,6 +68,7 @@ class MessageHandler:
         delivery: MattermostDelivery,
         stats: dict[str, int],
         action_tokens=None,
+        scope_resolver: MattermostScopeResolver | None = None,
     ) -> None:
         self.mm = mm_client
         self.memory = memory
@@ -78,6 +85,11 @@ class MessageHandler:
         self.delivery = delivery
         self.stats = stats
         self.action_tokens = action_tokens
+        self.scope_resolver = scope_resolver or MattermostScopeResolver(
+            mm_client,
+            installation_id=config.mm_installation_id,
+            tenant_id=config.mm_tenant_id,
+        )
         self._action_tasks: set[asyncio.Task] = set()
         self.presenter = ResponsePresenter()
         self.pipeline: MessagePipeline | None = None
@@ -167,6 +179,9 @@ class MessageHandler:
             status_post_id = await self.delivery.send_ack(post) or ""
         self.stats["messages"] += 1
         user_id = str(post.get("user_id") or "")
+        access_scope = self.scope_resolver.resolve_post(post)
+        self.audit_store.put_scope(access_scope)
+        post["_scope_id"] = access_scope.id
         post["username"] = self.mm.get_username(user_id)
         post["_llm_content_blocks"] = await self.attachments.build_blocks(
             file_metas,
@@ -180,7 +195,8 @@ class MessageHandler:
         window = self.working_memory.setdefault(channel_id, [])
         window.append(post)
         del window[: -config.max_context_messages]
-        self.memory.update_profile_from_message(user_id, post["username"], post)
+        if access_scope.kind is ScopeKind.PERSONAL:
+            self.memory.update_profile_from_message(user_id, post["username"], post)
         log_event(log, "message.accepted", status="accepted", attachment_count=len(file_metas))
         approval = self.approval_command(message)
         if approval is not None:
@@ -224,7 +240,10 @@ class MessageHandler:
         if config.mm_channel_id and channel_id != config.mm_channel_id:
             return False
         if config.mm_team_id:
-            return self.mm.get_channel(channel_id).get("team_id", "") == config.mm_team_id
+            channel = self.mm.get_channel(channel_id)
+            if channel.get("type") in {"D", "G"}:
+                return True
+            return channel.get("team_id", "") == config.mm_team_id
         return True
 
     def is_explicit_invocation(self, post: dict) -> bool:
@@ -265,16 +284,22 @@ class MessageHandler:
         event_sink: RunEventSink | None = None,
     ) -> RunRequest:
         channel_id = post["channel_id"]
-        team_id = self.mm.get_channel(channel_id).get("team_id") or "-"
+        access_scope = self.scope_resolver.resolve_post(post)
         system_prompt = prompt_context["system"]
         return RunRequest(
             context=RunContext(
                 trace_id=log_context.get("trace_id", "----"),
                 actor_id=post.get("user_id", ""),
                 conversation_id=channel_id,
-                scope=f"mattermost:{team_id}/{channel_id}",
+                scope=access_scope.id,
                 deadline=datetime.now(UTC) + timedelta(seconds=config.runtime_deadline_seconds),
                 run_id=self._run_id(post),
+                installation_id=access_scope.installation_id,
+                tenant_id=access_scope.tenant_id,
+                scope_kind=access_scope.kind.value,
+                owner_id=access_scope.owner_id,
+                team_id=access_scope.team_id,
+                channel_type=access_scope.channel_type,
             ),
             messages=tuple(prompt_context["messages"]),
             system_prompt=system_prompt,
@@ -314,6 +339,10 @@ class MessageHandler:
             request = replace(request, intent=selection.intent)
             request = self._resolve_skill(request, selection.agent)
             capability_names = self._effective_capabilities(request, selection.agent)
+            if self.scope_resolver.resolve_post(post).kind is ScopeKind.CHANNEL:
+                capability_names = tuple(
+                    name for name in capability_names if name != "get_user_profile"
+                )
             runtime_request = self.build_run_request(
                 post,
                 context,
@@ -434,7 +463,8 @@ class MessageHandler:
                     allowed_execution_profiles = tuple(
                         str(ref) for ref in restored if isinstance(ref, str) and ref
                     )
-        scope = self.post_scope(post)
+        access_scope = self.scope_resolver.resolve_post(post)
+        scope = access_scope.id
         approval = self.approval_coordinator.register(
             runtime_result,
             requested_by=post.get("user_id", ""),
@@ -449,6 +479,12 @@ class MessageHandler:
                 allowed_capabilities=frozenset(allowed_capabilities),
                 run_id=self._run_id(post),
                 allowed_execution_profiles=frozenset(allowed_execution_profiles),
+                installation_id=access_scope.installation_id,
+                tenant_id=access_scope.tenant_id,
+                scope_kind=access_scope.kind.value,
+                owner_id=access_scope.owner_id,
+                team_id=access_scope.team_id,
+                channel_type=access_scope.channel_type,
             ),
         )
         actions = self._approval_actions(post, approval.id)
@@ -510,8 +546,7 @@ class MessageHandler:
         claims = self.action_tokens.verify(str(token or ""))
         if channel_id != claims.conversation_id:
             raise PermissionError("action belongs to another conversation")
-        channel = self.mm.get_channel(channel_id)
-        scope_id = f"mattermost:{channel.get('team_id') or '-'}/{channel_id}"
+        scope_id = self.post_scope({"channel_id": channel_id, "user_id": actor_id})
         if scope_id != claims.scope_id:
             raise PermissionError("action belongs to another scope")
         if claims.action not in {"approve", "reject"}:
@@ -593,9 +628,7 @@ class MessageHandler:
         )
 
     def post_scope(self, post: dict) -> str:
-        channel_id = str(post.get("channel_id") or "")
-        team_id = self.mm.get_channel(channel_id).get("team_id") or "-"
-        return f"mattermost:{team_id}/{channel_id}"
+        return self.scope_resolver.resolve_post(post).id
 
     @staticmethod
     def _run_id(post: dict) -> str:
@@ -656,7 +689,11 @@ class MessageHandler:
         runtime_request = request.runtime_request
         if not isinstance(runtime_request, RunRequest):
             raise TypeError("Mattermost execution requires a prepared RunRequest")
-        allowed_capabilities = self._effective_capabilities(request, agent)
+        allowed_capabilities = tuple(
+            str(schema.get("name") or "")
+            for schema in runtime_request.capabilities
+            if str(schema.get("name") or "")
+        )
         package = getattr(agent, "package", None)
         started = time.monotonic()
         capability_context = CapabilityContext(
@@ -671,6 +708,12 @@ class MessageHandler:
             allowed_execution_profiles=frozenset(
                 package.execution_profiles if package is not None else ()
             ),
+            installation_id=runtime_request.context.installation_id,
+            tenant_id=runtime_request.context.tenant_id,
+            scope_kind=runtime_request.context.scope_kind,
+            owner_id=runtime_request.context.owner_id,
+            team_id=runtime_request.context.team_id,
+            channel_type=runtime_request.context.channel_type,
         )
         with (
             bind_capability_context(capability_context),
@@ -681,6 +724,12 @@ class MessageHandler:
                     resources={
                         "actor_id": capability_context.actor_id,
                         "conversation_id": capability_context.conversation_id,
+                        "installation_id": capability_context.installation_id,
+                        "tenant_id": capability_context.tenant_id,
+                        "scope_kind": capability_context.scope_kind,
+                        "owner_id": capability_context.owner_id,
+                        "team_id": capability_context.team_id,
+                        "channel_type": capability_context.channel_type,
                     },
                 )
             ),

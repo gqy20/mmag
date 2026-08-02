@@ -11,6 +11,7 @@ from typing import Any
 
 from ..agent_packages.assets import render_prompt
 from ..config import config
+from ..control_plane import MattermostScopeResolver, ScopeKind
 from ..logger import get_logger, log_event
 
 log = get_logger(__name__)
@@ -267,12 +268,19 @@ class ContextBuilder:
         working_memory: dict[str, list],
         identity: BotIdentity,
         system_prompt,
+        *,
+        scope_resolver: MattermostScopeResolver | None = None,
     ):
         self.mm = mm_client
         self.memory = memory
         self.working_memory = working_memory
         self.identity = identity
         self.system_prompt = system_prompt
+        self.scope_resolver = scope_resolver or MattermostScopeResolver(
+            mm_client,
+            installation_id=config.mm_installation_id,
+            tenant_id=config.mm_tenant_id,
+        )
 
     def _profile_summary(self, user_id: str) -> str:
         if not user_id:
@@ -317,7 +325,7 @@ class ContextBuilder:
         if user_id == self.identity.user_id:
             return "self"
         try:
-            if self.memory.get_user_profile(user_id).get("is_bot"):
+            if self.mm.get_user(user_id).get("is_bot"):
                 return "bot"
         except Exception:
             pass
@@ -359,6 +367,8 @@ class ContextBuilder:
         channel_id = post["channel_id"]
         channel = self.mm.get_channel(channel_id)
         current_user_id = str(post.get("user_id") or "")
+        access_scope = self.scope_resolver.resolve_post(post)
+        personal_mode = access_scope.kind is ScopeKind.PERSONAL
         window = self.working_memory.get(channel_id, [])
         system = render_prompt(
             self.system_prompt,
@@ -367,7 +377,11 @@ class ContextBuilder:
                 "bot_user_id": self.identity.user_id,
                 "current_user_id": current_user_id,
                 "current_user_username": post.get("username", "?"),
-                "current_user_profile": self._profile_summary(current_user_id),
+                "current_user_profile": (
+                    self._profile_summary(current_user_id)
+                    if personal_mode
+                    else "（共享会话不加载私人画像）"
+                ),
                 "recent_speakers": self._recent_speakers(window, current_user_id),
                 "channel_members": self._channel_members(channel_id, current_user_id),
                 "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S (%A)"),

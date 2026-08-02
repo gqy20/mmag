@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: mmchat
-  version: 2.1.0
+  version: 2.2.0
   description: Participate in Mattermost conversations with bounded enterprise capabilities.
 
 spec:
@@ -52,7 +52,7 @@ spec:
   context:
     read_scopes: [conversation, project]
     write_scopes: [conversation]
-  policy_ref: mmchat@1.3.0
+  policy_ref: mmchat@1.4.0
   model_policy_ref: reasoning-medium@1.0.0
   budget:
     max_model_calls: 10

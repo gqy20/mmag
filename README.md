@@ -48,6 +48,8 @@ Mattermost WebSocket
 ```bash
 MM_URL=https://your-mattermost-server
 MM_TOKEN=your-bot-token
+MM_INSTALLATION_ID=corp-mm-prod
+MM_TENANT_ID=corp
 MM_TEAM_ID=
 MM_CHANNEL_ID=
 

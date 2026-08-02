@@ -52,6 +52,8 @@ else:
 _FIELD_TO_ENV: dict[str, str] = {
     "mm_url": "MM_URL",
     "mm_token": "MM_TOKEN",
+    "mm_installation_id": "MM_INSTALLATION_ID",
+    "mm_tenant_id": "MM_TENANT_ID",
     "mm_team_id": "MM_TEAM_ID",
     "mm_channel_id": "MM_CHANNEL_ID",
     "mm_ack_message": "MM_ACK_MESSAGE",
@@ -127,6 +129,8 @@ class Config:
     # Mattermost
     mm_url: str = os.getenv("MM_URL", "http://localhost:8065").rstrip("/")
     mm_token: str = os.getenv("MM_TOKEN", "")
+    mm_installation_id: str = _text_env("MM_INSTALLATION_ID", "default")
+    mm_tenant_id: str = _text_env("MM_TENANT_ID", "default")
     mm_team_id: str = os.getenv("MM_TEAM_ID", "")
     mm_channel_id: str = os.getenv("MM_CHANNEL_ID", "")  # 指定频道 ID，留空=监听 Team 下所有频道
     mm_ack_message: str = _text_env("MM_ACK_MESSAGE", "get")

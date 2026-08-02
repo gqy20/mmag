@@ -340,6 +340,103 @@ def _v009_add_package_releases(connection: sqlite3.Connection) -> None:
     )
 
 
+def _v010_add_tenant_isolation(connection: sqlite3.Connection) -> None:
+    connection.execute("ALTER TABLE user_profiles RENAME TO user_profiles_v009")
+    connection.execute(
+        """CREATE TABLE user_profiles (
+        installation_id TEXT NOT NULL, tenant_id TEXT NOT NULL, user_id TEXT NOT NULL,
+        username TEXT, first_seen REAL, message_count INTEGER DEFAULT 0,
+        expertise TEXT, preferences TEXT, style TEXT DEFAULT 'casual', notes TEXT,
+        last_interaction REAL, topics TEXT, active_hours TEXT,
+        _question_count INTEGER DEFAULT 0, is_bot INTEGER DEFAULT 0,
+        PRIMARY KEY(installation_id, tenant_id, user_id)
+        )"""
+    )
+    connection.execute(
+        """INSERT INTO user_profiles
+        (installation_id, tenant_id, user_id, username, first_seen, message_count,
+         expertise, preferences, style, notes, last_interaction, topics, active_hours,
+         _question_count, is_bot)
+        SELECT 'default', 'default', user_id, username, first_seen, message_count,
+         expertise, preferences, style, notes, last_interaction, topics, active_hours,
+         _question_count, is_bot
+        FROM user_profiles_v009"""
+    )
+    connection.execute("DROP TABLE user_profiles_v009")
+    connection.execute(
+        "CREATE INDEX idx_user_profiles_actor ON user_profiles(user_id)"
+    )
+
+    connection.execute("ALTER TABLE url_cache RENAME TO url_cache_v009")
+    connection.execute(
+        """CREATE TABLE url_cache (
+        installation_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
+        url TEXT NOT NULL, url_hash TEXT NOT NULL, kind TEXT, status TEXT,
+        title TEXT, summary TEXT, content TEXT, metadata TEXT, fetched_at REAL,
+        expires_at REAL, error TEXT,
+        PRIMARY KEY(installation_id, tenant_id, url)
+        )"""
+    )
+    connection.execute(
+        """INSERT INTO url_cache
+        (installation_id, tenant_id, url, url_hash, kind, status, title, summary,
+         content, metadata, fetched_at, expires_at, error)
+        SELECT 'default', 'default', url, url_hash, kind, status, title, summary,
+         content, metadata, fetched_at, expires_at, error
+        FROM url_cache_v009"""
+    )
+    connection.execute("DROP TABLE url_cache_v009")
+
+    additions = {
+        "message_log": {
+            "installation_id": "TEXT NOT NULL DEFAULT 'default'",
+            "tenant_id": "TEXT NOT NULL DEFAULT 'default'",
+            "scope_id": "TEXT NOT NULL DEFAULT ''",
+        },
+        "team_knowledge": {
+            "installation_id": "TEXT NOT NULL DEFAULT 'default'",
+            "tenant_id": "TEXT NOT NULL DEFAULT 'default'",
+        },
+        "conversation_segments": {
+            "installation_id": "TEXT NOT NULL DEFAULT 'default'",
+            "tenant_id": "TEXT NOT NULL DEFAULT 'default'",
+        },
+        "open_items": {
+            "installation_id": "TEXT NOT NULL DEFAULT 'default'",
+            "tenant_id": "TEXT NOT NULL DEFAULT 'default'",
+        },
+        "scopes": {
+            "platform": "TEXT NOT NULL DEFAULT ''",
+            "installation_id": "TEXT NOT NULL DEFAULT ''",
+            "tenant_id": "TEXT NOT NULL DEFAULT ''",
+            "kind": "TEXT NOT NULL DEFAULT 'channel'",
+            "owner_id": "TEXT NOT NULL DEFAULT ''",
+            "team_id": "TEXT NOT NULL DEFAULT ''",
+            "channel_type": "TEXT NOT NULL DEFAULT ''",
+        },
+    }
+    for table, columns in additions.items():
+        existing = {
+            str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")
+        }
+        for name, declaration in columns.items():
+            if name not in existing:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+
+    connection.execute(
+        "CREATE INDEX idx_message_namespace_channel "
+        "ON message_log(installation_id, tenant_id, channel_id, create_at DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX idx_knowledge_namespace_channel "
+        "ON team_knowledge(installation_id, tenant_id, channel_id, updated_at DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX idx_segments_namespace_channel "
+        "ON conversation_segments(installation_id, tenant_id, channel_id, started_at DESC)"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -394,6 +491,12 @@ DEFAULT_MIGRATIONS = (
         name="add package release records",
         checksum=_checksum("v009-add-package-release-records-20260802"),
         upgrade=_v009_add_package_releases,
+    ),
+    Migration(
+        version=10,
+        name="add tenant isolation",
+        checksum=_checksum("v010-add-tenant-isolation-20260802"),
+        upgrade=_v010_add_tenant_isolation,
     ),
 )
 

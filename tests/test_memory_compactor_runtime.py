@@ -11,6 +11,8 @@ def _compactor(runtime) -> MemoryCompactor:
     config = SimpleNamespace(
         memory_summary_interval=100,
         memory_context_window=20,
+        mm_installation_id="default",
+        mm_tenant_id="default",
     )
     return MemoryCompactor(
         memory=MagicMock(),
@@ -36,7 +38,7 @@ async def test_summary_uses_provider_neutral_runtime_request():
     assert isinstance(request, RunRequest)
     assert request.context.actor_id == "mmag:memory-compactor"
     assert request.context.conversation_id == "channel-1"
-    assert request.context.scope == "mattermost:channel/channel-1"
+    assert request.context.scope == "mattermost:default:default:chn:channel-1"
     assert request.capabilities == ()
     assert request.max_rounds == 1
     assert request.max_tokens == 1024
