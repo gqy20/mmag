@@ -221,6 +221,10 @@ def _constrain_runtime_request(
             package.manifest.runtime.max_turns,
             package.manifest.budget.max_model_calls,
         ),
+        max_tool_calls=min(
+            runtime_request.max_tool_calls,
+            package.manifest.budget.max_tool_calls,
+        ),
         capabilities=capabilities,
     )
 

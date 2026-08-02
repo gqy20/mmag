@@ -20,7 +20,18 @@ from mmag.governance import (
     PolicyRule,
     bind_governance_context,
 )
-from mmag.runtimes import DeepAgentRuntime, RunContext, RunRequest, RuntimeStatus
+from mmag.runtimes import (
+    DeepAgentRuntime,
+    RunContext,
+    RunRequest,
+    RuntimeLimitError,
+    RuntimeStatus,
+)
+from mmag.runtimes.deepagents import _repair_structured_output
+from mmag.runtimes.harness import (
+    build_run_limit_middleware,
+    build_state_filesystem_permissions,
+)
 
 
 class ScriptedModel(BaseChatModel):
@@ -115,6 +126,87 @@ def _tool_call() -> AIMessage:
     )
 
 
+def test_repairs_only_schema_declared_json_containers():
+    schema = {
+        "type": "object",
+        "properties": {
+            "bundle": {
+                "oneOf": [
+                    {"type": "null"},
+                    {"$ref": "#/$defs/bundle"},
+                ]
+            },
+            "source": {"type": "string"},
+            "sections": {
+                "type": "array",
+                "items": {"type": "object", "properties": {"title": {"type": "string"}}},
+            },
+        },
+        "$defs": {
+            "bundle": {
+                "type": "object",
+                "required": ["pptx_ref"],
+                "properties": {"pptx_ref": {"type": "string"}},
+            }
+        },
+    }
+
+    repaired, count = _repair_structured_output(
+        {
+            "bundle": '{"pptx_ref":"artifact://deck"}',
+            "source": '{"must":"remain text"}',
+            "sections": '[{"title":"Overview"}]',
+        },
+        schema,
+    )
+
+    assert repaired == {
+        "bundle": {"pptx_ref": "artifact://deck"},
+        "source": '{"must":"remain text"}',
+        "sections": [{"title": "Overview"}],
+    }
+    assert count == 2
+
+
+def test_leaves_invalid_container_text_for_contract_validation():
+    repaired, count = _repair_structured_output(
+        {"bundle": "not-json"},
+        {
+            "type": "object",
+            "properties": {"bundle": {"type": ["object", "null"]}},
+        },
+    )
+
+    assert repaired == {"bundle": "not-json"}
+    assert count == 0
+
+
+def test_native_middleware_enforces_package_call_limits():
+    request = RunRequest(
+        RunContext("trace-1", "user-1", "channel-1", "scope-1"),
+        ({"role": "user", "content": "hello"},),
+        max_rounds=3,
+        max_tool_calls=7,
+    )
+
+    model_limit, tool_limit = build_run_limit_middleware(request)
+
+    assert model_limit.run_limit == model_limit.thread_limit == 3
+    assert tool_limit.run_limit == tool_limit.thread_limit == 7
+    assert model_limit.exit_behavior == tool_limit.exit_behavior == "error"
+
+
+def test_native_filesystem_is_fail_closed_outside_state_workspace():
+    permissions = build_state_filesystem_permissions()
+
+    assert [(rule.operations, rule.paths, rule.mode) for rule in permissions] == [
+        (["read"], ["/skills/**"], "allow"),
+        (["write"], ["/skills/**"], "deny"),
+        (["read", "write"], ["/workspace/**"], "allow"),
+        (["read", "write"], ["/**"], "deny"),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_deep_agent_interrupts_before_side_effect_and_resumes():
     calls: list[str] = []
@@ -133,6 +225,32 @@ async def test_deep_agent_interrupts_before_side_effect_and_resumes():
 
     assert paused.status is RuntimeStatus.WAITING_APPROVAL
     assert completed.text == "done"
+    assert calls == ["approved"]
+
+
+@pytest.mark.asyncio
+async def test_native_model_limit_persists_across_approval_resume():
+    calls: list[str] = []
+    runtime = _runtime(calls, _tool_call(), AIMessage(content="must not run"))
+    request = _request(runtime, "limited-run")
+    request = RunRequest(
+        request.context,
+        request.messages,
+        capabilities=request.capabilities,
+        max_rounds=1,
+    )
+
+    with bind_governance_context(GovernanceContext("user-1", "scope-1")):
+        paused = await runtime.run(request)
+        with pytest.raises(RuntimeLimitError):
+            await runtime.resume(
+                "limited-run",
+                {
+                    "decisions": [{"type": "approve"}],
+                    "runtime_snapshot": paused.interruptions[0]["value"]["runtime_snapshot"],
+                },
+            )
+
     assert calls == ["approved"]
 
 

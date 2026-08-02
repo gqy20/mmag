@@ -127,7 +127,8 @@
 - [x] 通过 Deep Agents ToolStrategy 约束业务结果，删除文本 JSON parse/repair 分叉；
 - [x] 保留 MMAG 的 Draft 2020-12 终局校验作为安全边界，不能因 Provider 声称支持结构化输出而跳过
   Skill、Artifact、Package 和 Envelope 契约校验；
-- [x] 格式修复由同一个 Deep Agents graph/ToolStrategy 完成，不创建第二次开放或关闭 Capability 的旁路运行；
+- [x] 结构化结果保持单次 Deep Agents graph；Runtime 出口只按业务 Schema 确定性解码被模型字符串化
+  的对象/数组，再进入终局校验，不启动第二次模型运行或 Capability 旁路；
 - [ ] 统一内部 Capability 结果类型，避免在 Registry 与 LangGraph 之间反复执行对象 → JSON 字符串 →
   对象转换；只在模型 Provider、MCP 和交付边界序列化；
 - [ ] 让多轮 LangGraph、结构修复和 Provider fallback 的实际模型调用、token、cost 与错误进入统一
@@ -316,8 +317,12 @@
   thread ID、deadline、usage、response format 和 interrupt；
 - [x] 用受 Model Policy 管理的 `BaseChatModel` 替换自定义 Anthropic Agent loop；
 - [x] 将 `CapabilitySpec` 投影成 LangChain Tool，继续经过同一个 `CapabilityExecutor`、动态 Policy、
-  审批、预算和审计；
+  审批和审计；
+- [x] 使用 LangChain 原生 `ModelCallLimitMiddleware`、`ToolCallLimitMiddleware` 强制每个 Run/thread 的
+  模型与全部 Tool 调用次数上限，审批恢复不重置计数；美元/token 原子预算仍归入预算阶段；
 - [x] 实现可信单 Skill 投影，接入 SkillsMiddleware，禁用默认通用 Subagent；
+- [x] 用 Deep Agents `FilesystemPermission` 将当前 StateBackend 限定为 Skill 只读、`/workspace/**`
+  临时状态可读写、其他路径默认拒绝，原生 `execute` 继续隐藏；
 - [ ] 实现 `GovernedWorkspaceBackend` 与 `workspace.read/write/execute` canonical Capability；
 - [ ] 先接入显式危险的 `LocalExecutionBackend`，复用 Run Workspace、超时、最小环境、输出限制、
   Artifact staging、审计与回收；关闭危险开关时失败关闭；

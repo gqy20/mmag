@@ -145,6 +145,10 @@ class DeepAgentProvider:
                         package.manifest.runtime.max_turns,
                         package.manifest.budget.max_model_calls,
                     ),
+                    max_tool_calls=min(
+                        prepared.max_tool_calls,
+                        package.manifest.budget.max_tool_calls,
+                    ),
                     max_tokens=model_policy.max_output_tokens,
                     temperature=model_policy.temperature,
                     response_schema=expected_result_schema(package, request),
@@ -167,6 +171,7 @@ class DeepAgentProvider:
                     package.manifest.runtime.max_turns,
                     package.manifest.budget.max_model_calls,
                 ),
+                max_tool_calls=package.manifest.budget.max_tool_calls,
                 max_tokens=model_policy.max_output_tokens,
                 temperature=model_policy.temperature,
                 response_schema=expected_result_schema(package, request),

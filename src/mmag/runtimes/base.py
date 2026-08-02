@@ -84,6 +84,7 @@ class RunRequest:
     system_prompt: str = ""
     capabilities: tuple[Mapping[str, Any], ...] = ()
     max_rounds: int = 5
+    max_tool_calls: int = 50
     max_tokens: int = 4096
     fallback_max_tokens: int = 1024
     temperature: float = 0.0
@@ -97,6 +98,8 @@ class RunRequest:
     def __post_init__(self) -> None:
         if self.max_rounds < 1:
             raise ValueError("max_rounds must be at least 1")
+        if self.max_tool_calls < 1:
+            raise ValueError("max_tool_calls must be at least 1")
         if self.max_tokens < 1:
             raise ValueError("max_tokens must be at least 1")
         if self.fallback_max_tokens < 1:
@@ -171,6 +174,10 @@ class RuntimeRejectedError(AgentRuntimeError):
     code = "rejected"
 
 
+class RuntimeLimitError(AgentRuntimeError):
+    code = "exhausted"
+
+
 class RuntimeUnavailableError(AgentRuntimeError):
     code = "unavailable"
     retryable = True
@@ -201,6 +208,16 @@ def translate_runtime_error(error: Exception, *, runtime: str) -> AgentRuntimeEr
         return RuntimeRateLimitError(message, runtime=runtime)
     if any(token in searchable for token in ("content policy", "rejected", "permission denied")):
         return RuntimeRejectedError(message, runtime=runtime)
+    if any(
+        token in searchable
+        for token in (
+            "modelcalllimitexceedederror",
+            "toolcalllimitexceedederror",
+            "model call limit exceeded",
+            "tool call limit exceeded",
+        )
+    ):
+        return RuntimeLimitError(message, runtime=runtime)
     if any(isinstance(item, ConnectionError) for item in chain) or any(
         token in searchable
         for token in ("connection", "disconnect", "unavailable", "status 502", "status 503")

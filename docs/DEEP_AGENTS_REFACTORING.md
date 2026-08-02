@@ -121,8 +121,10 @@ AgentFactory
 ### 3.3 当前实现边界
 
 当前 `DeepAgentRuntime` 已完成显式 `ChatAnthropic`、Capability Tool 投影、StateBackend Skill 文件投影、
-动态 HITL、SQLite checkpoint、跨进程审批恢复、结构化输出和流式文本事件。旧 Provider Registry、
-手写 Agent 图、自定义 Anthropic Client 和 Claude Agent SDK 并行链均已删除。
+动态 HITL、SQLite checkpoint、跨进程审批恢复、结构化输出和流式文本事件。LangChain 原生模型/Tool
+调用上限已按 Run 与 thread 强制；StateBackend 的模型文件工具只允许读取 Skill 和读写临时
+`/workspace/**`，其余路径默认拒绝。旧 Provider Registry、手写 Agent 图、自定义 Anthropic Client
+和 Claude Agent SDK 并行链均已删除。
 
 本轮没有伪造通用 Sandbox：Deep Agents 的 StateBackend 只承载对话内 Skill 文件；PPT 仍经 MMAG
 现有 Execution Profile、ProcessRunner、Workspace 和 Artifact Repository 执行。通用

@@ -49,6 +49,7 @@ from .base import (
     thaw,
     translate_runtime_error,
 )
+from .harness import build_run_limit_middleware, build_state_filesystem_permissions
 from .telemetry import AuditSink, DeepAgentTelemetry
 
 if TYPE_CHECKING:
@@ -214,10 +215,16 @@ class DeepAgentRuntime:
                 deliveries=deliveries,
             )
             self._sessions[thread_id] = session
-        result = await session.graph.ainvoke(
-            Command[Any](resume=thaw(command)),
-            self._config(thread_id, session.request),
-        )
+        try:
+            result = await session.graph.ainvoke(
+                Command[Any](resume=thaw(command)),
+                self._config(thread_id, session.request),
+            )
+        except AgentRuntimeError:
+            raise
+        except Exception as error:
+            translated = translate_runtime_error(error, runtime=self.runtime_name)
+            raise translated from error
         converted = await self._to_result(result, session, thread_id, None, session.request)
         if converted.status is not RuntimeStatus.WAITING_APPROVAL:
             self._sessions.pop(thread_id, None)
@@ -254,6 +261,8 @@ class DeepAgentRuntime:
             backend=StateBackend(),
             skills=["/skills/"] if request.skill_files else None,
             subagents=[],
+            middleware=build_run_limit_middleware(request),
+            permissions=build_state_filesystem_permissions(),
             interrupt_on=interrupt_on or None,
             response_format=response_format,
             checkpointer=self._checkpointer,
@@ -423,6 +432,18 @@ class DeepAgentRuntime:
         if output is not None and hasattr(output, "model_dump"):
             output = output.model_dump()
         structured = dict(output) if isinstance(output, Mapping) else None
+        if structured is not None and request.response_schema is not None:
+            structured, repaired_fields = _repair_structured_output(
+                structured,
+                request.response_schema,
+            )
+            if repaired_fields:
+                log_event(
+                    log,
+                    "model.output_repaired",
+                    status="succeeded",
+                    repaired_fields=repaired_fields,
+                )
         messages = list(state.get("messages") or ())
         text = _result_text(structured, messages)
         usage = _usage(messages)
@@ -477,6 +498,130 @@ def _json_payload(content: str) -> Any:
         return json.loads(content)
     except json.JSONDecodeError:
         return content
+
+
+def _repair_structured_output(
+    value: Mapping[str, Any],
+    schema: Mapping[str, Any],
+) -> tuple[dict[str, Any], int]:
+    """Decode model-stringified JSON containers only where the schema requires them."""
+    repaired, count = _repair_schema_value(dict(value), schema, schema)
+    return (dict(repaired) if isinstance(repaired, Mapping) else dict(value), count)
+
+
+def _repair_schema_value(
+    value: Any,
+    schema: Mapping[str, Any],
+    root_schema: Mapping[str, Any],
+) -> tuple[Any, int]:
+    resolved = _resolve_local_schema(schema, root_schema)
+    variants = [
+        item
+        for keyword in ("oneOf", "anyOf")
+        for item in resolved.get(keyword, ())
+        if isinstance(item, Mapping)
+    ]
+    allowed_types = _schema_types(resolved, root_schema)
+    repaired = 0
+
+    if isinstance(value, str) and "string" not in allowed_types:
+        container_types = allowed_types & {"object", "array"}
+        if container_types:
+            try:
+                decoded = json.loads(value)
+            except json.JSONDecodeError:
+                decoded = value
+            decoded_type = _json_type(decoded)
+            if decoded_type in container_types:
+                value = decoded
+                repaired += 1
+
+    if variants:
+        matching = [
+            variant
+            for variant in variants
+            if _json_type(value) in _schema_types(variant, root_schema)
+        ]
+        if matching:
+            value, nested = _repair_schema_value(value, matching[0], root_schema)
+            return value, repaired + nested
+
+    if isinstance(value, Mapping):
+        properties = resolved.get("properties", {})
+        additional = resolved.get("additionalProperties")
+        object_output = dict(value)
+        for key, item in value.items():
+            field_schema = properties.get(key) if isinstance(properties, Mapping) else None
+            if not isinstance(field_schema, Mapping) and isinstance(additional, Mapping):
+                field_schema = additional
+            if isinstance(field_schema, Mapping):
+                object_output[key], nested = _repair_schema_value(item, field_schema, root_schema)
+                repaired += nested
+        return object_output, repaired
+
+    items = resolved.get("items")
+    if isinstance(value, (list, tuple)) and isinstance(items, Mapping):
+        list_output = []
+        for item in value:
+            converted, nested = _repair_schema_value(item, items, root_schema)
+            list_output.append(converted)
+            repaired += nested
+        return list_output, repaired
+    return value, repaired
+
+
+def _resolve_local_schema(
+    schema: Mapping[str, Any],
+    root_schema: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    reference = schema.get("$ref")
+    if not isinstance(reference, str) or not reference.startswith("#/"):
+        return schema
+    current: Any = root_schema
+    for raw_part in reference[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, Mapping) or part not in current:
+            return schema
+        current = current[part]
+    return current if isinstance(current, Mapping) else schema
+
+
+def _schema_types(
+    schema: Mapping[str, Any],
+    root_schema: Mapping[str, Any],
+) -> set[str]:
+    resolved = _resolve_local_schema(schema, root_schema)
+    declared = resolved.get("type")
+    types = {declared} if isinstance(declared, str) else {
+        item for item in declared or () if isinstance(item, str)
+    }
+    for keyword in ("oneOf", "anyOf"):
+        for variant in resolved.get(keyword, ()):
+            if isinstance(variant, Mapping):
+                types.update(_schema_types(variant, root_schema))
+    if not types and "properties" in resolved:
+        types.add("object")
+    if not types and "items" in resolved:
+        types.add("array")
+    return types
+
+
+def _json_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, Mapping):
+        return "object"
+    if isinstance(value, (list, tuple)):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    return "unknown"
 
 
 def _mapping_items(value: Any) -> list[Mapping[str, Any]]:
@@ -587,6 +732,7 @@ def _runtime_snapshot(request: RunRequest, session: _RunSession) -> Mapping[str,
         "system_prompt": request.system_prompt,
         "capabilities": thaw(request.capabilities),
         "max_rounds": request.max_rounds,
+        "max_tool_calls": request.max_tool_calls,
         "max_tokens": request.max_tokens,
         "fallback_max_tokens": request.fallback_max_tokens,
         "temperature": request.temperature,
@@ -624,6 +770,7 @@ def _restore_runtime_snapshot(
         system_prompt=str(snapshot.get("system_prompt") or ""),
         capabilities=tuple(snapshot.get("capabilities") or ()),
         max_rounds=int(snapshot.get("max_rounds") or 5),
+        max_tool_calls=int(snapshot.get("max_tool_calls") or 50),
         max_tokens=int(snapshot.get("max_tokens") or 4096),
         fallback_max_tokens=int(snapshot.get("fallback_max_tokens") or 1024),
         temperature=float(snapshot.get("temperature") or 0.0),
