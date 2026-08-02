@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from mmag.agent_packages import AgentPackageRegistry, ManifestValidationError
-from mmag.capabilities import CapabilityContext, bind_capability_context
+from mmag.capabilities import CapabilityContext, CapabilityExecutor, bind_capability_context
 from mmag.control_plane import SQLiteControlPlane
 from mmag.execution import (
     ArtifactRepository,
@@ -26,8 +26,18 @@ from mmag.execution import (
     SandboxUnavailableError,
     ScriptExecutionError,
     ScriptExecutor,
+    WorkspaceBackendFactory,
     WorkspaceManager,
 )
+from mmag.governance import (
+    GovernanceContext,
+    PolicyCapabilityAuthorizer,
+    PolicyEffect,
+    PolicyEngine,
+    PolicyRule,
+    bind_governance_context,
+)
+from mmag.runtimes import RunContext, RunRequest
 from mmag.skill_packages import (
     SkillContext,
     SkillPackageLoader,
@@ -90,10 +100,103 @@ def _context() -> CapabilityContext:
         "post-1",
         "create the deck",
         "mattermost:team/channel-1",
-        frozenset({"ppt.build", "ppt.shell"}),
+        frozenset({"ppt.build"}),
         "run-1",
-        frozenset({"ppt@2.1.0"}),
+        frozenset({"ppt@2.2.0"}),
     )
+
+
+def _workspace_request() -> RunRequest:
+    return RunRequest(
+        RunContext("trace-1", "user-1", "channel-1", "scope-1", run_id="workspace-run"),
+        ({"role": "user", "content": "build"},),
+        metadata={
+            "capabilities": (
+                "workspace.read,workspace.write,workspace.execute,workspace.commit"
+            ),
+            "execution_profiles": "ppt@2.2.0",
+        },
+    )
+
+
+def test_workspace_backend_falls_back_to_safe_state_without_demo_switch(tmp_path):
+    factory = WorkspaceBackendFactory(
+        _profiles(),
+        WorkspaceManager(tmp_path / "workspaces"),
+        CapabilityExecutor(),
+    )
+
+    backend = factory.create(_workspace_request())
+
+    assert backend.__class__.__name__ == "StateBackend"
+    assert not factory.is_enabled(_workspace_request())
+
+
+def test_workspace_backend_uses_stable_root_policy_and_minimal_environment(
+    tmp_path, monkeypatch
+):
+    policy = PolicyEngine(
+        (PolicyRule("workspace", PolicyEffect.ALLOW, actions=("workspace.*",)),)
+    )
+    workspaces = WorkspaceManager(tmp_path / "workspaces")
+    factory = WorkspaceBackendFactory(
+        _profiles(),
+        workspaces,
+        CapabilityExecutor(PolicyCapabilityAuthorizer(policy)),
+        allow_unsafe_local=True,
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-leak")
+
+    with bind_governance_context(GovernanceContext("user-1", "scope-1")):
+        backend = factory.create(_workspace_request())
+        written = backend.write("/workspace/note.txt", "hello")
+        executed = backend.execute("printf '%s' \"${ANTHROPIC_API_KEY-unset}\"")
+
+    assert written.error is None
+    assert backend.read("/workspace/note.txt").file_data["content"] == "hello"
+    assert backend.write("/skills/blocked.txt", "no").error is not None
+    assert executed.output == "unset"
+    assert workspaces.acquire("workspace-run").root == backend.local.workspace.root
+
+
+@pytest.mark.asyncio
+async def test_workspace_commit_is_profile_bound_and_idempotent(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    artifacts = ArtifactRepository(tmp_path / "artifacts", store)
+    policy = PolicyEngine(
+        (PolicyRule("workspace", PolicyEffect.ALLOW, actions=("workspace.*",)),)
+    )
+    factory = WorkspaceBackendFactory(
+        _profiles(),
+        WorkspaceManager(tmp_path / "workspaces"),
+        CapabilityExecutor(PolicyCapabilityAuthorizer(policy)),
+        artifacts,
+        allow_unsafe_local=True,
+    )
+    capability_context = replace(
+        _context(),
+        allowed_capabilities=frozenset({"workspace.commit"}),
+        run_id="workspace-run",
+        allowed_execution_profiles=frozenset({"ppt@2.2.0"}),
+    )
+    backend = factory.create(_workspace_request())
+    deck = backend.local.workspace.temporary / "deck.pptx"
+    with zipfile.ZipFile(deck, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("ppt/presentation.xml", "<presentation/>")
+        archive.writestr("ppt/slides/slide1.xml", "<slide/>")
+
+    with (
+        bind_capability_context(capability_context),
+        bind_governance_context(GovernanceContext("user-1", capability_context.scope)),
+    ):
+        first = await factory.commit("deck.pptx")
+        second = await factory.commit("deck.pptx")
+
+    assert first["artifact_ref"] == second["artifact_ref"]
+    stored, path = artifacts.resolve(first["artifact_ref"], scope_id=capability_context.scope)
+    assert stored.kind == "slide_deck"
+    assert path.is_file()
 
 
 def _deck(marker: str = "safe") -> dict:
@@ -116,8 +219,8 @@ def _deck(marker: str = "safe") -> dict:
     }
 
 
-def test_profile_registry_loads_ppt_demo_commands():
-    profile = _profiles().get("ppt@2.1.0")
+def test_profile_registry_loads_ppt_commands():
+    profile = _profiles().get("ppt@2.2.0")
 
     assert profile.runner == "host"
     assert profile.network == "host"
@@ -126,7 +229,6 @@ def test_profile_registry_loads_ppt_demo_commands():
         "ppt.render",
         "ppt.preview_svg",
         "ppt.preview",
-        "ppt.shell",
     }
     assert profile.commands["ppt.render"].executable == "node"
     assert profile.commands["ppt.render"].argv[0] == "{script}"
@@ -189,7 +291,7 @@ def test_profile_rejects_shell_and_dynamic_python_commands(tmp_path):
 
 
 def test_fixed_ppt_command_argv_contains_no_payload(tmp_path):
-    profile = _profiles().get("ppt@2.1.0")
+    profile = _profiles().get("ppt@2.2.0")
     manager = WorkspaceManager(tmp_path / "workspaces")
     marker = "x; touch /tmp/owned"
     with manager.create("run-1") as workspace:
@@ -223,7 +325,7 @@ def test_fixed_ppt_command_argv_contains_no_payload(tmp_path):
 
 
 def test_process_runner_fails_closed_without_sandbox(tmp_path):
-    profile = replace(_profiles().get("ppt@2.1.0"), runner="bubblewrap", network="none")
+    profile = replace(_profiles().get("ppt@2.2.0"), runner="bubblewrap", network="none")
     manager = WorkspaceManager(tmp_path / "workspaces")
     with manager.create("run-1") as workspace:
         input_path = manager.write_input(
@@ -260,7 +362,7 @@ async def test_process_communication_timeout_cancels_stream_tasks(tmp_path):
         async def wait(self):
             await asyncio.Future()
 
-    profile = _profiles().get("ppt@2.1.0")
+    profile = _profiles().get("ppt@2.2.0")
     profile = replace(
         profile,
         limits=replace(profile.limits, timeout_seconds=0.01),
@@ -289,7 +391,7 @@ async def test_script_executor_commits_artifact_and_redacted_audit(tmp_path):
 
     with bind_capability_context(_context()), bind_skill_context(session):
         result = await executor.execute(
-            profile_ref="ppt@2.1.0",
+            profile_ref="ppt@2.2.0",
             capability="ppt.build",
             command_id="ppt.render",
             permission="artifact:generate",
@@ -333,7 +435,7 @@ async def test_script_executor_denies_missing_agent_profile_before_process(tmp_p
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
-            profile_ref="ppt@2.1.0",
+            profile_ref="ppt@2.2.0",
             capability="ppt.build",
             command_id="ppt.render",
             permission="artifact:generate",
@@ -360,7 +462,7 @@ async def test_script_executor_rejects_symlink_and_oversized_artifacts(tmp_path,
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
-            profile_ref="ppt@2.1.0",
+            profile_ref="ppt@2.2.0",
             capability="ppt.build",
             command_id="ppt.render",
             permission="artifact:generate",
@@ -382,7 +484,7 @@ async def test_script_executor_audits_content_free_process_failure_details(tmp_p
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
-            profile_ref="ppt@2.1.0",
+            profile_ref="ppt@2.2.0",
             capability="ppt.build",
             command_id="ppt.render",
             permission="artifact:generate",

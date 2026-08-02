@@ -13,7 +13,7 @@ Capability 调用再由当前 Package Policy 动态裁决。
 | `mmchat@2.1.0` | `web-research@1.2.0` | 默认群聊/私聊协同入口 | 对话上下文、知识、链接与 crawl 搜索子集 | 文本答复 |
 | `link@2.0.0` | — | 单 URL 解析 | 确定性 `analyze_link`，无模型循环 | `link_analysis` |
 | `report@2.1.0` | `report@1.3.0` | 研报、行业/竞品研究 | 当前频道知识/消息、公开链接与完整 crawl 工具集 | 证据账本式 research report |
-| `ppt@3.0.0` | `slides@3.0.0` | PPT、幻灯片、路演结构与文件生成 | 当前频道知识、受控 Markdown/主题、可编辑 PPTX/PNG 预览、Demo Shell、审批后 Artifact 交付 | Presentation Bundle 与 Artifact refs |
+| `ppt@3.1.0` | `slides@3.1.0` | PPT、幻灯片、路演结构与文件生成 | 当前频道知识、受控 Markdown/主题、可编辑 PPTX/PNG 预览、受治理 Workspace、审批后 Artifact 交付 | Presentation Bundle 与 Artifact refs |
 | `project@2.0.0` | `project@1.2.0` | 项目计划、状态和任务拆解 | 当前频道消息/知识、审批后写入共享知识 | project brief |
 
 `link` 直接执行确定性 Capability，因为单 URL 提取不需要模型和 Skill；输入、输出与版本
@@ -32,7 +32,7 @@ Agent Manifest allowlist
 ```
 
 - `report` 是只读 Agent；消息和知识搜索必须显式携带当前 conversation id；
-- `ppt` 主要使用高层 `ppt.build`；内部 source/render/preview 步骤进入 `ppt@2.1.0` Profile。Demo 阶段另开放完整宿主 `ppt.shell`；成功生成 PPTX 后，`send_file` 默认进入 LangGraph 审批；
+- `ppt` 主要使用高层 `ppt.build`；内部 source/render/preview 步骤进入 `ppt@2.2.0` Profile。诊断执行统一使用受治理 Workspace；成功生成 PPTX 后，`send_file` 默认进入 LangGraph 审批；
 - `project` 的读取被限制在当前频道；`save_knowledge` 会改变共享记忆，因此需要审批；
 - `link` 只能执行受 SSRF、重定向和缓存边界保护的 `analyze_link`；
 - 未知 Capability、越出当前 Skill 的 Capability、资源参数不匹配或 Policy 未命中均默认拒绝。

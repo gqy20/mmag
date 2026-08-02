@@ -20,7 +20,7 @@ from mmag.capabilities import (
     bind_langgraph_capability,
     build_builtin_bindings,
 )
-from mmag.execution import ExecutionProfileRegistry
+from mmag.execution import ExecutionProfileRegistry, create_workspace_capabilities
 from mmag.governance import (
     ModelGateway,
     ModelPolicyRegistry,
@@ -88,7 +88,7 @@ def test_registry_loads_current_agent_packages():
     assert {(item.manifest.metadata.name, item.manifest.metadata.version) for item in registry.list()} == {
         ("link", "2.0.0"),
         ("mmchat", "2.1.0"),
-        ("ppt", "3.0.0"),
+        ("ppt", "3.1.0"),
         ("project", "2.0.0"),
         ("report", "2.1.0"),
     }
@@ -134,13 +134,15 @@ def test_factory_constructs_every_manifest_without_provider_registry():
     capabilities = CapabilityRegistry()
     for binding in build_builtin_bindings(MagicMock(), MagicMock(), executor=executor):
         capabilities.register(binding)
-    for name in ("ppt.build", "ppt.shell"):
+    for name in ("ppt.build",):
         capabilities.register(
             bind_langgraph_capability(
                 CapabilitySpec(name, name, {"type": "object"}, lambda: {}),
                 executor=executor,
             )
         )
+    for spec in create_workspace_capabilities():
+        capabilities.register(bind_langgraph_capability(spec, executor=executor))
     factory = AgentFactory(
         DeepAgentProvider(ModelGateway({"default": StubRuntime()}), capabilities, model_policies),
         DirectAgentProvider(capabilities, executor),

@@ -3,7 +3,7 @@ kind: Skill
 
 metadata:
   name: slides
-  version: 3.0.0
+  version: 3.1.0
   description: Compose governed Markdown into editable PPTX, source, and direct image preview Artifacts.
 
 spec:
@@ -20,11 +20,14 @@ spec:
     - ppt.build
   optional_capabilities:
     - search_knowledge
-    - ppt.shell
+    - workspace.read
+    - workspace.write
+    - workspace.execute
+    - workspace.commit
     - send_file
 
   execution_profiles:
-    - ppt@2.1.0
+    - ppt@2.2.0
 
   resources:
     templates:

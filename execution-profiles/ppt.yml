@@ -3,7 +3,7 @@ kind: ExecutionProfile
 
 metadata:
   name: ppt
-  version: 2.1.0
+  version: 2.2.0
   description: Demo host-shell build pipeline for editable presentations.
 
 spec:
@@ -76,15 +76,4 @@ spec:
         filename: preview.png
         kind: presentation_preview
         media_type: image/png
-        schema_version: 1.0.0
-
-    - id: ppt.shell
-      permission: execution:shell
-      executable: python
-      script_ref: ppt/shell.py
-      argv: ["-I", "-B", "{script}", "--input", "{input}", "--output", "{output}"]
-      output:
-        filename: shell-result.json
-        kind: execution_report
-        media_type: application/json
         schema_version: 1.0.0

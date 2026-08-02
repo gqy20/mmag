@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: ppt
-  version: 3.0.0
+  version: 3.1.0
   description: Build governed Markdown into editable presentation bundles and deliver on approval.
 
 spec:
@@ -37,25 +37,28 @@ spec:
     allow:
       - search_knowledge
       - ppt.build
-      - ppt.shell
+      - workspace.read
+      - workspace.write
+      - workspace.execute
+      - workspace.commit
       - send_file
     deny: []
 
   skills:
     allow:
-      - slides@3.0.0
+      - slides@3.1.0
     deny: []
 
   execution_profiles:
     allow:
-      - ppt@2.1.0
+      - ppt@2.2.0
     deny: []
 
   context:
     read_scopes: [conversation, project]
     write_scopes: [task]
 
-  policy_ref: ppt@2.2.0
+  policy_ref: ppt@2.3.0
   model_policy_ref: reasoning-medium@1.0.0
 
   budget:

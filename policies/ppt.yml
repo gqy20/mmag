@@ -1,5 +1,5 @@
 id: ppt
-version: 2.2.0
+version: 2.3.0
 default_effect: deny
 
 rules:
@@ -23,11 +23,29 @@ rules:
     permissions: [artifact:generate]
     reason: Presentation generation is constrained to registered commands and Artifact staging.
 
-  - id: run-host-demo-shell
+  - id: read-run-workspace
     effect: allow
-    actions: [ppt.shell]
-    permissions: [execution:shell]
-    reason: Explicit Demo authorization for host Shell; parent Secrets are not inherited.
+    actions: [workspace.read]
+    permissions: [workspace:file:read]
+    reason: Files are restricted to the stable workspace of the current Run.
+
+  - id: write-run-workspace
+    effect: allow
+    actions: [workspace.write]
+    permissions: [workspace:file:write]
+    reason: Writes are restricted to the stable workspace of the current Run.
+
+  - id: approve-unsafe-demo-command
+    effect: require_approval
+    actions: [workspace.execute]
+    permissions: [workspace:process:execute]
+    reason: Every unrestricted local Demo command requires explicit approval.
+
+  - id: commit-declared-workspace-output
+    effect: allow
+    actions: [workspace.commit]
+    permissions: [artifact:generate]
+    reason: Only fixed outputs declared by the active Execution Profile may become Artifacts.
 
   - id: approve-deck-delivery
     effect: require_approval

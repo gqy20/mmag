@@ -5,14 +5,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import struct
-import zipfile
 from importlib.resources import as_file, files
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from ..capabilities import get_capability_context
 from ..skill_packages import get_skill_context
+from .artifacts import ArtifactRepositoryError, validate_artifact_output
 from .models import ProcessRequest
 
 if TYPE_CHECKING:
@@ -327,43 +326,10 @@ class ScriptExecutor:
 
     @staticmethod
     def _validate_output(path, kind: str, max_bytes: int) -> None:
-        info = path.lstat()
-        if path.is_symlink() or not path.is_file():
-            raise ScriptExecutionError("managed output must be a regular non-symlink file")
-        if info.st_size < 1 or info.st_size > max_bytes:
-            raise ScriptExecutionError("managed output exceeds its Artifact limit")
         try:
-            if kind == "slide_deck":
-                with zipfile.ZipFile(path) as archive:
-                    names = frozenset(archive.namelist())
-                    required = {"[Content_Types].xml", "ppt/presentation.xml"}
-                    if not required <= names or not any(
-                        name.startswith("ppt/slides/slide") and name.endswith(".xml")
-                        for name in names
-                    ):
-                        raise ScriptExecutionError("renderer did not produce a valid PPTX")
-                    if archive.testzip() is not None:
-                        raise ScriptExecutionError("renderer produced a corrupt PPTX")
-            elif kind == "presentation_pdf":
-                if not path.read_bytes()[:5] == b"%PDF-":
-                    raise ScriptExecutionError("renderer did not produce a valid PDF")
-            elif kind == "presentation_source":
-                if not path.read_text(encoding="utf-8").startswith("---\n"):
-                    raise ScriptExecutionError("renderer did not produce normalized Markdown")
-            elif kind == "presentation_preview_svg":
-                content = path.read_text(encoding="utf-8")
-                if not content.lstrip().startswith("<svg") or "</svg>" not in content:
-                    raise ScriptExecutionError("renderer did not produce a valid SVG preview")
-            elif kind == "presentation_preview":
-                with path.open("rb") as handle:
-                    header = handle.read(24)
-                if header[:8] != b"\x89PNG\r\n\x1a\n" or len(header) != 24:
-                    raise ScriptExecutionError("renderer did not produce a valid PNG preview")
-                width, height = struct.unpack(">II", header[16:24])
-                if width < 640 or height < 360 or abs(width / height - 16 / 9) > 0.03:
-                    raise ScriptExecutionError("presentation preview has invalid dimensions")
-        except (UnicodeDecodeError, zipfile.BadZipFile) as error:
-            raise ScriptExecutionError(f"renderer produced invalid {kind} content") from error
+            validate_artifact_output(path, kind, max_bytes)
+        except ArtifactRepositoryError as error:
+            raise ScriptExecutionError(str(error)) from error
 
     @staticmethod
     def _input_hash(payload: Mapping[str, Any]) -> str:

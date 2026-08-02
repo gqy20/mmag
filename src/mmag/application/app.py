@@ -37,6 +37,7 @@ from ..execution import (
     ExecutionProfileRegistry,
     ProcessRunner,
     ScriptExecutor,
+    WorkspaceBackendFactory,
     WorkspaceManager,
 )
 from ..governance import (
@@ -114,7 +115,17 @@ class Agent:
             self.artifact_repository,
             self.control_store,
         )
-        self.execution_capabilities = create_ppt_capabilities(self.script_executor)
+        self.workspace_backend_factory = WorkspaceBackendFactory(
+            self.execution_profile_registry,
+            self.execution_workspaces,
+            self.capability_executor,
+            self.artifact_repository,
+            allow_unsafe_local=config.allow_unsafe_local_exec,
+        )
+        self.execution_capabilities = (
+            *create_ppt_capabilities(self.script_executor),
+            *self.workspace_backend_factory.capabilities,
+        )
 
         self.capability_registry = CapabilityRegistry()
         builtin_bindings = build_builtin_bindings(
@@ -131,6 +142,7 @@ class Agent:
             capability_registry=self.capability_registry,
             checkpoint_path=config.checkpoint_db_path,
             audit_sink=self.control_store,
+            workspace_backend_factory=self.workspace_backend_factory,
         )
         self.runtime = ModelGateway(
             {"default": self.deep_agent_runtime},

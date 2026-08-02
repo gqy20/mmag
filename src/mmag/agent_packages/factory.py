@@ -133,6 +133,8 @@ class DeepAgentProvider:
                 "skill_ref": request.skill.ref if request.skill is not None else "",
                 "policy_ref": package.manifest.policy_ref,
                 "package_hash": package.snapshot.package_hash,
+                "capabilities": ",".join(selected_names),
+                "execution_profiles": ",".join(package.execution_profiles),
                 **self.platform_provenance,
             }
             if prepared is not None:

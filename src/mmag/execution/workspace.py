@@ -48,6 +48,29 @@ class WorkspaceManager:
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
+    def acquire(self, run_id: str) -> ExecutionWorkspace:
+        """Create or reopen the stable workspace used by a resumable Agent run."""
+        if not run_id:
+            raise WorkspaceError("managed execution requires a stable run id")
+        root = self.runs / hashlib.sha256(run_id.encode()).hexdigest()[:24]
+        root.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(root, 0o700)
+        return ExecutionWorkspace(
+            root,
+            self._ensure_directory(root, "input", 0o700),
+            self._ensure_directory(root, "assets", 0o700),
+            self._ensure_directory(root, "workspace", 0o700),
+            self._ensure_directory(root, "staging", 0o700),
+        )
+
+    def release(self, workspace: ExecutionWorkspace, *, purge: bool = False) -> None:
+        """Mark a workspace inactive or remove it after its artifacts are committed."""
+        self._validate_workspace(workspace)
+        if purge:
+            shutil.rmtree(workspace.root)
+            return
+        os.utime(workspace.root)
+
     def write_input(
         self,
         workspace: ExecutionWorkspace,
@@ -133,6 +156,18 @@ class WorkspaceManager:
         path = root / name
         path.mkdir(mode=mode)
         return path
+
+    @staticmethod
+    def _ensure_directory(root: Path, name: str, mode: int) -> Path:
+        path = root / name
+        path.mkdir(mode=mode, exist_ok=True)
+        os.chmod(path, mode)
+        return path
+
+    def _validate_workspace(self, workspace: ExecutionWorkspace) -> None:
+        root = workspace.root.resolve()
+        if root.parent != self.runs or workspace.root.is_symlink():
+            raise WorkspaceError("workspace is outside the managed run root")
 
     @staticmethod
     def _child(parent: Path, name: str) -> Path:

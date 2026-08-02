@@ -11,8 +11,8 @@
    editable PPTX rendering, PDF export, preview generation, validation, and Artifact storage.
 8. Treat the build as failed unless it returns `source_ref`, `pptx_ref`, and `preview_refs`.
    Never fabricate refs or retry through a different renderer.
-9. `ppt.shell` is a Demo-only full host Shell for diagnostics and transformations. It starts in an
-   ephemeral directory but can access the host; use it only when `ppt.build` cannot express the step.
+9. Use the governed `/workspace` and `execute` only for steps that `ppt.build` cannot express. Commit
+   only fixed filenames declared by the active Execution Profile through `workspace.commit`.
 10. After `ppt.build` succeeds, call `send_file` once with `pptx_ref`. Delivery remains approval-gated;
    send source or preview files only when explicitly requested.
 

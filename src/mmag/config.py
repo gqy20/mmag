@@ -99,6 +99,7 @@ _FIELD_TO_ENV: dict[str, str] = {
     "execution_workspace_path": "EXECUTION_WORKSPACE_PATH",
     "execution_workspace_retention_seconds": "EXECUTION_WORKSPACE_RETENTION_SECONDS",
     "artifact_store_path": "ARTIFACT_STORE_PATH",
+    "allow_unsafe_local_exec": "MMAG_ALLOW_UNSAFE_LOCAL_EXEC",
 }
 def _text_env(name: str, default: str) -> str:
     """Return a non-empty optional override while preserving a code default."""
@@ -210,6 +211,9 @@ class Config:
         os.getenv("EXECUTION_WORKSPACE_RETENTION_SECONDS", "3600")
     )
     artifact_store_path: str = os.getenv("ARTIFACT_STORE_PATH", "./artifacts")
+    allow_unsafe_local_exec: bool = os.getenv(
+        "MMAG_ALLOW_UNSAFE_LOCAL_EXEC", "false"
+    ).lower() in ("true", "1", "yes")
 
     @property
     def ws_url(self) -> str:

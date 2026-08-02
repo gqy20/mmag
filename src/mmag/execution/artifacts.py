@@ -6,8 +6,10 @@ import hashlib
 import os
 import shutil
 import stat
+import struct
 import tempfile
 import uuid
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,6 +24,52 @@ if TYPE_CHECKING:
 
 class ArtifactRepositoryError(RuntimeError):
     pass
+
+
+def validate_artifact_output(path: Path, kind: str, max_bytes: int) -> None:
+    """Validate a staged file against the platform contract for its declared kind."""
+    info = path.lstat()
+    if path.is_symlink() or not path.is_file():
+        raise ArtifactRepositoryError("managed output must be a regular non-symlink file")
+    if info.st_size < 1 or info.st_size > max_bytes:
+        raise ArtifactRepositoryError("managed output exceeds its Artifact limit")
+    try:
+        if kind == "slide_deck":
+            _validate_pptx(path)
+        elif kind == "presentation_pdf" and path.read_bytes()[:5] != b"%PDF-":
+            raise ArtifactRepositoryError("managed output is not a valid PDF")
+        elif kind == "presentation_source":
+            if not path.read_text(encoding="utf-8").startswith("---\n"):
+                raise ArtifactRepositoryError("managed output is not normalized Markdown")
+        elif kind == "presentation_preview_svg":
+            content = path.read_text(encoding="utf-8")
+            if not content.lstrip().startswith("<svg") or "</svg>" not in content:
+                raise ArtifactRepositoryError("managed output is not a valid SVG preview")
+        elif kind == "presentation_preview":
+            _validate_png_preview(path)
+    except (UnicodeDecodeError, zipfile.BadZipFile) as error:
+        raise ArtifactRepositoryError(f"managed output has invalid {kind} content") from error
+
+
+def _validate_pptx(path: Path) -> None:
+    with zipfile.ZipFile(path) as archive:
+        names = frozenset(archive.namelist())
+        required = {"[Content_Types].xml", "ppt/presentation.xml"}
+        has_slide = any(
+            name.startswith("ppt/slides/slide") and name.endswith(".xml") for name in names
+        )
+        if not required <= names or not has_slide or archive.testzip() is not None:
+            raise ArtifactRepositoryError("managed output is not a valid PPTX")
+
+
+def _validate_png_preview(path: Path) -> None:
+    with path.open("rb") as handle:
+        header = handle.read(24)
+    if header[:8] != b"\x89PNG\r\n\x1a\n" or len(header) != 24:
+        raise ArtifactRepositoryError("managed output is not a valid PNG preview")
+    width, height = struct.unpack(">II", header[16:24])
+    if width < 640 or height < 360 or abs(width / height - 16 / 9) > 0.03:
+        raise ArtifactRepositoryError("presentation preview has invalid dimensions")
 
 
 class ArtifactRepository:
@@ -86,9 +134,24 @@ class ArtifactRepository:
         output: ExecutionOutput,
         provenance: Mapping[str, str],
         max_bytes: int,
+        idempotency_key: str = "",
     ) -> StoredArtifact:
         data_hash, size = self._inspect(staged, max_bytes=max_bytes)
-        artifact_id = uuid.uuid4().hex
+        artifact_id = (
+            hashlib.sha256(idempotency_key.encode()).hexdigest()[:32]
+            if idempotency_key
+            else uuid.uuid4().hex
+        )
+        existing = self._existing(artifact_id, scope_id=scope_id)
+        if existing is not None:
+            if (
+                existing.run_id != run_id
+                or existing.kind != output.kind
+                or existing.filename != output.filename
+                or existing.sha256 != data_hash
+            ):
+                raise ArtifactRepositoryError("Artifact idempotency key was reused inconsistently")
+            return existing
         shard = self.root / artifact_id[:2]
         shard.mkdir(mode=0o700, exist_ok=True)
         final_directory = shard / artifact_id
@@ -137,6 +200,12 @@ class ArtifactRepository:
             shutil.rmtree(temporary, ignore_errors=True)
             shutil.rmtree(final_directory, ignore_errors=True)
             raise
+
+    def _existing(self, artifact_id: str, *, scope_id: str) -> StoredArtifact | None:
+        try:
+            return self.resolve(f"artifact://{artifact_id}", scope_id=scope_id)[0]
+        except KeyError:
+            return None
 
     def resolve(
         self,

@@ -1,6 +1,6 @@
 # 受控执行平面
 
-MMAG 的生产 Python/CLI 执行以平台注册的窄口 Capability 为默认方式：模型只提交业务参数，平台选择已发布的 `ExecutionProfile`、已登记脚本和固定 argv。当前 `ppt@2.1.0` 为了 Demo 可用性显式开放 `ppt.shell` 宿主机 Shell，这是已知的临时高风险例外，不代表生产安全边界。
+MMAG 的生产 Python/CLI 执行以平台注册的窄口 Capability 为默认方式：模型只提交业务参数，平台选择已发布的 `ExecutionProfile`、已登记脚本和固定 argv。当前还提供 `GovernedWorkspaceBackend` 本地 Demo Provider；它只有在 Agent/Skill/Profile/Policy 权限交集成立且显式设置 `MMAG_ALLOW_UNSAFE_LOCAL_EXEC=true` 时才展示原生 `execute`，每次命令需要审批。该完整宿主机 Shell 是临时高风险例外，不代表生产安全边界。
 
 ```text
 Agent allowlist
@@ -21,7 +21,7 @@ execution-profiles/
   ppt.yml                 # metadata.version: 1.0.0
 
 skills/slides/
-  skill.yml               # execution_profiles: [ppt@2.1.0]
+  skill.yml               # execution_profiles: [ppt@2.2.0]
 
 src/mmag/renderers/ppt/
   ppt.cjs                 # 平台受信、锁定依赖的离线 bundle
@@ -30,7 +30,7 @@ src/mmag/renderers/ppt/
 
 `ExecutionProfileLoader` 使用 Draft 2020-12 Schema 严格拒绝未知字段，并额外校验文件名、命令 ID、可信可执行文件、占位符和挂载边界。Registry 以 `name@version` 原子加载；Profile YAML Hash、runner、运行时镜像/依赖摘要与网络模式进入 Agent Package、Skill provenance 和 Artifact provenance。Profile 内容变化必须提升 SemVer，CI 会比较目标分支。
 
-当前 `ppt@2.1.0` 向 PPT Agent 暴露高层 `ppt.build` 与 Demo 专用 `ppt.shell`。`ppt.build` 内部注册四个固定步骤：
+当前 `ppt@2.2.0` 向 PPT Agent 暴露高层 `ppt.build`，内部注册四个固定步骤：
 
 - `ppt.source`：校验并保存规范化 `slides.md`；
 - `ppt.render`：固定调用锁定的 PptxGenJS bundle，输出原生可编辑 `slide_deck` PPTX；
@@ -39,7 +39,7 @@ src/mmag/renderers/ppt/
 
 内部步骤不是模型 Capability。`ppt.build` 负责依次执行并只在源文件、PPTX 和预览均成功后返回完整 Bundle；PptxGenJS、主题和 Markdown 语法版本写入每个 Artifact provenance。PDF 不再是生成预览的前置条件。
 
-`ppt.shell` 通过注册脚本启动完整 Bash，允许任意命令字符串、宿主文件和网络访问。它从独立临时目录启动，父进程环境被清空且 stdout/stderr 有上限，但这不是文件系统 Sandbox；投入生产前必须移除或重新绑定到真正隔离的 Runner。
+通用 `workspace.execute` 取代了旧的 PPT 专用 Shell。它只在显式 Demo 开关、Agent/Skill/Profile/Policy 权限交集及人工审批全部满足后启用；`workspace.commit` 只接受当前 Profile 声明的固定输出文件，并按 Run/Scope 幂等提交 Artifact。该本地执行仍不是生产 Sandbox。
 
 ## 隔离与生命周期
 

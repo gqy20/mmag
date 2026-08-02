@@ -49,7 +49,13 @@ from .base import (
     thaw,
     translate_runtime_error,
 )
-from .harness import build_run_limit_middleware, build_state_filesystem_permissions
+from .harness import (
+    build_run_limit_middleware,
+    build_state_filesystem_permissions,
+    build_tool_visibility_middleware,
+    build_workspace_interrupt_rules,
+)
+from .outputs import repair_structured_output
 from .telemetry import AuditSink, DeepAgentTelemetry
 
 if TYPE_CHECKING:
@@ -61,6 +67,7 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
     from ..capabilities import CapabilityRegistry
+    from ..execution import WorkspaceBackendFactory
 
 
 _PROFILE_REGISTERED = False
@@ -74,7 +81,7 @@ def _register_mmag_profile() -> None:
     register_harness_profile(
         "anthropic",
         HarnessProfile(
-            excluded_tools=frozenset({"execute"}),
+            excluded_tools=frozenset(),
             general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
         ),
     )
@@ -128,12 +135,14 @@ class DeepAgentRuntime:
         checkpointer: BaseCheckpointSaver[Any] | None = None,
         model_factory: ManagedChatModelFactory | None = None,
         audit_sink: AuditSink | None = None,
+        workspace_backend_factory: WorkspaceBackendFactory | None = None,
     ) -> None:
         _register_mmag_profile()
         self.capability_registry = capability_registry
         self.checkpoint_path = checkpoint_path
         self.model_factory = model_factory or ManagedChatModelFactory()
         self.audit_sink = audit_sink
+        self.workspace_backend_factory = workspace_backend_factory
         self._checkpointer = checkpointer
         self._checkpoint_context: AbstractAsyncContextManager[Any] | None = None
         self._sessions: dict[str, _RunSession] = {}
@@ -154,6 +163,9 @@ class DeepAgentRuntime:
             await setup()
 
     async def close(self) -> None:
+        if self.workspace_backend_factory is not None:
+            for session in self._sessions.values():
+                self.workspace_backend_factory.release(session.request)
         self._sessions.clear()
         context, self._checkpoint_context = self._checkpoint_context, None
         self._checkpointer = None
@@ -187,7 +199,17 @@ class DeepAgentRuntime:
         }
         if request.skill_files:
             state["files"] = thaw(request.skill_files)
-        result = await self._invoke(session.graph, state, self._config(thread_id, request), request)
+        try:
+            result = await self._invoke(
+                session.graph,
+                state,
+                self._config(thread_id, request),
+                request,
+            )
+        except Exception:
+            self._sessions.pop(thread_id, None)
+            self._release_workspace(request)
+            raise
         converted = await self._to_result(
             result,
             session,
@@ -197,6 +219,7 @@ class DeepAgentRuntime:
         )
         if converted.status is not RuntimeStatus.WAITING_APPROVAL:
             self._sessions.pop(thread_id, None)
+            self._release_workspace(request)
         return converted
 
     async def resume(self, thread_id: str, decision: Mapping[str, Any]) -> AgentResult:
@@ -223,12 +246,19 @@ class DeepAgentRuntime:
         except AgentRuntimeError:
             raise
         except Exception as error:
+            self._sessions.pop(thread_id, None)
+            self._release_workspace(session.request)
             translated = translate_runtime_error(error, runtime=self.runtime_name)
             raise translated from error
         converted = await self._to_result(result, session, thread_id, None, session.request)
         if converted.status is not RuntimeStatus.WAITING_APPROVAL:
             self._sessions.pop(thread_id, None)
+            self._release_workspace(session.request)
         return converted
+
+    def _release_workspace(self, request: RunRequest) -> None:
+        if self.workspace_backend_factory is not None:
+            self.workspace_backend_factory.release(request)
 
     def _build_session(
         self,
@@ -241,15 +271,32 @@ class DeepAgentRuntime:
         calls = calls or []
         artifacts = artifacts or []
         deliveries = deliveries or []
+        workspace_enabled = bool(
+            self.workspace_backend_factory
+            and self.workspace_backend_factory.is_enabled(request)
+        )
         tools = [
             self._tool(schema, calls, artifacts, deliveries, request)
             for schema in request.capabilities
+            if str(schema["name"])
+            not in {"workspace.read", "workspace.write", "workspace.execute"}
+            and (str(schema["name"]) != "workspace.commit" or workspace_enabled)
         ]
-        interrupt_on = self._interrupt_rules(request.capabilities)
+        interrupt_capabilities = tuple(
+            schema
+            for schema in request.capabilities
+            if workspace_enabled or not str(schema["name"]).startswith("workspace.")
+        )
+        interrupt_on = self._interrupt_rules(interrupt_capabilities)
         response_format = (
             ToolStrategy(thaw(request.response_schema))
             if request.response_schema is not None
             else None
+        )
+        backend = (
+            self.workspace_backend_factory.create(request)
+            if self.workspace_backend_factory is not None
+            else StateBackend()
         )
         graph = create_deep_agent(
             model=self.model_factory.create(
@@ -258,10 +305,16 @@ class DeepAgentRuntime:
             ),
             tools=tools,
             system_prompt=request.system_prompt,
-            backend=StateBackend(),
+            backend=backend,
             skills=["/skills/"] if request.skill_files else None,
             subagents=[],
-            middleware=build_run_limit_middleware(request),
+            middleware=(
+                *build_run_limit_middleware(request),
+                *build_tool_visibility_middleware(
+                    request,
+                    execute_enabled=workspace_enabled,
+                ),
+            ),
             permissions=build_state_filesystem_permissions(),
             interrupt_on=interrupt_on or None,
             response_format=response_format,
@@ -358,6 +411,8 @@ class DeepAgentRuntime:
         rules: dict[str, bool | InterruptOnConfig] = {}
         for schema in capabilities:
             name = str(schema["name"])
+            if name.startswith("workspace."):
+                continue
             binding = self.capability_registry.get(name)
             if binding.capability is None:
                 continue
@@ -376,6 +431,7 @@ class DeepAgentRuntime:
                 allowed_decisions=["approve", "reject"],
                 when=requires_approval,
             )
+        rules.update(build_workspace_interrupt_rules(capabilities, self.capability_registry))
         return rules
 
     async def _invoke(self, graph, state, graph_config, request: RunRequest) -> dict[str, Any]:
@@ -432,8 +488,12 @@ class DeepAgentRuntime:
         if output is not None and hasattr(output, "model_dump"):
             output = output.model_dump()
         structured = dict(output) if isinstance(output, Mapping) else None
+        messages = list(state.get("messages") or ())
+        if structured is None and request.response_schema is not None:
+            candidate = _json_payload(_result_text(None, messages))
+            structured = dict(candidate) if isinstance(candidate, Mapping) else None
         if structured is not None and request.response_schema is not None:
-            structured, repaired_fields = _repair_structured_output(
+            structured, repaired_fields = repair_structured_output(
                 structured,
                 request.response_schema,
             )
@@ -444,7 +504,6 @@ class DeepAgentRuntime:
                     status="succeeded",
                     repaired_fields=repaired_fields,
                 )
-        messages = list(state.get("messages") or ())
         text = _result_text(structured, messages)
         usage = _usage(messages)
         return AgentResult(
@@ -498,130 +557,6 @@ def _json_payload(content: str) -> Any:
         return json.loads(content)
     except json.JSONDecodeError:
         return content
-
-
-def _repair_structured_output(
-    value: Mapping[str, Any],
-    schema: Mapping[str, Any],
-) -> tuple[dict[str, Any], int]:
-    """Decode model-stringified JSON containers only where the schema requires them."""
-    repaired, count = _repair_schema_value(dict(value), schema, schema)
-    return (dict(repaired) if isinstance(repaired, Mapping) else dict(value), count)
-
-
-def _repair_schema_value(
-    value: Any,
-    schema: Mapping[str, Any],
-    root_schema: Mapping[str, Any],
-) -> tuple[Any, int]:
-    resolved = _resolve_local_schema(schema, root_schema)
-    variants = [
-        item
-        for keyword in ("oneOf", "anyOf")
-        for item in resolved.get(keyword, ())
-        if isinstance(item, Mapping)
-    ]
-    allowed_types = _schema_types(resolved, root_schema)
-    repaired = 0
-
-    if isinstance(value, str) and "string" not in allowed_types:
-        container_types = allowed_types & {"object", "array"}
-        if container_types:
-            try:
-                decoded = json.loads(value)
-            except json.JSONDecodeError:
-                decoded = value
-            decoded_type = _json_type(decoded)
-            if decoded_type in container_types:
-                value = decoded
-                repaired += 1
-
-    if variants:
-        matching = [
-            variant
-            for variant in variants
-            if _json_type(value) in _schema_types(variant, root_schema)
-        ]
-        if matching:
-            value, nested = _repair_schema_value(value, matching[0], root_schema)
-            return value, repaired + nested
-
-    if isinstance(value, Mapping):
-        properties = resolved.get("properties", {})
-        additional = resolved.get("additionalProperties")
-        object_output = dict(value)
-        for key, item in value.items():
-            field_schema = properties.get(key) if isinstance(properties, Mapping) else None
-            if not isinstance(field_schema, Mapping) and isinstance(additional, Mapping):
-                field_schema = additional
-            if isinstance(field_schema, Mapping):
-                object_output[key], nested = _repair_schema_value(item, field_schema, root_schema)
-                repaired += nested
-        return object_output, repaired
-
-    items = resolved.get("items")
-    if isinstance(value, (list, tuple)) and isinstance(items, Mapping):
-        list_output = []
-        for item in value:
-            converted, nested = _repair_schema_value(item, items, root_schema)
-            list_output.append(converted)
-            repaired += nested
-        return list_output, repaired
-    return value, repaired
-
-
-def _resolve_local_schema(
-    schema: Mapping[str, Any],
-    root_schema: Mapping[str, Any],
-) -> Mapping[str, Any]:
-    reference = schema.get("$ref")
-    if not isinstance(reference, str) or not reference.startswith("#/"):
-        return schema
-    current: Any = root_schema
-    for raw_part in reference[2:].split("/"):
-        part = raw_part.replace("~1", "/").replace("~0", "~")
-        if not isinstance(current, Mapping) or part not in current:
-            return schema
-        current = current[part]
-    return current if isinstance(current, Mapping) else schema
-
-
-def _schema_types(
-    schema: Mapping[str, Any],
-    root_schema: Mapping[str, Any],
-) -> set[str]:
-    resolved = _resolve_local_schema(schema, root_schema)
-    declared = resolved.get("type")
-    types = {declared} if isinstance(declared, str) else {
-        item for item in declared or () if isinstance(item, str)
-    }
-    for keyword in ("oneOf", "anyOf"):
-        for variant in resolved.get(keyword, ()):
-            if isinstance(variant, Mapping):
-                types.update(_schema_types(variant, root_schema))
-    if not types and "properties" in resolved:
-        types.add("object")
-    if not types and "items" in resolved:
-        types.add("array")
-    return types
-
-
-def _json_type(value: Any) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, Mapping):
-        return "object"
-    if isinstance(value, (list, tuple)):
-        return "array"
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, int):
-        return "integer"
-    if isinstance(value, float):
-        return "number"
-    return "unknown"
 
 
 def _mapping_items(value: Any) -> list[Mapping[str, Any]]:

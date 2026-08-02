@@ -1,6 +1,13 @@
 """Controlled, profile-driven process and Artifact execution plane."""
 
-from .artifacts import ArtifactRepository, ArtifactRepositoryError
+from .artifacts import ArtifactRepository, ArtifactRepositoryError, validate_artifact_output
+from .backend import (
+    GovernedWorkspaceBackend,
+    LocalExecutionBackend,
+    WorkspaceBackendError,
+    WorkspaceBackendFactory,
+    create_workspace_capabilities,
+)
 from .models import (
     ExecutionCommand,
     ExecutionLimits,
@@ -29,6 +36,7 @@ from .workspace import WorkspaceError, WorkspaceManager
 __all__ = [
     "ArtifactRepository",
     "ArtifactRepositoryError",
+    "GovernedWorkspaceBackend",
     "ExecutionCommand",
     "ExecutionLimits",
     "ExecutionProfile",
@@ -36,6 +44,7 @@ __all__ = [
     "ExecutionProfileLoader",
     "ExecutionProfileRegistry",
     "ExecutionWorkspace",
+    "LocalExecutionBackend",
     "ProcessExecutionError",
     "ProcessFailedError",
     "ProcessOutputLimitError",
@@ -48,5 +57,9 @@ __all__ = [
     "ScriptExecutor",
     "StoredArtifact",
     "WorkspaceError",
+    "WorkspaceBackendError",
+    "WorkspaceBackendFactory",
     "WorkspaceManager",
+    "create_workspace_capabilities",
+    "validate_artifact_output",
 ]

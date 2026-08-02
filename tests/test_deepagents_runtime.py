@@ -27,11 +27,12 @@ from mmag.runtimes import (
     RuntimeLimitError,
     RuntimeStatus,
 )
-from mmag.runtimes.deepagents import _repair_structured_output
 from mmag.runtimes.harness import (
     build_run_limit_middleware,
     build_state_filesystem_permissions,
+    build_tool_visibility_middleware,
 )
+from mmag.runtimes.outputs import repair_structured_output
 
 
 class ScriptedModel(BaseChatModel):
@@ -151,7 +152,7 @@ def test_repairs_only_schema_declared_json_containers():
         },
     }
 
-    repaired, count = _repair_structured_output(
+    repaired, count = repair_structured_output(
         {
             "bundle": '{"pptx_ref":"artifact://deck"}',
             "source": '{"must":"remain text"}',
@@ -169,7 +170,7 @@ def test_repairs_only_schema_declared_json_containers():
 
 
 def test_leaves_invalid_container_text_for_contract_validation():
-    repaired, count = _repair_structured_output(
+    repaired, count = repair_structured_output(
         {"bundle": "not-json"},
         {
             "type": "object",
@@ -205,6 +206,21 @@ def test_native_filesystem_is_fail_closed_outside_state_workspace():
         (["read", "write"], ["/workspace/**"], "allow"),
         (["read", "write"], ["/**"], "deny"),
     ]
+
+
+def test_native_execute_is_visible_only_for_governed_workspace_runs():
+    base = RunRequest(
+        RunContext("trace-1", "user-1", "channel-1", "scope-1"),
+        ({"role": "user", "content": "hello"},),
+    )
+    governed = RunRequest(
+        base.context,
+        base.messages,
+        metadata={"capabilities": "workspace.read,workspace.execute"},
+    )
+
+    assert len(build_tool_visibility_middleware(base)) == 1
+    assert build_tool_visibility_middleware(governed) == ()
 
 
 @pytest.mark.asyncio

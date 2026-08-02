@@ -92,7 +92,7 @@ Deep Agents 的文件权限、Skill 目录和原生审批只能作为运行机�
 - Mattermost 流式文本、审批状态、Artifact 交付和 Outbox；
 - `ExecutionProfile`、`ProcessRunner`、Run Workspace、Artifact staging 与清理；
 - PPT 的可编辑 PPTX、源 Markdown 和 PNG 预览链路；
-- Demo 专用 `ppt.shell` 宿主机高权限通道。
+- 已删除的 Demo 专用 `ppt.shell` 宿主机高权限旁路。
 
 ### 3.2 已删除的重复层
 
@@ -122,13 +122,14 @@ AgentFactory
 
 当前 `DeepAgentRuntime` 已完成显式 `ChatAnthropic`、Capability Tool 投影、StateBackend Skill 文件投影、
 动态 HITL、SQLite checkpoint、跨进程审批恢复、结构化输出和流式文本事件。LangChain 原生模型/Tool
-调用上限已按 Run 与 thread 强制；StateBackend 的模型文件工具只允许读取 Skill 和读写临时
-`/workspace/**`，其余路径默认拒绝。旧 Provider Registry、手写 Agent 图、自定义 Anthropic Client
-和 Claude Agent SDK 并行链均已删除。
+调用上限已按 Run 与 thread 强制；模型文件工具只允许读取 Skill 和读写受管 `/workspace/**`，其余路径
+默认拒绝。首个 `GovernedWorkspaceBackend` 已将稳定 Run Workspace、canonical Capability、动态 Policy、
+原生 HITL 和显式危险的本地 Demo Provider 接通。旧 Provider Registry、手写 Agent 图、自定义
+Anthropic Client 和 Claude Agent SDK 并行链均已删除。
 
-本轮没有伪造通用 Sandbox：Deep Agents 的 StateBackend 只承载对话内 Skill 文件；PPT 仍经 MMAG
-现有 Execution Profile、ProcessRunner、Workspace 和 Artifact Repository 执行。通用
-`GovernedWorkspaceBackend`、远程 Sandbox 与受信 Subagent 属于后续独立阶段。
+本地 Provider 不是 Sandbox：完整 Shell 只有设置 `MMAG_ALLOW_UNSAFE_LOCAL_EXEC=true` 才启用，使用
+Execution Profile 限制超时和输出，并清空父进程环境。PPT 的 Artifact 自动 staging/commit、远程
+Sandbox 与受信 Subagent 属于后续独立阶段。
 
 ## 4. 目标架构
 
@@ -586,7 +587,7 @@ PPT Agent 的目标流程为：
 ```
 
 Demo 阶段可以保留 `ppt.build` 高层 Capability，同时开放 `workspace.execute` 处理构建调试。完成通用
-Workspace 接入后删除专用 `ppt.shell`，避免同一 Agent 存在两个 Shell 入口。
+Workspace 接入后已删除专用 `ppt.shell`，同一 Agent 不再存在两个 Shell 入口。
 
 Agent 返回的只能是 Artifact ref，不能返回本地绝对路径。Artifact provenance 至少包含 Agent、Skill、
 Prompt、Schema、Policy、Model Policy、Deep Agents 版本、Backend、Execution Profile、命令 Hash 和输入
@@ -642,7 +643,7 @@ src/mmag/
 - `text-v1/json-v1/single-v1` Provider 注册；
 - `USE_SDK_LLM`、`ClaudeSDKRuntimeAdapter` 和并行 Claude SDK Agent 路径；
 - `load_skill_resource`；
-- 通用 Workspace 就绪后的 `ppt.shell`；
+- 通用 Workspace 就绪后删除 `ppt.shell`；
 - 仅为旧 Provider 存在的配置、测试和文档。
 
 保留：
@@ -694,7 +695,7 @@ src/mmag/
 3. 实现显式危险的 `LocalExecutionBackend`；
 4. 复用 Workspace、ProcessRunner、Artifact staging 和回收；
 5. 迁移 PPT Agent；
-6. 删除 `ppt.shell`。
+6. 删除 `ppt.shell`。（已完成）
 
 退出标准：PPT Agent 在真实 Run Workspace 中创建源文件、执行构建、提交 Artifact 并交付 Mattermost；
 所有执行都可审计，关闭危险开关时失败关闭。
@@ -770,7 +771,7 @@ thread ID 与副作用幂等、Workspace 穿越/符号链接、Secret 隔离、�
 9. 本地完整 Shell 可通过一个显式开关启停，并明确标记为非 Sandbox；
 10. 未来切换远程 Sandbox 不修改 Agent/Skill Manifest；
 11. 审批、预算、日志、审计和 provenance 覆盖完整链路；
-12. 旧 Provider、自研 Agent Loop 和 Claude SDK 并行链已删除；`ppt.shell` 仅作为明确的 Demo 高权限 Capability 保留，待通用 Workspace Backend 替换。
+12. 旧 Provider、自研 Agent Loop、Claude SDK 并行链和 `ppt.shell` 均已删除；本地 Demo Shell 统一由可替换 Workspace Backend 承载。
 
 ## 22. 明确不做
 

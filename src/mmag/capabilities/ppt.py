@@ -9,14 +9,12 @@ from typing import TYPE_CHECKING, Any
 
 from ..skill_packages import get_skill_context
 from .base import CapabilityEffect, CapabilitySpec, SourcePolicy
-from .context import get_capability_context
 
 if TYPE_CHECKING:
     from ..execution import ScriptExecutor
 
-PPT_PROFILE_REF = "ppt@2.1.0"
+PPT_PROFILE_REF = "ppt@2.2.0"
 ARTIFACT_PERMISSION = "artifact:generate"
-SHELL_PERMISSION = "execution:shell"
 THEMES = {"corp@1.0.0": "ppt/themes/corp.json"}
 
 
@@ -99,30 +97,6 @@ def create_ppt_capabilities(executor: ScriptExecutor) -> tuple[CapabilitySpec, .
             "execution": pptx_result["execution"],
         }
 
-    async def shell(command: str) -> dict[str, Any]:
-        result = await executor.execute(
-            profile_ref=PPT_PROFILE_REF,
-            capability="ppt.shell",
-            command_id="ppt.shell",
-            permission=SHELL_PERMISSION,
-            payload={"command": command},
-            provenance={"execution_mode": "demo-host-shell"},
-        )
-        context = get_capability_context()
-        if context is None:
-            raise RuntimeError("PPT shell requires an active Agent context")
-        _, path = executor.artifacts.resolve(
-            result["artifact_ref"],
-            scope_id=context.scope,
-            expected_kind="execution_report",
-        )
-        report = json.loads(path.read_text(encoding="utf-8"))
-        return {
-            **report,
-            "report_ref": result["artifact_ref"],
-            "execution": result["execution"],
-        }
-
     return (
         CapabilitySpec(
             name="ppt.build",
@@ -151,30 +125,6 @@ def create_ppt_capabilities(executor: ScriptExecutor) -> tuple[CapabilitySpec, .
             effect=CapabilityEffect.WRITE,
             permission=ARTIFACT_PERMISSION,
             timeout_seconds=420,
-            source_policy=SourcePolicy.NONE,
-        ),
-        CapabilitySpec(
-            name="ppt.shell",
-            description=(
-                "Run a full host shell command for the PPT demo, starting in an ephemeral "
-                "workspace. Host files and network are accessible; parent Secrets are not inherited."
-            ),
-            input_schema={
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 16384,
-                    }
-                },
-                "required": ["command"],
-            },
-            handler=shell,
-            effect=CapabilityEffect.WRITE,
-            permission=SHELL_PERMISSION,
-            timeout_seconds=90,
             source_policy=SourcePolicy.NONE,
         ),
     )
