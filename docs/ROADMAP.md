@@ -59,8 +59,11 @@
 - [x] Deep Agents/LangGraph State 累积 messages、files、结构化结果和审批状态；
 - [x] `RunRequest.response_schema` 通过 ToolStrategy 生成结构化业务结果，再执行 Skill/Artifact/Agent Schema 与平台 Envelope 校验；
 - [x] 删除独立 JSON Provider 和二次 repair loop，结构约束由 Deep Agents response format 统一完成；
-- [x] `AgentOutput` 已区分 `text`、`structured_result`、`envelope`、`artifacts` 和 Runtime 结果；
+- [x] `AgentOutput.result` 是唯一结构化业务结果；`text` 只用于展示，`envelope`、`artifacts` 和 Runtime 状态各自保留明确边界；
 - [x] `AgentResult.output` 保存结构化对象，展示层不再从 JSON 文本推断控制状态。
+- [x] 删除文本串联式 Handoff；跨 Agent 交接只能使用通过 Schema、版本和 Scope 校验的 Artifact ref；
+- [x] 删除裸 Capability handler 注册和隐式 ALLOW Authorizer；所有内置、MCP 与执行平面能力统一经过 `CapabilityExecutor` 和 Policy；
+- [x] Runtime Agent 只接受 Package request factory，Agent Package 启动时必须提供 Policy、Model Policy、Skill 和 Execution Profile Registry；
 
 ### Mattermost 交付基线
 
@@ -156,7 +159,7 @@
 优先级：P1，作为 Research、Presentation、审批和 Artifact 交付的公共基础。
 
 - [x] 定义平台无关的 `ResponseView` 契约，统一表达 `kind`、`title`、`summary`、`sections`、`sources`、`warnings`、`artifacts`、`actions` 和 Run 状态；
-- [x] 实现 `ResponsePresenter`，将 `AgentOutput.structured_result/artifacts/envelope` 转为 `ResponseView`，禁止将结构化 JSON 直接展示给默认用户；
+- [x] 实现 `ResponsePresenter`，将 `AgentOutput.result/artifacts/envelope` 转为 `ResponseView`，禁止将结构化 JSON 直接展示给默认用户；
 - [x] 实现 `MattermostRenderer`，将 `ResponseView` 确定性地映射为 Markdown、`props.attachments`、文件附件和 action，对模型/外部内容做长度限制、安全清洗与安全链接处理；
 - [x] 扩展 `OutboundMessage` 和 SQLite Outbox，持久化 `root_id`、`message_kind`、`artifact_refs/file_ids`、`props`、`actions`、`update_post_id` 及稳定幂等键；
 - [x] 统一 Thread 策略：ack、进度、审批、附件、错误和最终结果均继承原始 `root_id`，避免在频道中散落；

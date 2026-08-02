@@ -11,7 +11,12 @@ import pytest
 import yaml
 
 from mmag.agent_packages import AgentPackageRegistry, ManifestValidationError
-from mmag.capabilities import CapabilityContext, CapabilityExecutor, bind_capability_context
+from mmag.capabilities import (
+    CapabilityAuthorization,
+    CapabilityContext,
+    CapabilityExecutor,
+    bind_capability_context,
+)
 from mmag.control_plane import SQLiteControlPlane
 from mmag.execution import (
     ArtifactRepository,
@@ -31,9 +36,11 @@ from mmag.execution import (
 )
 from mmag.governance import (
     GovernanceContext,
+    ModelPolicyRegistry,
     PolicyCapabilityAuthorizer,
     PolicyEffect,
     PolicyEngine,
+    PolicyRegistry,
     PolicyRule,
     bind_governance_context,
 )
@@ -46,6 +53,12 @@ from mmag.skill_packages import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _DenyAuthorizer:
+    def authorize(self, spec, arguments):
+        del spec, arguments
+        return CapabilityAuthorization.deny("test default deny")
 
 
 class WritingRunner:
@@ -123,7 +136,7 @@ def test_workspace_backend_falls_back_to_safe_state_without_demo_switch(tmp_path
     factory = WorkspaceBackendFactory(
         _profiles(),
         WorkspaceManager(tmp_path / "workspaces"),
-        CapabilityExecutor(),
+        CapabilityExecutor(_DenyAuthorizer()),
     )
 
     backend = factory.create(_workspace_request())
@@ -508,9 +521,15 @@ def test_agent_manifest_cannot_self_authorize_skill_execution_profile(tmp_path):
     manifest.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
     skills = SkillPackageRegistry()
     skills.load_directory(ROOT / "skills")
+    policies = PolicyRegistry()
+    policies.load_directory(ROOT / "policies")
+    model_policies = ModelPolicyRegistry()
+    model_policies.load_directory(ROOT / "model-policies")
 
     with pytest.raises(ManifestValidationError, match="cannot grant Skill"):
         AgentPackageRegistry(
+            policy_registry=policies,
+            model_policy_registry=model_policies,
             skill_registry=skills,
             execution_profile_registry=_profiles(),
         ).load_directory(agents_root)

@@ -35,10 +35,10 @@ class CapabilityAgent:
         structured = payload if isinstance(payload, dict) else {"result": payload}
         artifacts = self._artifacts(source, structured)
         return AgentOutput(
-            json.dumps(structured, ensure_ascii=False, default=str),
-            self.descriptor.name,
-            artifacts,
-            structured,
+            text=json.dumps(structured, ensure_ascii=False, default=str),
+            agent_name=self.descriptor.name,
+            artifacts=artifacts,
+            result=structured,
         )
 
     def _extract_source(self, request: AgentRequest, arguments: dict[str, Any]) -> str | None:

@@ -20,7 +20,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from mmag.capabilities import CapabilityRegistry, build_builtin_bindings
+from mmag.capabilities import (
+    CapabilityAuthorization,
+    CapabilityExecutor,
+    CapabilityRegistry,
+    build_builtin_bindings,
+)
 from mmag.memory import Memory
 from mmag.url_analyzer import (
     _classify_url,
@@ -36,6 +41,12 @@ from mmag.url_analyzer import (
 # ============================================================
 # Fixtures
 # ============================================================
+
+
+def _executor():
+    authorizer = MagicMock()
+    authorizer.authorize.return_value = CapabilityAuthorization.allow()
+    return CapabilityExecutor(authorizer)
 
 
 @pytest.fixture
@@ -1012,7 +1023,7 @@ class TestToolRegistration:
     def test_analyze_link_in_builtin_tools(self, memory):
         # 构造一个简单的 mm_client mock (其他工具会用到)
         mm_client = MagicMock()
-        tools = build_builtin_bindings(mm_client, memory)
+        tools = build_builtin_bindings(mm_client, memory, executor=_executor())
         names = [t.name for t in tools]
         assert "analyze_link" in names
         assert "get_posts" in names  # 旧工具仍存在
@@ -1021,7 +1032,7 @@ class TestToolRegistration:
     @pytest.mark.asyncio
     async def test_tool_registry_execute_analyze_link(self, memory, mock_response):
         mm_client = MagicMock()
-        tools = build_builtin_bindings(mm_client, memory)
+        tools = build_builtin_bindings(mm_client, memory, executor=_executor())
         registry = CapabilityRegistry()
         for t in tools:
             registry.register(t)
@@ -1053,7 +1064,7 @@ class TestToolRegistration:
     @pytest.mark.asyncio
     async def test_format_link_info_for_error(self, memory, mock_response):
         mm_client = MagicMock()
-        tools = build_builtin_bindings(mm_client, memory)
+        tools = build_builtin_bindings(mm_client, memory, executor=_executor())
         registry = CapabilityRegistry()
         for t in tools:
             registry.register(t)

@@ -422,8 +422,9 @@ class ContractAgentDecorator:
         runtime_result = result.runtime_result
         if runtime_result is not None and runtime_result.status is RuntimeStatus.WAITING_APPROVAL:
             return replace(result, agent_name=self.descriptor.name)
-        runtime_output = result.runtime_result.output if result.runtime_result is not None else None
-        structured = result.structured_result or runtime_output or {"text": result.text}
+        structured = result.result
+        if structured is None:
+            raise AgentPackageError("Agent Runtime returned no structured result")
         _validate_skill_output(self.package, request, structured)
         artifacts = tuple(result.artifacts)
         _validate_artifacts(self.package, artifacts)

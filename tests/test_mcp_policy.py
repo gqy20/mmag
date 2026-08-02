@@ -52,6 +52,12 @@ def _mcp_result(payload: str):
     )
 
 
+def _executor():
+    authorizer = MagicMock()
+    authorizer.authorize.return_value = CapabilityAuthorization.allow()
+    return CapabilityExecutor(authorizer)
+
+
 def _mcp_config(
     *,
     server: str = "docs",
@@ -81,7 +87,9 @@ def _mcp_config(
 
 
 def test_external_mcp_tools_are_denied_by_default():
-    bridge = MCPClientBridge(CapabilityRegistry(), config=MCPConfigSnapshot.empty())
+    bridge = MCPClientBridge(
+        CapabilityRegistry(), config=MCPConfigSnapshot.empty(), executor=_executor()
+    )
 
     assert bridge.is_tool_allowed("docs", "search") is False
 
@@ -90,6 +98,7 @@ def test_external_mcp_allowlist_matches_exact_tool_name():
     bridge = MCPClientBridge(
         CapabilityRegistry(),
         config=_mcp_config(),
+        executor=_executor(),
     )
 
     assert bridge.is_tool_allowed("docs", "search") is True
@@ -118,6 +127,7 @@ async def test_disabled_servers_skip_external_mcp_connections():
     bridge = MCPClientBridge(
         CapabilityRegistry(),
         config=_mcp_config(enabled=False),
+        executor=_executor(),
     )
 
     connected = await bridge.load_and_connect()
@@ -234,6 +244,7 @@ def test_only_allowlisted_discovered_tools_are_visible():
     bridge = MCPClientBridge(
         registry,
         config=_mcp_config(),
+        executor=_executor(),
     )
 
     server = bridge.config.get("docs")

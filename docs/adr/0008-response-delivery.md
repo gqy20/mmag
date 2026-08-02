@@ -5,7 +5,7 @@
 
 ## 背景
 
-Agent Package 已能返回 `structured_result`、Artifact 和 provenance，但 Mattermost 入口曾将结果降级为
+Agent Package 已能返回结构化 `result`、Artifact 和 provenance，但 Mattermost 入口曾将结果降级为
 一段自由文本。线程、长消息、附件、更新消息和交互动作也没有进入 Outbox，`send_file` 还在
 Capability handler 内直接上传并发帖。这使结构化结果不可稳定展示，外部副作用无法复用 Delivery 的
 幂等、重试和审计边界。
@@ -43,3 +43,5 @@ Run 需要各自的业务状态与授权服务，在完成前不得只靠按钮 
   `@`→`@​` 防 Mention 注入、`<`/`>` 实体化（Mattermost 不渲染 HTML）。动机：Mattermost
   用 marked 渲染 message 字段，agent 写的粗体/代码/链接/表格应原样渲染，而非退化成字面字符。
   URL 安全仍由 `safe_url` 在框架层兜底。
+- 2026-08-02：收敛 Agent 输出契约。`AgentOutput.result` 成为唯一结构化业务结果，不再从
+  Runtime output、文本 JSON 或多套别名中择一回退；缺少结构化结果的 Package Run 直接失败。

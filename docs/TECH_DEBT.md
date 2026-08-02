@@ -1,6 +1,6 @@
 # 技术债清单
 
-> 更新时间：2026-08-01
+> 更新时间：2026-08-02
 
 这里只记录当前代码仍然存在的缺口。已经删除的 `agent.py`、`managed_agents.py`、`tools/`、`prompts.yml` 和旧 Agent loop 不再作为迁移项保留。
 
@@ -70,6 +70,7 @@ Loader 已拒绝无 eval、重复 case、非法字段和模糊期望，但启动
 ## 维护规则
 
 - 不用兼容 wrapper、假 Agent 或宽松解析掩盖技术债；
+- Capability 不允许裸 handler 注册或隐式 ALLOW，Mattermost 生产入口不允许绕过 Inbox Pipeline；
 - 每项债务必须有可验证的完成标准；
 - 解决后从本文件删除，并在 Roadmap/ADR 留下结果；
 - 新文件超过 800 行才要求按职责拆分，避免无意义碎片化。

@@ -7,10 +7,9 @@ from mmag.agent_system import (
     AgentRequest,
     AgentRouter,
     CapabilityAgent,
-    HandoffCoordinator,
     RuntimeAgent,
 )
-from mmag.capabilities import CapabilityExecutor, CapabilitySpec
+from mmag.capabilities import CapabilityAuthorization, CapabilityExecutor, CapabilitySpec
 from mmag.runtimes import AgentResult, RunContext, RunRequest
 
 
@@ -76,7 +75,6 @@ async def test_nondefault_runtime_agent_uses_its_own_request_factory():
         AgentDescriptor("report", "report"),
         runtime,
         request_factory=lambda request, descriptor: own,
-        use_prepared_request=False,
     )
 
     await agent.run(AgentRequest("report", "build", runtime_request=prepared))
@@ -152,21 +150,6 @@ def test_registry_rejects_identical_specialized_routes():
 
 
 @pytest.mark.asyncio
-async def test_handoff_has_explicit_steps_and_isolates_agent_failure():
-    registry = AgentRegistry()
-    first = StubAgent(AgentDescriptor("first", "first", intents=("one",)), "artifact")
-    second = StubAgent(AgentDescriptor("second", "second", intents=("two",)), "done")
-    registry.register(first)
-    registry.register(second)
-    result = await HandoffCoordinator(registry).run(
-        AgentRequest(intent="one", prompt="start"),
-        ("first", "missing", "second"),
-    )
-    assert [step.status for step in result.steps] == ["completed", "failed", "completed"]
-    assert result.text == "done"
-
-
-@pytest.mark.asyncio
 async def test_capability_agent_returns_a_structured_artifact():
     spec = CapabilitySpec(
         name="analyze_link",
@@ -177,7 +160,7 @@ async def test_capability_agent_returns_a_structured_artifact():
     result = await CapabilityAgent(
         AgentDescriptor("link", "link", capabilities=("analyze_link",)),
         spec,
-        CapabilityExecutor(),
+        CapabilityExecutor(_AllowAuthorizer()),
         source_argument="url",
         artifact_kind="link_analysis",
     ).run(
@@ -189,3 +172,9 @@ async def test_capability_agent_returns_a_structured_artifact():
     )
     assert result.artifacts[0]["kind"] == "link_analysis"
     assert result.artifacts[0]["source"] == "https://example.com"
+
+
+class _AllowAuthorizer:
+    def authorize(self, spec, arguments):
+        del spec, arguments
+        return CapabilityAuthorization.allow()

@@ -126,27 +126,11 @@ class CapabilityAuthorizer(Protocol):
     ) -> CapabilityAuthorization: ...
 
 
-class DeclaredPermissionAuthorizer:
-    """Compatibility policy: write capabilities must declare a permission."""
-
-    def authorize(
-        self,
-        spec: CapabilitySpec,
-        arguments: Mapping[str, Any],
-    ) -> CapabilityAuthorization:
-        del arguments
-        if spec.effect is CapabilityEffect.WRITE and not spec.permission:
-            return CapabilityAuthorization.deny(
-                f"Write capability '{spec.name}' has no declared permission"
-            )
-        return CapabilityAuthorization.allow()
-
-
 class CapabilityExecutor:
     """Validate and execute a capability with one timeout/error policy."""
 
-    def __init__(self, authorizer: CapabilityAuthorizer | None = None) -> None:
-        self.authorizer = authorizer or DeclaredPermissionAuthorizer()
+    def __init__(self, authorizer: CapabilityAuthorizer) -> None:
+        self.authorizer = authorizer
 
     def authorize(
         self, spec: CapabilitySpec, arguments: Mapping[str, Any]

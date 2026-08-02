@@ -380,10 +380,7 @@ class DeepAgentRuntime:
         async def invoke(**arguments: Any) -> str:
             await self._emit(request, RunEventKind.TOOL_STARTED, name=name)
             authorization = self.capability_registry.authorization(name, arguments)
-            if (
-                authorization is not None
-                and authorization.decision is AuthorizationDecision.DENY
-            ):
+            if authorization.decision is AuthorizationDecision.DENY:
                 result = CapabilityResult(
                     CapabilityStatus.FORBIDDEN,
                     message=authorization.reason,
@@ -392,7 +389,7 @@ class DeepAgentRuntime:
                 result = await self.capability_registry.execute(
                     name,
                     arguments,
-                    preauthorized=authorization is not None,
+                    preauthorized=True,
                 )
             payload = result.to_payload()
             calls.append(
@@ -700,7 +697,6 @@ def _runtime_snapshot(request: RunRequest, session: _RunSession) -> Mapping[str,
         "max_rounds": request.max_rounds,
         "max_tool_calls": request.max_tool_calls,
         "max_tokens": request.max_tokens,
-        "fallback_max_tokens": request.fallback_max_tokens,
         "temperature": request.temperature,
         "response_schema": thaw(request.response_schema),
         "skill_files": thaw(request.skill_files),
@@ -738,7 +734,6 @@ def _restore_runtime_snapshot(
         max_rounds=int(snapshot.get("max_rounds") or 5),
         max_tool_calls=int(snapshot.get("max_tool_calls") or 50),
         max_tokens=int(snapshot.get("max_tokens") or 4096),
-        fallback_max_tokens=int(snapshot.get("fallback_max_tokens") or 1024),
         temperature=float(snapshot.get("temperature") or 0.0),
         response_schema=snapshot.get("response_schema"),
         skill_files=snapshot.get("skill_files") or {},

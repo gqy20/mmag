@@ -62,6 +62,7 @@ def _make_handler(runtime_result: str = "已完成"):
                 is_default=True,
             ),
             runtime,
+            request_factory=lambda request, descriptor: request.runtime_request,
         )
     )
     delivery = MattermostDelivery(mm, memory, identity, stats)
@@ -110,7 +111,7 @@ def _posted_event() -> dict:
 async def test_explicit_message_routes_and_delivers_reply():
     handler, runtime = _make_handler("任务完成")
     with patch.multiple(config, mm_channel_id="", mm_team_id=""):
-        await handler.on_posted(_posted_event())
+        await handler.process_posted_event(_posted_event())
     assert handler.stats == {"messages": 1, "responses": 1, "dropped_messages": 0}
     handler.compactor.maybe_compact.assert_awaited_once_with("channel-1")
     runtime.run.assert_awaited_once()
@@ -156,25 +157,11 @@ async def test_runtime_failure_delivers_user_visible_error():
     handler, runtime = _make_handler()
     runtime.run.side_effect = RuntimeUnavailableError("model unavailable", runtime="test")
     with patch.multiple(config, mm_channel_id="", mm_team_id=""):
-        await handler.on_posted(_posted_event())
+        await handler.process_posted_event(_posted_event())
     sent = handler.mm.send_post_async.await_args.kwargs
     assert sent["root_id"] == "post-1"
     assert "外部服务不可用" in sent["message"]
     assert "mattermost:post-1" in sent["message"]
-
-
-@pytest.mark.asyncio
-async def test_duplicate_post_is_not_persisted_or_replied_twice():
-    handler, runtime = _make_handler("任务完成")
-    handler.memory.has_message.side_effect = [False, True]
-    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
-        await handler.on_posted(_posted_event())
-        await handler.on_posted(_posted_event())
-    assert handler.stats == {"messages": 1, "responses": 1, "dropped_messages": 0}
-    persisted = [call.args[0]["id"] for call in handler.memory.log_message.call_args_list]
-    assert persisted.count("post-1") == 1
-    runtime.run.assert_awaited_once()
-    handler.delivery.send_ack.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -184,7 +171,7 @@ async def test_plain_message_keeps_ack_when_agent_decides_silent():
     event["data"]["post"]["message"] = "普通频道消息"
 
     with patch.multiple(config, mm_channel_id="", mm_team_id=""):
-        await handler.on_posted(event)
+        await handler.process_posted_event(event)
 
     handler.delivery.send_ack.assert_awaited_once()
     runtime.run.assert_awaited_once()
@@ -205,7 +192,7 @@ async def test_router_passes_provider_neutral_request_and_capability_context():
 
     runtime.run.side_effect = observe
     with patch.multiple(config, mm_channel_id="", mm_team_id=""):
-        await handler.on_posted(_posted_event())
+        await handler.process_posted_event(_posted_event())
     assert observed is not None
     assert observed.actor_id == "user-1"
     assert observed.conversation_id == "channel-1"

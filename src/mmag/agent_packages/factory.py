@@ -86,7 +86,6 @@ class DeepAgentProvider:
             descriptor,
             self.gateway,
             request_factory=self._request_factory(package, names),
-            use_prepared_request=False,
         )
         return ContractAgentDecorator(
             package,
@@ -214,8 +213,6 @@ class DirectAgentProvider:
         if names != (capability_name,):
             raise AgentPackageError("direct mode must expose exactly its capability")
         binding = self.capabilities.get(capability_name)
-        if binding.capability is None:
-            raise AgentPackageError(f"capability {capability_name!r} has no canonical spec")
         if binding.capability.effect is not CapabilityEffect.READ:
             raise AgentPackageError("direct mode only supports read effects")
         self._validate_source_argument(package, binding.capability.input_schema)

@@ -199,11 +199,11 @@ class MCPClientBridge:
         registry: CapabilityRegistry,
         *,
         config: MCPConfigSnapshot,
-        executor: CapabilityExecutor | None = None,
+        executor: CapabilityExecutor,
     ) -> None:
         self.registry = registry
         self.config = config
-        self.executor = executor or CapabilityExecutor()
+        self.executor = executor
         self._sessions: dict[str, _MCPConn] = {}
         self._capabilities: dict[str, CapabilitySpec] = {}
 

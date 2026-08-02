@@ -32,18 +32,14 @@ class LangGraphApprovalCoordinator:
         approvals: ApprovalService,
         gateway: ModelGateway,
         *,
-        authorizer: ApprovalAuthorizer | None = None,
-        skill_registry: SkillPackageRegistry | None = None,
+        authorizer: ApprovalAuthorizer,
+        skill_registry: SkillPackageRegistry,
     ) -> None:
         self.store = store
         self.lifecycle = lifecycle
         self.approvals = approvals
         self.gateway = gateway
         self.skill_registry = skill_registry
-        if authorizer is None:
-            from .approval_policy import RequesterApprovalAuthorizer
-
-            authorizer = RequesterApprovalAuthorizer()
         self.authorizer = authorizer
 
     def register(
@@ -257,8 +253,6 @@ class LangGraphApprovalCoordinator:
         state = payload.get("skill_context", {})
         if not isinstance(state, dict) or not state:
             return None
-        if self.skill_registry is None:
-            raise RuntimeError("Skill resume registry is not configured")
         skill_ref = state.get("skill_ref")
         if not isinstance(skill_ref, str) or not skill_ref:
             raise ValueError("approval contains an invalid Skill context")

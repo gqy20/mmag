@@ -23,7 +23,7 @@ def test_report_presenter_exposes_readable_contract_not_raw_json():
     output = AgentOutput(
         text='{"title":"raw"}',
         agent_name="report",
-        structured_result={
+        result={
             "title": "市场研究",
             "executive_summary": "核心结论",
             "findings": [

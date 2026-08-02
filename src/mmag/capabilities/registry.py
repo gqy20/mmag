@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import inspect
 import time
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
 
     from .base import CapabilityAuthorization, CapabilityExecutor, CapabilitySpec
 
@@ -20,16 +19,24 @@ from .sources import enrich_with_sources
 log = get_logger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class CapabilityBinding:
     """One capability projected onto a model runtime surface."""
 
-    name: str
-    description: str
-    input_schema: Mapping[str, Any]
-    handler: Callable[..., Any]
-    capability: CapabilitySpec | None = None
-    executor: CapabilityExecutor | None = None
+    capability: CapabilitySpec
+    executor: CapabilityExecutor
+
+    @property
+    def name(self) -> str:
+        return self.capability.name
+
+    @property
+    def description(self) -> str:
+        return self.capability.description
+
+    @property
+    def input_schema(self) -> Mapping[str, Any]:
+        return self.capability.input_schema
 
 
 class CapabilityRegistry:
@@ -97,13 +104,9 @@ class CapabilityRegistry:
             and not any(fnmatch(name, pattern) for pattern in deny)
         )
 
-    def authorization(
-        self, name: str, input_data: dict[str, Any]
-    ) -> CapabilityAuthorization | None:
+    def authorization(self, name: str, input_data: dict[str, Any]) -> CapabilityAuthorization:
         """Return a capability policy decision without running the tool."""
-        binding = self._bindings.get(name)
-        if binding is None or binding.capability is None or binding.executor is None:
-            return None
+        binding = self.get(name)
         return binding.executor.authorize(binding.capability, input_data)
 
     def get_schema_list(self, names: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
@@ -150,20 +153,12 @@ class CapabilityRegistry:
         )
 
         try:
-            if binding.capability is not None and binding.executor is not None:
-                if preauthorized:
-                    result = await binding.executor.execute_approved(
-                        binding.capability, input_data
-                    )
-                else:
-                    result = await binding.executor.execute(binding.capability, input_data)
+            if preauthorized:
+                result = await binding.executor.execute_approved(
+                    binding.capability, input_data
+                )
             else:
-                value = binding.handler(**input_data)
-                if inspect.isasyncgen(value):
-                    value = [item async for item in value]
-                elif inspect.isawaitable(value):
-                    value = await value
-                result = CapabilityResult(CapabilityStatus.SUCCESS, data=value)
+                result = await binding.executor.execute(binding.capability, input_data)
 
             if result.status is CapabilityStatus.SUCCESS:
                 result = CapabilityResult(

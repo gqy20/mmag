@@ -86,7 +86,6 @@ class RunRequest:
     max_rounds: int = 5
     max_tool_calls: int = 50
     max_tokens: int = 4096
-    fallback_max_tokens: int = 1024
     temperature: float = 0.0
     response_schema: Mapping[str, Any] | None = None
     skill_files: Mapping[str, Mapping[str, str]] = field(
@@ -102,8 +101,6 @@ class RunRequest:
             raise ValueError("max_tool_calls must be at least 1")
         if self.max_tokens < 1:
             raise ValueError("max_tokens must be at least 1")
-        if self.fallback_max_tokens < 1:
-            raise ValueError("fallback_max_tokens must be at least 1")
         if not 0 <= self.temperature <= 2:
             raise ValueError("temperature must be between 0 and 2")
         object.__setattr__(self, "messages", tuple(_freeze(message) for message in self.messages))

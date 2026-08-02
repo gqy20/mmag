@@ -9,7 +9,6 @@ from .approval import (
 from .approval_policy import (
     ApprovalAuthorizer,
     MattermostApprovalAuthorizer,
-    RequesterApprovalAuthorizer,
     StaticApprovalAuthorizer,
 )
 from .context import AssembledContext, ContextAssembler, ScopeResolver
@@ -76,7 +75,6 @@ __all__ = [
     "SQLiteControlPlane",
     "Scope",
     "ScopeResolver",
-    "RequesterApprovalAuthorizer",
     "StateTransition",
     "Task",
     "TaskState",

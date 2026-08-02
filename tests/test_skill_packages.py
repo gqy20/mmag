@@ -4,9 +4,16 @@ import pytest
 
 from mmag.agent_packages import AgentPackageError, AgentPackageRegistry, ContractAgentDecorator
 from mmag.agent_system import AgentDescriptor, AgentRequest, RuntimeAgent, SkillInvocation
-from mmag.capabilities import CapabilityBinding, CapabilityRegistry
+from mmag.capabilities import (
+    CapabilityAuthorization,
+    CapabilityExecutor,
+    CapabilityRegistry,
+    CapabilitySpec,
+    bind_langgraph_capability,
+)
 from mmag.execution import ExecutionProfileRegistry
-from mmag.runtimes import AgentResult
+from mmag.governance import ModelPolicyRegistry, PolicyRegistry
+from mmag.runtimes import AgentResult, RunContext, RunRequest
 from mmag.skill_packages import (
     SkillContext,
     SkillPackageLoader,
@@ -20,8 +27,15 @@ from mmag.skill_packages import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class _AllowAuthorizer:
+    def authorize(self, spec, arguments):
+        del spec, arguments
+        return CapabilityAuthorization.allow()
+
+
 def _capabilities() -> CapabilityRegistry:
     registry = CapabilityRegistry()
+    executor = CapabilityExecutor(_AllowAuthorizer())
     for name in (
         "analyze_link",
         "get_channel_info",
@@ -30,7 +44,12 @@ def _capabilities() -> CapabilityRegistry:
         "search_knowledge",
         "save_knowledge",
     ):
-        registry.register(CapabilityBinding(name, name, {"type": "object"}, lambda: {}))
+        registry.register(
+            bind_langgraph_capability(
+                CapabilitySpec(name, name, {"type": "object"}, lambda: {}),
+                executor=executor,
+            )
+        )
     return registry
 
 
@@ -39,7 +58,16 @@ def _packages():
     skills.load_directory(ROOT / "skills")
     profiles = ExecutionProfileRegistry()
     profiles.load_directory(ROOT / "execution-profiles")
-    agents = AgentPackageRegistry(skill_registry=skills, execution_profile_registry=profiles)
+    policies = PolicyRegistry()
+    policies.load_directory(ROOT / "policies")
+    model_policies = ModelPolicyRegistry()
+    model_policies.load_directory(ROOT / "model-policies")
+    agents = AgentPackageRegistry(
+        policy_registry=policies,
+        model_policy_registry=model_policies,
+        skill_registry=skills,
+        execution_profile_registry=profiles,
+    )
     agents.load_directory(ROOT / "agents")
     return skills, agents
 
@@ -119,6 +147,10 @@ async def test_runtime_rejects_forged_skill_capability_expansion():
                 scopes=("mattermost:*",),
             ),
             StubRuntime(),
+            request_factory=lambda request, descriptor: RunRequest(
+                RunContext("trace", "actor", "channel", request.scope),
+                ({"role": "user", "content": request.prompt},),
+            ),
         ),
     )
 

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import re
-import uuid
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -62,7 +61,7 @@ class AgentOutput:
     text: str
     agent_name: str
     artifacts: tuple[dict, ...] = ()
-    structured_result: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
     envelope: dict[str, Any] | None = None
     runtime_result: Any | None = None
 
@@ -195,49 +194,6 @@ class AgentRouter:
         return specialized, descriptor.routing_priority, exact, keywords, descriptor.name
 
 
-@dataclass(frozen=True, slots=True)
-class HandoffStep:
-    agent_name: str
-    status: str
-    text: str = ""
-    error: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class HandoffResult:
-    text: str
-    steps: tuple[HandoffStep, ...]
-    artifacts: tuple[dict, ...] = field(default_factory=tuple)
-
-
-class HandoffCoordinator:
-    def __init__(self, registry: AgentRegistry):
-        self.registry = registry
-
-    async def run(self, request: AgentRequest, agent_names: tuple[str, ...]) -> HandoffResult:
-        steps: list[HandoffStep] = []
-        artifacts = list(request.artifacts)
-        last_text = ""
-        for name in agent_names:
-            try:
-                agent = self.registry.get(name)
-                result = await agent.run(
-                    replace(
-                        request,
-                        prompt=last_text or request.prompt,
-                        artifacts=tuple(artifacts),
-                        runtime_request=None,
-                        skill=None,
-                    )
-                )
-                last_text = result.text
-                artifacts.extend(result.artifacts)
-                steps.append(HandoffStep(name, "completed", result.text))
-            except Exception as error:
-                steps.append(HandoffStep(name, "failed", error=str(error)))
-        return HandoffResult(last_text, tuple(steps), tuple(artifacts))
-
-
 class RuntimeAgent:
     """Adapt a provider-neutral runtime into a registered managed agent."""
 
@@ -245,43 +201,19 @@ class RuntimeAgent:
         self,
         descriptor: AgentDescriptor,
         runtime,
-        request_factory=None,
-        *,
-        use_prepared_request: bool = True,
+        request_factory,
     ):
         self.descriptor = descriptor
         self._runtime = runtime
         self._request_factory = request_factory
-        self._use_prepared_request = use_prepared_request
 
     async def run(self, request: AgentRequest) -> AgentOutput:
-        runtime_request = request.runtime_request if self._use_prepared_request else None
-        if runtime_request is None:
-            runtime_request = (
-                self._request_factory(request, self.descriptor)
-                if self._request_factory is not None
-                else self._default_request(request)
-            )
+        runtime_request = self._request_factory(request, self.descriptor)
         result = await self._runtime.run(runtime_request)
         return AgentOutput(
-            result.text,
-            self.descriptor.name,
-            tuple(dict(artifact) for artifact in result.artifacts),
-            dict(result.output) if result.output is not None else None,
+            text=result.text,
+            agent_name=self.descriptor.name,
+            artifacts=tuple(dict(artifact) for artifact in result.artifacts),
+            result=dict(result.output) if result.output is not None else None,
             runtime_result=result,
-        )
-
-    def _default_request(self, request: AgentRequest):
-        from ..runtimes import RunContext, RunRequest
-
-        return RunRequest(
-            context=RunContext(
-                trace_id=(request.run_id or uuid.uuid4().hex)[:12],
-                actor_id=request.actor_id,
-                conversation_id=request.scope,
-                scope=request.scope,
-                run_id=request.run_id,
-            ),
-            messages=({"role": "user", "content": request.prompt},),
-            system_prompt=self.descriptor.description,
         )

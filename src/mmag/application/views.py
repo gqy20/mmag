@@ -80,7 +80,7 @@ class ResponsePresenter:
     """Turn governed Agent contracts into a stable user-facing view."""
 
     def present(self, output: AgentOutput, *, run_id: str = "") -> ResponseView:
-        result = output.structured_result or {}
+        result = output.result or {}
         envelope = output.envelope or {}
         status = self._status(output)
         artifacts = self._artifacts(output.artifacts, output.runtime_result)
@@ -152,7 +152,7 @@ class ResponsePresenter:
     ) -> ResponseView:
         summary = self._text(result.get("summary")) or self._text(result.get("text"))
         if not summary:
-            summary = output.text if not output.structured_result else "任务已完成。"
+            summary = output.text if output.result is None else "任务已完成。"
         return ResponseView(
             kind=ResponseKind.RESULT,
             title=self._text(result.get("title")) or "处理结果",

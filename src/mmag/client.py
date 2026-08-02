@@ -378,13 +378,6 @@ class MMClient:
             log.error(f"分页获取消息失败 (page={page}): {e}")
             return []
 
-    def get_file_bytes(self, file_id: str) -> tuple[bytes, str] | None:
-        """同步下载附件二进制 — 保持向后兼容(被非 async 代码/单测用)
-
-        异步场景请用 `get_file_bytes_async` (避免阻塞 event loop)
-        """
-        return _download_file_sync(self.session, self.base_url, file_id)
-
     async def get_file_bytes_async(self, file_id: str) -> tuple[bytes, str] | None:
         """使用共享 httpx 连接池异步下载附件二进制。
 
@@ -406,42 +399,3 @@ class MMClient:
         except Exception as e:
             log.error("下载附件异常 file_id=%s: %s", file_id[:12], e)
             return None
-
-
-# ============================================================
-# 内部: 同步下载函数 (可被 asyncio.to_thread 复用)
-# ============================================================
-
-
-def _download_file_sync(
-    session: requests.Session, base_url: str, file_id: str
-) -> tuple[bytes, str] | None:
-    """同步下载附件 — 提取出来便于 `asyncio.to_thread` 包装
-
-    Mattermost 设计: `GET /api/v4/files/{file_id}` 直接返回文件二进制
-    (Content-Type 头带真实 MIME, image/jpeg / image/png / application/pdf 等)。
-    元信息 (name/mime/size/dimensions) 不需要走此 API, 而是已经嵌在
-    `post["metadata"]["files"]` 里, 由调用方在发消息时一起拿到。
-
-    Returns:
-        (bytes, mime_type) — 成功;或 None — 下载失败/文件不存在/无权限
-    """
-    if not file_id:
-        return None
-    try:
-        # 绕过 _get (那用 raise_for_status + .json(), 对二进制不合适)
-        resp = session.get(
-            f"{base_url}/api/v4/files/{file_id}",
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            log.warning("下载附件失败 file_id=%s status=%d", file_id[:12], resp.status_code)
-            return None
-        # 优先用响应头, 因为有些服务器会对 jpg 返回 application/octet-stream
-        mime = resp.headers.get("Content-Type") or "application/octet-stream"
-        # 去掉可能附带的 charset (e.g. "image/jpeg; charset=utf-8")
-        mime = mime.split(";", 1)[0].strip().lower()
-        return resp.content, mime
-    except Exception as e:
-        log.error("下载附件异常 file_id=%s: %s", file_id[:12], e)
-        return None

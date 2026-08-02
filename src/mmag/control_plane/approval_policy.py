@@ -25,13 +25,6 @@ class StaticApprovalAuthorizer:
         return actor_id in self.actor_ids
 
 
-class RequesterApprovalAuthorizer:
-    """Fail-closed fallback when no enterprise identity provider is configured."""
-
-    async def can_decide(self, request: ApprovalRequest, actor_id: str) -> bool:
-        return bool(actor_id) and actor_id == request.requested_by
-
-
 class MattermostApprovalAuthorizer:
     """Allow the requester, a channel admin, or a system administrator."""
 

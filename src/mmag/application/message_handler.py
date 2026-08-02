@@ -85,8 +85,7 @@ class MessageHandler:
 
     async def on_posted(self, event: dict) -> None:
         if self.pipeline is None:
-            await self.process_posted_event(event)
-            return
+            raise RuntimeError("Mattermost Inbox Pipeline is not attached")
         inbound = self.to_inbound_event(event)
         if inbound is not None:
             await self.pipeline.accept(inbound, on_accepted=self._acknowledge_accepted)
@@ -146,10 +145,6 @@ class MessageHandler:
         if not message and not file_metas:
             return
         post_id = str(post.get("id") or "")
-        if self.pipeline is None and post_id and self.memory.has_message(post_id):
-            log_event(log, "message.duplicate", status="skipped")
-            return
-
         with log_context.bind(
             trace_id=log_context.new_trace_id(),
             conversation_id=channel_id,
@@ -578,6 +573,7 @@ class MessageHandler:
                         text=result.text,
                         agent_name="approval",
                         artifacts=tuple(dict(item) for item in result.artifacts),
+                        result=(dict(result.output) if result.output is not None else None),
                         runtime_result=result,
                     ),
                     run_id=claims.run_id,
@@ -625,6 +621,7 @@ class MessageHandler:
                         text=result.text,
                         agent_name="approval",
                         artifacts=tuple(dict(item) for item in result.artifacts),
+                        result=(dict(result.output) if result.output is not None else None),
                         runtime_result=result,
                     ),
                     run_id=self._run_id(post),

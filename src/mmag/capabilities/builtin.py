@@ -51,7 +51,7 @@ def build_builtin_bindings(
     memory,
     *,
     artifacts: ArtifactRepository | None = None,
-    executor: CapabilityExecutor | None = None,
+    executor: CapabilityExecutor,
     additional_specs: tuple[CapabilitySpec, ...] = (),
 ) -> list[CapabilityBinding]:
     """Project the canonical built-in catalog onto the default runtime surface."""

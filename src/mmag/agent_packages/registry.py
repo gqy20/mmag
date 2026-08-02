@@ -24,10 +24,10 @@ class AgentPackageRegistry:
         self,
         loader: AgentPackageLoader | None = None,
         *,
-        policy_registry: PolicyRegistry | None = None,
-        model_policy_registry: ModelPolicyRegistry | None = None,
-        skill_registry: SkillPackageRegistry | None = None,
-        execution_profile_registry: ExecutionProfileRegistry | None = None,
+        policy_registry: PolicyRegistry,
+        model_policy_registry: ModelPolicyRegistry,
+        skill_registry: SkillPackageRegistry,
+        execution_profile_registry: ExecutionProfileRegistry,
         activation_gate: PackageActivationGate | None = None,
     ) -> None:
         self.loader = loader or AgentPackageLoader()
@@ -70,16 +70,14 @@ class AgentPackageRegistry:
     def _resolve_governance(self, package: AgentPackage) -> AgentPackage:
         policy_hash = ""
         model_policy_hash = ""
-        if self.policy_registry is not None:
-            policy_hash = self.policy_registry.hash(package.manifest.policy_ref)
-        if self.model_policy_registry is not None:
-            model_policy = self.model_policy_registry.get(package.manifest.model_policy_ref)
-            model_policy_hash = model_policy.sha256
-            if model_policy.route != package.manifest.runtime.route:
-                raise ManifestValidationError(
-                    f"Agent route {package.manifest.runtime.route!r} conflicts with "
-                    f"model policy route {model_policy.route!r}"
-                )
+        policy_hash = self.policy_registry.hash(package.manifest.policy_ref)
+        model_policy = self.model_policy_registry.get(package.manifest.model_policy_ref)
+        model_policy_hash = model_policy.sha256
+        if model_policy.route != package.manifest.runtime.route:
+            raise ManifestValidationError(
+                f"Agent route {package.manifest.runtime.route!r} conflicts with "
+                f"model policy route {model_policy.route!r}"
+            )
         skills = self._resolve_skills(package)
         skill_set_hash = self._skill_set_hash(skills)
         execution_profiles = self._resolve_execution_profiles(package)
@@ -131,10 +129,6 @@ class AgentPackageRegistry:
         active_refs = tuple(ref for ref in declaration.allow if ref not in declaration.deny)
         if not active_refs:
             return MappingProxyType({})
-        if self.skill_registry is None:
-            raise ManifestValidationError(
-                "Agent declares Skills but no Skill registry is configured"
-            )
         try:
             skills = {ref: self.skill_registry.get(ref) for ref in active_refs}
         except LookupError as error:
@@ -183,10 +177,6 @@ class AgentPackageRegistry:
         active_refs = tuple(ref for ref in declaration.allow if ref not in declaration.deny)
         if not active_refs:
             return MappingProxyType({})
-        if self.execution_profile_registry is None:
-            raise ManifestValidationError(
-                "Agent declares Execution Profiles but no registry is configured"
-            )
         try:
             profiles = {ref: self.execution_profile_registry.get(ref) for ref in active_refs}
         except LookupError as error:
