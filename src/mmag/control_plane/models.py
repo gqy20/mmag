@@ -97,6 +97,21 @@ class InteractionStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class MemoryItemKind(StrEnum):
+    PREFERENCE = "preference"
+    FACT = "fact"
+    DECISION = "decision"
+    RELATIONSHIP = "relationship"
+    COMMITMENT = "commitment"
+
+
+class MemoryItemStatus(StrEnum):
+    PROPOSED = "proposed"
+    ACTIVE = "active"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+
+
 class TaskState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -295,6 +310,28 @@ class InteractionSession:
     payload: Mapping[str, Any] = field(default_factory=dict)
     expires_at: float = 0.0
     status: InteractionStatus = InteractionStatus.OPEN
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryItem:
+    id: str
+    installation_id: str
+    tenant_id: str
+    owner_id: str
+    scope_id: str
+    kind: MemoryItemKind
+    content: str
+    content_hash: str
+    source_refs: tuple[str, ...] = ()
+    confidence: float = 1.0
+    status: MemoryItemStatus = MemoryItemStatus.ACTIVE
+    expires_at: float = 0.0
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+    @property
+    def ref(self) -> str:
+        return f"memory://{self.id}"
 
 
 @dataclass(frozen=True, slots=True)

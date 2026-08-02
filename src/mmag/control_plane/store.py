@@ -9,6 +9,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from ..infrastructure.sqlite import SQLiteDatabase
+from .memory_items import MemoryItemStore
 from .models import (
     ApprovalRequest,
     Artifact,
@@ -50,6 +51,7 @@ class SQLiteControlPlane:
         self.personal_skills = PersonalSkillStore(self._connection, self._lock)
         self.work_cases = WorkCaseStore(self._connection, self._lock)
         self.interactions = InteractionSessionStore(self._connection, self._lock)
+        self.memory_items = MemoryItemStore(self._connection, self._lock)
 
     def close(self) -> None:
         self._connection.close()

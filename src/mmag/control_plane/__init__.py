@@ -26,6 +26,7 @@ from .lifecycle import (
     LifecycleService,
     VersionConflictError,
 )
+from .memory_items import MemoryItemStore
 from .models import (
     AgentRunState,
     ApprovalRequest,
@@ -42,6 +43,9 @@ from .models import (
     InteractionSession,
     InteractionStatus,
     LifecycleEntity,
+    MemoryItem,
+    MemoryItemKind,
+    MemoryItemStatus,
     OutboundMessage,
     PersonalSkill,
     PersonalSkillStatus,
@@ -83,6 +87,10 @@ __all__ = [
     "InteractionSession",
     "InteractionSessionStore",
     "InteractionStatus",
+    "MemoryItem",
+    "MemoryItemKind",
+    "MemoryItemStatus",
+    "MemoryItemStore",
     "InvalidTransitionError",
     "LifecycleEntity",
     "LifecycleError",

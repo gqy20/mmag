@@ -26,6 +26,7 @@ class WorkspaceIntent(StrEnum):
     SKILL_ACTIVATE = "skill_activate"
     SKILL_ARCHIVE = "skill_archive"
     SKILL_VERSIONS = "skill_versions"
+    MEMORY_LIST = "memory_list"
     ORDINARY = "ordinary"
 
 
@@ -77,6 +78,9 @@ class WorkspaceIntentResolver:
     ) -> IntentDecision | None:
         normalized = cls._normalize(message)
         list_words = ("哪些", "有什么", "查看", "看看", "列出", "列表", "管理", "展示")
+        if (("记忆" in normalized and any(word in normalized for word in list_words))
+                or any(phrase in normalized for phrase in ("你记得我什么", "你记住了什么"))):
+            return IntentDecision(WorkspaceIntent.MEMORY_LIST, confidence=1)
         if any(word in normalized for word in ("案例", "workcase")) and any(
             word in normalized for word in list_words
         ):
@@ -204,7 +208,8 @@ class WorkspaceIntentResolver:
         normalized = WorkspaceIntentResolver._normalize(message)
         if any(
             word in normalized
-            for word in ("skill", "技能", "能力", "方法", "案例", "沉淀", "习惯")
+            for word in ("skill", "技能", "能力", "方法", "案例", "记忆", "记住", "忘记",
+                         "沉淀", "习惯")
         ):
             return True
         return any(

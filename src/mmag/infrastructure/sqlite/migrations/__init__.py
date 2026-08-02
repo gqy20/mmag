@@ -544,6 +544,47 @@ def _v015_add_personal_workflow_provenance(connection: sqlite3.Connection) -> No
     )
 
 
+def _v016_add_memory_items(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE memory_items (
+        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL, scope_id TEXT NOT NULL, kind TEXT NOT NULL,
+        content TEXT NOT NULL, content_hash TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'active', expires_at REAL NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL, updated_at REAL NOT NULL
+        )"""
+    )
+    connection.execute(
+        """CREATE UNIQUE INDEX idx_memory_active_content ON memory_items
+        (installation_id, tenant_id, owner_id, content_hash) WHERE status='active'"""
+    )
+    connection.execute(
+        """CREATE INDEX idx_memory_owner ON memory_items
+        (installation_id, tenant_id, owner_id, status, updated_at DESC)"""
+    )
+    connection.execute(
+        """CREATE TABLE memory_item_sources (
+        memory_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,
+        source_type TEXT NOT NULL, source_ref TEXT NOT NULL, source_scope_id TEXT NOT NULL,
+        PRIMARY KEY (memory_id, source_type, source_ref)
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX idx_memory_source ON memory_item_sources(source_type, source_ref)"
+    )
+    connection.execute(
+        """CREATE VIRTUAL TABLE memory_items_fts USING fts5(
+        content, tokenize='unicode61 remove_diacritics 2'
+        )"""
+    )
+    connection.execute(
+        """CREATE TABLE memory_items_fts_map (
+        rowid INTEGER PRIMARY KEY, memory_id TEXT UNIQUE NOT NULL
+        REFERENCES memory_items(id) ON DELETE CASCADE
+        )"""
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -634,6 +675,12 @@ DEFAULT_MIGRATIONS = (
         name="add personal workflow provenance",
         checksum=_checksum("v015-add-personal-workflow-provenance-20260802"),
         upgrade=_v015_add_personal_workflow_provenance,
+    ),
+    Migration(
+        version=16,
+        name="add governed memory items",
+        checksum=_checksum("v016-add-governed-memory-items-20260802"),
+        upgrade=_v016_add_memory_items,
     ),
 )
 

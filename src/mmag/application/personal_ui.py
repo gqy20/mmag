@@ -6,7 +6,7 @@ import re
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from ..control_plane import InteractionStatus, ScopeKind, WorkCaseStatus
+from ..control_plane import InteractionStatus, MemoryItemKind, ScopeKind, WorkCaseStatus
 from .personal_drafts import PersonalSkillDraftBuilder
 from .personal_intents import IntentDecision, WorkspaceIntent, WorkspaceIntentResolver
 from .views import (
@@ -35,7 +35,7 @@ class PersonalWorkspaceUI:
     def __init__(
         self, *, personal_skills: PersonalSkillStore, work_cases: WorkCaseStore,
         interactions: InteractionSessionStore, action_tokens: ActionTokenService | None,
-        audit_store=None, intent_runtime=None,
+        audit_store=None, intent_runtime=None, memories=None,
     ) -> None:
         self.personal_skills = personal_skills
         self.work_cases = work_cases
@@ -44,6 +44,7 @@ class PersonalWorkspaceUI:
         self.audit_store = audit_store
         self.drafts = PersonalSkillDraftBuilder(personal_skills)
         self.intents = WorkspaceIntentResolver(intent_runtime)
+        self.memories = memories
 
     async def consume_message(
         self, post: dict, message: str, scope: Scope,
@@ -63,6 +64,19 @@ class PersonalWorkspaceUI:
             if cancelled:
                 view = replace(view, summary=f"{view.summary} 已取消上一个待输入操作。")
             return True, view, ""
+        if normalized in {"我的记忆", "记忆", "mymemory", "memories"}:
+            self._cancel_session(scope)
+            return True, self.memories_view(post, scope), ""
+        remember = re.fullmatch(r"(?:请|帮我)?记住(?:一下)?[：,: ]*(.+)", message.strip(), re.S)
+        if remember is not None:
+            return True, self._remember(post, scope, remember.group(1)), ""
+        forget = re.fullmatch(
+            r"(?:请|帮我)?(?:忘记|忘掉|删除记忆)(?:关于)?[：,: ]*(.+)",
+            message.strip(),
+            re.S,
+        )
+        if forget is not None and not forget.group(1).strip().startswith("memory://"):
+            return True, self._forget_view(post, scope, forget.group(1)), ""
         command = self._text_command(message)
         if command is not None:
             action, target = command
@@ -115,6 +129,8 @@ class PersonalWorkspaceUI:
             return True, self.skills_view(post, scope), ""
         if decision.intent is WorkspaceIntent.CASES_LIST:
             return True, self.cases_view(post, scope), ""
+        if decision.intent is WorkspaceIntent.MEMORY_LIST:
+            return True, self.memories_view(post, scope), ""
         action = {
             WorkspaceIntent.SKILL_RUN: "pskill_run",
             WorkspaceIntent.SKILL_EDIT: "pskill_edit",
@@ -148,6 +164,85 @@ class PersonalWorkspaceUI:
         except (KeyError, PermissionError, ValueError) as error:
             return True, self._error("操作未完成", str(error)), ""
         return True, self._status("操作已受理", result), ""
+
+    def memories_view(self, post: dict, scope: Scope) -> ResponseView:
+        if self.memories is None:
+            return self._error("我的记忆", "个人记忆服务尚未配置。")
+        items = self.memories.list_active(
+            installation_id=scope.installation_id,
+            tenant_id=scope.tenant_id,
+            owner_id=scope.owner_id,
+        )
+        sections = tuple(
+            ResponseSection(
+                item.kind.value,
+                items=(item.content[:500], f"引用：`{item.ref}`"),
+            )
+            for item in items[:10]
+        )
+        actions = tuple(
+            self._action(post, "memory_forget", item.ref, "忘记", "danger")
+            for item in items[:5]
+        )
+        return ResponseView(
+            kind=ResponseKind.STATUS,
+            title="我的记忆",
+            summary=f"共 {len(items)} 条有效记忆。" if items else "还没有长期记忆。",
+            status=RunStatus.SUCCEEDED,
+            sections=sections,
+            actions=actions,
+        )
+
+    def _remember(self, post: dict, scope: Scope, content: str) -> ResponseView:
+        if self.memories is None:
+            return self._error("未能记住", "个人记忆服务尚未配置。")
+        kind = (
+            MemoryItemKind.PREFERENCE
+            if any(word in content for word in ("喜欢", "偏好", "习惯", "希望", "不要"))
+            else MemoryItemKind.FACT
+        )
+        try:
+            item = self.memories.remember(
+                installation_id=scope.installation_id,
+                tenant_id=scope.tenant_id,
+                owner_id=scope.owner_id,
+                scope_id=scope.id,
+                kind=kind,
+                content=content,
+                source_refs=(("mattermost_post", str(post.get("id") or "")),),
+            )
+        except (PermissionError, ValueError) as error:
+            return self._error("未能记住", str(error))
+        self._audit("memory.item", post, scope, item.ref, "remembered",
+                    {"kind": item.kind.value})
+        return self._status("已记住", f"{item.content}\n\n引用：`{item.ref}`")
+
+    def _forget_view(self, post: dict, scope: Scope, query: str) -> ResponseView:
+        if self.memories is None:
+            return self._error("无法查找记忆", "个人记忆服务尚未配置。")
+        items = self.memories.search(
+            query,
+            installation_id=scope.installation_id,
+            tenant_id=scope.tenant_id,
+            owner_id=scope.owner_id,
+            limit=5,
+        )
+        if not items:
+            return self._status("没有找到", "没有找到匹配的个人记忆。")
+        return ResponseView(
+            kind=ResponseKind.STATUS,
+            title="请选择要忘记的记忆",
+            summary="忘记后将不再用于后续 Agent 上下文。",
+            status=RunStatus.SUCCEEDED,
+            sections=tuple(
+                ResponseSection(item.kind.value, items=(item.content[:500],))
+                for item in items
+            ),
+            actions=tuple(
+                self._action(post, "memory_forget", item.ref, "确认忘记", "danger")
+                for item in items
+            ),
+        )
 
     def skills_view(self, post: dict, scope: Scope) -> ResponseView:
         skills = self.personal_skills.list_latest(
@@ -235,6 +330,12 @@ class PersonalWorkspaceUI:
         return self._execute(claims.action, claims.target, actor_id=actor_id, post=post, scope=scope)
 
     def _execute(self, action: str, target: str, *, actor_id: str, post: dict, scope: Scope) -> str:
+        if action == "memory_forget":
+            if self.memories is None:
+                raise RuntimeError("personal memory is not configured")
+            item = self.memories.revoke(target, owner_id=actor_id)
+            self._audit("memory.item", post, scope, item.ref, "revoked")
+            return "这条记忆已忘记。"
         if action.startswith("pskill_"):
             skill = self.personal_skills.get(target, owner_id=actor_id)
             if action == "pskill_versions":
@@ -332,6 +433,7 @@ class PersonalWorkspaceUI:
             "版本": "pskill_versions", "versions": "pskill_versions",
             "保存案例": "case_save", "案例有帮助": "case_good",
             "案例需改进": "case_bad", "生成skill": "case_draft",
+            "忘记": "memory_forget", "forget": "memory_forget",
         }
         action = commands.get(parts[0].lower())
         return (action, parts[1].strip()) if action and parts[1].strip() else None
@@ -344,6 +446,7 @@ class PersonalWorkspaceUI:
             "pskill_run": "运行", "pskill_activate": "启用", "pskill_archive": "停用",
             "pskill_edit": "编辑", "pskill_versions": "版本", "case_save": "保存案例",
             "case_good": "案例有帮助", "case_bad": "案例需改进", "case_draft": "生成Skill",
+            "memory_forget": "忘记",
         }[action]
         fallback = f"`{command} {target}`"
         if self.action_tokens is not None:

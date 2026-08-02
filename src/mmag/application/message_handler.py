@@ -74,6 +74,7 @@ class MessageHandler:
         work_cases=None,
         interactions=None,
         intent_runtime=None,
+        memory_items=None,
     ) -> None:
         self.mm = mm_client
         self.memory = memory
@@ -103,6 +104,7 @@ class MessageHandler:
                 action_tokens=action_tokens,
                 audit_store=audit_store,
                 intent_runtime=intent_runtime,
+                memories=memory_items,
             )
             if personal_skills is not None and work_cases is not None and interactions is not None
             else None
@@ -123,6 +125,7 @@ class MessageHandler:
         post = self._parse_event_post(event)
         if post is None or not self.memory.update_message(post):
             return
+        self._revoke_message_memories(str(post.get("id") or ""))
         channel_id = str(post.get("channel_id") or "")
         for cached in self.working_memory.get(channel_id, []):
             if cached.get("id") == post.get("id"):
@@ -138,6 +141,7 @@ class MessageHandler:
         post_id = str(post.get("id") or "")
         if not post_id or not self.memory.delete_message(post_id):
             return
+        self._revoke_message_memories(post_id)
         channel_id = str(post.get("channel_id") or "")
         if channel_id in self.working_memory:
             self.working_memory[channel_id] = [
@@ -146,6 +150,21 @@ class MessageHandler:
                 if cached.get("id") != post_id
             ]
         log_event(log, "message.deleted", status="completed", message_id=post_id)
+
+    def _revoke_message_memories(self, post_id: str) -> None:
+        if not post_id or self.personal_ui is None or self.personal_ui.memories is None:
+            return
+        revoked = self.personal_ui.memories.revoke_source(
+            "mattermost_post",
+            post_id,
+            installation_id=self.scope_resolver.installation_id,
+            tenant_id=self.scope_resolver.tenant_id,
+        )
+        if revoked:
+            log_event(
+                log, "memory.source_revoked", status="completed",
+                source_type="mattermost_post", revoked_count=revoked,
+            )
 
     async def _acknowledge_accepted(self, event: InboundEvent) -> None:
         post = self._parse_post(dict(event.payload))
@@ -658,7 +677,7 @@ class MessageHandler:
         scope_id = self.post_scope({"channel_id": channel_id, "user_id": actor_id})
         if scope_id != claims.scope_id:
             raise PermissionError("action belongs to another scope")
-        if claims.action.startswith(("pskill_", "case_")):
+        if claims.action.startswith(("pskill_", "case_", "memory_")):
             if self.personal_ui is None:
                 raise RuntimeError("personal workspace is not configured")
             claims = self.action_tokens.consume(str(token), actor_id=actor_id)
@@ -678,7 +697,7 @@ class MessageHandler:
                 action=claims.action,
                 action_jti=claims.jti,
             )
-            if claims.action.startswith("pskill_"):
+            if claims.action.startswith(("pskill_", "memory_")):
                 return {
                     "update": {
                         "message": message,
