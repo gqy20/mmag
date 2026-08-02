@@ -32,6 +32,7 @@ from ..control_plane import (
     MessagePipeline,
     SQLiteControlPlane,
 )
+from ..evaluation import PackageActivationGate
 from ..execution import (
     ArtifactRepository,
     ExecutionProfileRegistry,
@@ -84,10 +85,16 @@ class Agent:
         self.model_policy_registry = ModelPolicyRegistry()
         self.model_policy_registry.load_directory(Path(config.model_policies_path))
         self.capability_executor = CapabilityExecutor(
-            RegistryPolicyAuthorizer(self.policy_registry)
+            RegistryPolicyAuthorizer(
+                self.policy_registry,
+                audit_sink=self.control_store,
+            )
         )
 
-        self.skill_package_registry = SkillPackageRegistry()
+        self.package_activation_gate = PackageActivationGate(self.control_store.releases)
+        self.skill_package_registry = SkillPackageRegistry(
+            activation_gate=self.package_activation_gate
+        )
         self.skill_package_registry.load_directory(Path(config.skill_packages_path))
         self.execution_profile_registry = ExecutionProfileRegistry()
         self.execution_profile_registry.load_directory(Path(config.execution_profiles_path))
@@ -146,7 +153,11 @@ class Agent:
         )
         self.runtime = ModelGateway(
             {"default": self.deep_agent_runtime},
-            ledger=QuotaLedger(default_limit_usd=config.model_budget_usd),
+            ledger=QuotaLedger(
+                default_limit_usd=config.model_budget_usd,
+                store=self.control_store.quota,
+            ),
+            audit_sink=self.control_store,
         )
 
         self.agent_package_registry = AgentPackageRegistry(
@@ -154,8 +165,19 @@ class Agent:
             model_policy_registry=self.model_policy_registry,
             skill_registry=self.skill_package_registry,
             execution_profile_registry=self.execution_profile_registry,
+            activation_gate=self.package_activation_gate,
         )
         self.agent_package_registry.load_directory(Path(config.agent_packages_path))
+        for package in self.agent_package_registry.list():
+            model_policy = self.model_policy_registry.get(
+                package.manifest.model_policy_ref
+            )
+            self.runtime.validate_route(model_policy.route)
+            self.deep_agent_runtime.validate_model_policy(
+                model_class=model_policy.model_class,
+                max_tokens=model_policy.max_output_tokens,
+                temperature=model_policy.temperature,
+            )
         self.agent_factory = AgentFactory(
             DeepAgentProvider(
                 self.runtime,

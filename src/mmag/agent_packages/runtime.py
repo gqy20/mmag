@@ -437,7 +437,7 @@ class ContractAgentDecorator:
             structured,
             artifacts,
             request=request,
-            model_calls=1 if runtime_result is not None else 0,
+            model_calls=(runtime_result.usage.model_calls if runtime_result is not None else 0),
             tool_calls=tool_calls,
             cost_usd=cost_usd,
             platform_provenance=self.platform_provenance,

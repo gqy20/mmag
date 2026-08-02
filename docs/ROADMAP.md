@@ -96,11 +96,11 @@
 优先级：P0。
 
 - [x] 成功消息运行把 Agent/Skill/Prompt/Schema/Policy/Model Policy/eval Hash 写入 AuditEvent；
-- [ ] 在 AgentRun 原子保存完整 provenance，并覆盖失败、审批 resume 和 replay；
-- [ ] 保存模型调用、Capability 调用、token、cost、repair 和 Artifact usage；
-- [ ] 给 `QuotaLedger` 增加持久化原子 reservation/settlement/release；
-- [ ] 审批 resume 和 DLQ replay 复用原始 Package snapshot；
-- [ ] AuditEvent 记录 route decision、policy decision 和版本信息。
+- [x] 在 AgentRun 原子保存不可变 Package provenance，成功、失败和审批等待共享同一 Run；
+- [x] 保存真实模型调用、Capability 调用、token、cost、repair 和 Artifact usage；Provider 未返回价格时 cost 明确为零，不做推测计价；
+- [x] 给 `QuotaLedger` 增加 SQLite 原子 reservation/settlement/release，跨进程并发不能超额预占；
+- [x] 审批 resume 复用 LangGraph 持久化 Runtime snapshot；DLQ replay 复制并强制校验原始 Package snapshot，不可静默切换版本；
+- [x] AuditEvent 记录 Agent route/Model Policy 版本，并为每次 Capability 授权记录脱敏的 Policy decision、rule 和 permission。
 
 退出标准：任意历史 Run 可回答“谁、在什么 scope、使用哪个版本、调用了什么、花费多少、为何允许”，且并发/崩溃不能突破预算。
 
@@ -108,9 +108,9 @@
 
 优先级：P0。
 
-- [ ] 将 `model_class` 映射到允许的模型集合；
-- [ ] route/model/max output tokens/temperature 从 snapshot 进入实际调用；
-- [ ] 对不支持的模型参数在启动时失败，不在运行中静默忽略；
+- [x] 将 `model_class` 映射到平台配置的允许模型集合，Manifest 不能直接指定模型名；
+- [x] route/model/max output tokens/temperature 从 Model Policy snapshot 进入实际调用和审计；
+- [x] 启动时校验所有已加载 Agent 的 route、model class 和 Provider 参数，不支持的配置直接失败；
 - [ ] 为不同 Agent 建立成本、延迟、质量基线。
 
 退出标准：修改 Model Policy 只能通过新版本生效，每次调用都能复现实际模型参数。
@@ -129,10 +129,8 @@
   Skill、Artifact、Package 和 Envelope 契约校验；
 - [x] 结构化结果保持单次 Deep Agents graph；Runtime 出口只按业务 Schema 确定性解码被模型字符串化
   的对象/数组，再进入终局校验，不启动第二次模型运行或 Capability 旁路；
-- [ ] 统一内部 Capability 结果类型，避免在 Registry 与 LangGraph 之间反复执行对象 → JSON 字符串 →
-  对象转换；只在模型 Provider、MCP 和交付边界序列化；
-- [ ] 让多轮 LangGraph、结构修复和 Provider fallback 的实际模型调用、token、cost 与错误进入统一
-  usage 和审计，不再把一次 Runtime 执行固定计为一次模型调用；
+- [x] Registry、Executor 与 Runtime 内部统一传递 `CapabilityResult`，仅在 LangChain ToolMessage、MCP 和交付边界序列化；
+- [x] 多轮 LangGraph 和结构修复按实际模型/工具调用累计 token、call count、repair 与错误；Envelope 不再把一次 Runtime 固定计为一次模型调用，当前明确禁用隐式 Provider fallback；
 - [ ] 覆盖 Provider-native、Tool Strategy、文本 fallback、非法 JSON、Schema 不匹配、重复结构化结果、
   repair 失败、工具副作用保留和 checkpoint resume 测试；默认测试使用离线 Fake Backend。
 
@@ -145,10 +143,10 @@
 优先级：P0。
 
 - [x] 建立版本化系统 Eval Loader、Runner、真实 Mattermost Driver、确定性断言和报告格式；
-- [ ] Agent/Skill contract case 在激活前离线执行；
+- [x] Loader/Registry 各自负责 Schema、治理 provenance 和 Capability 声明；Activation Gate 不重复校验，只执行可选 contract case 并登记已验证 staging 批次；
 - [ ] quality case 定义数据集版本、阈值和评分器版本；
-- [ ] EvaluationRun、结果 Hash、环境快照、发布时间和发布人进入控制面发布记录；
-- [ ] 失败 Package 不得生成发布制品或进入部署；
+- [x] Package release 只记录 Package/eval Hash、Gate 版本、检查项、发布时间和发布主体；真实 EvaluationRun 产生后再记录结果与环境 Hash；
+- [x] Gate 先验证完整 staging 批次，再用单一 SQLite 事务发布，失败 Package 不生成 release 记录或进入 Registry；
 - [ ] 旧制品可按 Package Hash 原子回滚。
 
 退出标准：坏 Prompt、坏 Schema、越权能力和质量回退不能进入新 Run。
@@ -325,7 +323,7 @@
   拒绝；只有绑定 Workspace Capability 与 Execution Profile 的 Agent 才获得原生 `execute`；
 - [x] 实现 `GovernedWorkspaceBackend` 与 `workspace.read/write/execute` canonical Capability；
 - [x] 接入显式危险的 `LocalExecutionBackend`，复用稳定 Run Workspace、Execution Profile 超时、最小
-  环境、输出限制、结构化日志与 TTL 回收；关闭危险开关时失败关闭。Artifact 自动提交仍在下一项；
+  环境、输出限制、结构化日志与 TTL 回收；关闭危险开关时失败关闭；
 - [x] 让 PPT Agent 在真实 Workspace 中执行、通过 `workspace.commit` 幂等登记 Profile 固定输出，并删除
   `ppt.shell`；Mattermost 真实上传继续由外部测试确认；
 - [x] 把 Deep Agents messages/interrupt 映射为 Mattermost 文本流与审批事件；Tool/Artifact 细粒度展示继续归入可观测性阶段；

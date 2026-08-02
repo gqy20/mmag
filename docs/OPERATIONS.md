@@ -41,7 +41,8 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 - `PIPELINE_MAX_PENDING` 提供入口背压，默认 256。
 - `RUNTIME_DEADLINE_SECONDS` 是单次 Run deadline，默认 120 秒。
 - 每个 Execution Profile 独立限制输入、stdout/stderr、Artifact、wall time、CPU、地址空间、进程数和文件描述符；部署层仍应再使用 cgroup/systemd/container 限额保护整个服务。
-- `MODEL_BUDGET_USD` 是进程内每个 actor 的成本上限基线，生产环境应由外部配额源同步。
+- `MODEL_BUDGET_USD` 是每个 actor 的月度成本上限；运行前通过 SQLite 原子预占，完成后幂等结算，多个应用进程共享同一账本。
+- `ANTHROPIC_LOW_MODEL` / `ANTHROPIC_MEDIUM_MODEL` 是平台控制的 Model Class 映射；未设置时继承 `ANTHROPIC_MODEL`，Agent Manifest 不能直接指定模型名。
 - Delivery 最多尝试三次，失败记录保留在 Outbox，不会重新执行 Agent。
 - Runtime/网络类瞬时处理错误默认最多尝试三次，次数与下次重试时间持久化在 Inbox；非瞬时错误直接进入 `failed`。
 - Outbox 为每个 Run/响应分段生成稳定幂等键，并作为 Mattermost `pending_post_id`；进程内和重启后的重试复用同一键。

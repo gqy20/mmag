@@ -190,3 +190,48 @@ async def test_model_gateway_enforces_budget_and_records_usage():
     )
     with pytest.raises(BudgetExceededError):
         await gateway.run(request)
+
+
+@pytest.mark.asyncio
+async def test_model_gateway_uses_snapshot_route_and_rejects_conflicts():
+    class Runtime:
+        async def run(self, request: RunRequest) -> AgentResult:
+            return AgentResult("ok", "stub")
+
+    gateway = ModelGateway({"default": Runtime(), "research": Runtime()})
+    request = RunRequest(
+        context=RunContext("trace", "user", "channel", "project:p1", run_id="run"),
+        messages=({"role": "user", "content": "hi"},),
+        metadata={"route": "research"},
+    )
+    assert (await gateway.run(request)).text == "ok"
+    with pytest.raises(ValueError, match="conflicts"):
+        await gateway.run(request, route="default")
+
+
+def test_quota_ledger_persists_atomic_reservations_and_settlement(tmp_path):
+    from mmag.control_plane import SQLiteControlPlane
+
+    store = SQLiteControlPlane(tmp_path / "quota.db")
+    ledger = QuotaLedger(default_limit_usd=0.3, store=store.quota)
+    ledger.reserve("run-1", "user", 0.2)
+    assert ledger.snapshot("user").reserved_cost_usd == pytest.approx(0.2)
+    with pytest.raises(BudgetExceededError):
+        ledger.reserve("run-2", "user", 0.2)
+
+    result = AgentResult(
+        "ok",
+        "stub",
+        usage=TokenUsage(input_tokens=12, output_tokens=4, cost_usd=0.1),
+    )
+    ledger.settle("run-1", "user", result)
+    ledger.settle("run-1", "user", result)
+    store.close()
+
+    reopened = SQLiteControlPlane(tmp_path / "quota.db")
+    snapshot = QuotaLedger(default_limit_usd=0.3, store=reopened.quota).snapshot("user")
+    assert snapshot.cost_usd == pytest.approx(0.1)
+    assert snapshot.input_tokens == 12
+    assert snapshot.output_tokens == 4
+    assert snapshot.reserved_cost_usd == 0
+    reopened.close()

@@ -229,6 +229,44 @@ async def test_failed_inbox_is_queryable_and_replayed_as_a_new_idempotent_event(
     store.close()
 
 
+def test_agent_run_snapshot_is_immutable_and_records_usage(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    lifecycle = LifecycleService(store)
+    lifecycle.create(EntityType.AGENT_RUN, "run:one", scope_id="scope")
+    snapshot = {"package_hash": "abc", "policy_version": "1.0.0"}
+
+    store.runs.bind_snapshot(
+        "run:one",
+        snapshot=snapshot,
+        actor_id="user-1",
+        trace_id="trace-1",
+        intent="research",
+        capabilities=("analyze_link",),
+    )
+    store.runs.record_result(
+        "run:one",
+        status="completed",
+        usage={"input_tokens": 10, "output_tokens": 2, "cost_usd": 0.1},
+        capability_calls=1,
+        artifact_count=1,
+    )
+    entity = store.get_lifecycle_entity(EntityType.AGENT_RUN, "run:one")
+    assert entity.payload["snapshot"] == snapshot
+    assert entity.payload["usage"]["input_tokens"] == 10
+    assert entity.payload["artifact_count"] == 1
+
+    with pytest.raises(RuntimeError, match="immutable"):
+        store.runs.bind_snapshot(
+            "run:one",
+            snapshot={"package_hash": "changed"},
+            actor_id="user-1",
+            trace_id="trace-1",
+            intent="research",
+            capabilities=(),
+        )
+    store.close()
+
+
 @pytest.mark.asyncio
 async def test_pipeline_preserves_waiting_approval_lifecycle(tmp_path):
     store = SQLiteControlPlane(tmp_path / "control.db")

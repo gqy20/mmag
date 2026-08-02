@@ -8,10 +8,12 @@ import os
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..governance import redact_sensitive
-from .models import EvaluationRunResult
+
+if TYPE_CHECKING:
+    from .models import EvaluationRunResult
 
 
 class JSONEvaluationReporter:

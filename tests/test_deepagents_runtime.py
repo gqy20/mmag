@@ -94,7 +94,9 @@ def _runtime(
             ),
         )
     )
-    executor = CapabilityExecutor(PolicyCapabilityAuthorizer(policy))
+    executor = CapabilityExecutor(
+        PolicyCapabilityAuthorizer(policy, audit_sink=audit_sink)
+    )
     registry = CapabilityRegistry()
     registry.register(bind_langgraph_capability(spec, executor=executor))
     return DeepAgentRuntime(
@@ -180,6 +182,36 @@ def test_leaves_invalid_container_text_for_contract_validation():
 
     assert repaired == {"bundle": "not-json"}
     assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_schema_run_does_not_promote_json_text_to_structured_output():
+    runtime = _runtime(
+        [],
+        AIMessage(
+            content='{"summary":"text only"}',
+            usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+        ),
+    )
+    request = _request(runtime, "schema-run")
+    request = RunRequest(
+        request.context,
+        request.messages,
+        capabilities=request.capabilities,
+        response_schema={
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        },
+    )
+
+    result = await runtime.run(request)
+
+    assert result.output is None
+    assert result.text == '{"summary":"text only"}'
+    assert result.usage.model_calls == 1
+    assert result.usage.input_tokens == 7
+    assert result.usage.output_tokens == 3
 
 
 def test_native_middleware_enforces_package_call_limits():

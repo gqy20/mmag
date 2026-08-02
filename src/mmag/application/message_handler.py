@@ -688,6 +688,16 @@ class MessageHandler:
                 )
             ),
         ):
+            lifecycle_run_id = self._lifecycle_run_id(capability_context.run_id)
+            provenance = self._request_provenance(request, package, agent)
+            self.audit_store.runs.bind_snapshot(
+                lifecycle_run_id,
+                snapshot=provenance,
+                actor_id=capability_context.actor_id,
+                trace_id=capability_context.trace_id,
+                intent=request.intent,
+                capabilities=allowed_capabilities,
+            )
             log_event(
                 log,
                 "agent.started",
@@ -701,6 +711,10 @@ class MessageHandler:
                 output = await agent.run(request)
             except Exception as error:
                 duration_ms = round((time.monotonic() - started) * 1000)
+                self.audit_store.runs.record_failure(
+                    lifecycle_run_id,
+                    error_code=type(error).__name__,
+                )
                 self.audit_store.append_audit(
                     "agent.run",
                     actor_id=capability_context.actor_id,
@@ -715,6 +729,12 @@ class MessageHandler:
                         "skill_ref": request.skill.ref if request.skill is not None else "",
                         "duration_ms": duration_ms,
                         "error_code": type(error).__name__,
+                        "route": (
+                            package.manifest.runtime.route if package is not None else ""
+                        ),
+                        "model_policy_ref": (
+                            package.manifest.model_policy_ref if package is not None else ""
+                        ),
                         "provenance": self._request_provenance(request, package, agent),
                     },
                 )
@@ -748,11 +768,25 @@ class MessageHandler:
                     "intent": request.intent,
                     "skill_ref": request.skill.ref if request.skill is not None else "",
                     "capabilities": list(allowed_capabilities),
+                    "route": package.manifest.runtime.route if package is not None else "",
+                    "model_policy_ref": (
+                        package.manifest.model_policy_ref if package is not None else ""
+                    ),
                     "provenance": dict(provenance),
                     "skill_context": self._interrupted_skill_context(output),
                     "duration_ms": round((time.monotonic() - started) * 1000),
                     "usage": self._safe_usage(output),
                 },
+            )
+            runtime_result = output.runtime_result
+            self.audit_store.runs.record_result(
+                lifecycle_run_id,
+                status=runtime_status.value,
+                usage=self._safe_usage(output),
+                capability_calls=(
+                    len(runtime_result.capability_calls) if runtime_result is not None else 1
+                ),
+                artifact_count=len(output.artifacts),
             )
             log_event(
                 log,
@@ -769,13 +803,29 @@ class MessageHandler:
     def _safe_usage(output: AgentOutput) -> dict[str, int | float]:
         runtime_result = output.runtime_result
         if runtime_result is None:
-            return {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+            return {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 0.0,
+                "model_calls": 0,
+                "tool_calls": 0,
+                "repair_calls": 0,
+            }
         usage = runtime_result.usage
         return {
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
             "cost_usd": usage.cost_usd,
+            "model_calls": usage.model_calls,
+            "tool_calls": usage.tool_calls,
+            "repair_calls": usage.repair_calls,
         }
+
+    @staticmethod
+    def _lifecycle_run_id(runtime_run_id: str) -> str:
+        if runtime_run_id.startswith("mattermost:"):
+            return f"run:{runtime_run_id.removeprefix('mattermost:')}"
+        return runtime_run_id
 
     def _error_view(self, error: Exception, *, run_id: str) -> ResponseView:
         if isinstance(error, RuntimeTimeoutError):

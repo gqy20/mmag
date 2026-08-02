@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import json
 import time
 from dataclasses import dataclass
 from fnmatch import fnmatch
@@ -15,6 +14,7 @@ if TYPE_CHECKING:
     from .base import CapabilityAuthorization, CapabilityExecutor, CapabilitySpec
 
 from ..logger import get_logger, log_event, safe_hash
+from .base import CapabilityResult, CapabilityStatus
 from .sources import enrich_with_sources
 
 log = get_logger(__name__)
@@ -120,14 +120,9 @@ class CapabilityRegistry:
         ]
 
     async def execute(
-        self, name: str, input_data: dict[str, Any], *, approval_granted: bool = False
-    ) -> str:
-        """
-        执行指定工具并返回结果字符串。
-
-        Returns:
-            工具执行的 JSON 字符串结果，或错误信息。
-        """
+        self, name: str, input_data: dict[str, Any], *, preauthorized: bool = False
+    ) -> CapabilityResult:
+        """Execute one capability and preserve its typed result until a transport boundary."""
         binding = self._bindings.get(name)
         if not binding:
             log_event(
@@ -138,7 +133,10 @@ class CapabilityRegistry:
                 capability=name,
                 error_code="UNKNOWN_CAPABILITY",
             )
-            return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
+            return CapabilityResult(
+                CapabilityStatus.ERROR,
+                message=f"Unknown capability: {name}",
+            )
 
         t0 = time.monotonic()
         input_sha256 = safe_hash(input_data)
@@ -152,42 +150,47 @@ class CapabilityRegistry:
         )
 
         try:
-            if approval_granted and binding.capability is not None and binding.executor is not None:
-                capability_result = await binding.executor.execute_approved(
-                    binding.capability, input_data
+            if binding.capability is not None and binding.executor is not None:
+                if preauthorized:
+                    result = await binding.executor.execute_approved(
+                        binding.capability, input_data
+                    )
+                else:
+                    result = await binding.executor.execute(binding.capability, input_data)
+            else:
+                value = binding.handler(**input_data)
+                if inspect.isasyncgen(value):
+                    value = [item async for item in value]
+                elif inspect.isawaitable(value):
+                    value = await value
+                result = CapabilityResult(CapabilityStatus.SUCCESS, data=value)
+
+            if result.status is CapabilityStatus.SUCCESS:
+                result = CapabilityResult(
+                    result.status,
+                    data=enrich_with_sources(result.data, name, input_data),
+                    message=result.message,
+                    duration_ms=result.duration_ms,
                 )
-                result = capability_result.to_payload()
-            else:
-                result = binding.handler(**input_data)
-            # async generator 不是 awaitable，需要先逐项收集。
-            if inspect.isasyncgen(result):
-                result = [item async for item in result]
-            elif inspect.isawaitable(result):
-                result = await result
-
-            # 为外部数据工具注入结构化来源元数据（_sources 字段）
-            # 本地工具（get_posts 等）会静默跳过，零额外开销
-            result = enrich_with_sources(result, name, input_data)
-
-            # 统一序列化为 JSON 字符串
-            if isinstance(result, (dict, list)):
-                result_str = json.dumps(result, ensure_ascii=False, default=str)
-            elif isinstance(result, str):
-                result_str = result
-            else:
-                result_str = json.dumps({"result": result}, ensure_ascii=False, default=str)
 
             elapsed = time.monotonic() - t0
+            if result.duration_ms == 0:
+                result = CapabilityResult(
+                    result.status,
+                    data=result.data,
+                    message=result.message,
+                    duration_ms=round(elapsed * 1000),
+                )
             log_event(
                 log,
                 "capability.completed",
-                status="succeeded",
+                status=result.status.value,
                 capability=name,
                 duration_ms=round(elapsed * 1000),
                 input_sha256=input_sha256,
-                output_size=len(result_str),
+                output_type=type(result.data).__name__,
             )
-            return result_str
+            return result
 
         except Exception as e:
             elapsed = time.monotonic() - t0
@@ -201,7 +204,7 @@ class CapabilityRegistry:
                 input_sha256=input_sha256,
                 error_code=type(e).__name__,
             )
-            return json.dumps(
-                {"error": f"工具执行错误: {type(e).__name__}: {e}"},
-                ensure_ascii=False,
+            return CapabilityResult(
+                CapabilityStatus.ERROR,
+                message=f"Capability failed: {type(e).__name__}",
             )

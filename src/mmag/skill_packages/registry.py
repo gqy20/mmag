@@ -10,12 +10,19 @@ from .loader import SkillPackageLoader
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from ..evaluation import PackageActivationGate
     from .models import SkillPackage
 
 
 class SkillPackageRegistry:
-    def __init__(self, loader: SkillPackageLoader | None = None) -> None:
+    def __init__(
+        self,
+        loader: SkillPackageLoader | None = None,
+        *,
+        activation_gate: PackageActivationGate | None = None,
+    ) -> None:
         self.loader = loader or SkillPackageLoader()
+        self.activation_gate = activation_gate
         self._packages: dict[str, SkillPackage] = {}
 
     def load_directory(self, root: Path) -> tuple[SkillPackage, ...]:
@@ -32,6 +39,8 @@ class SkillPackageRegistry:
                 raise SkillManifestError(f"duplicate Skill Package {metadata.ref!r}")
             names.add(metadata.name)
             staged[metadata.ref] = package
+        if self.activation_gate is not None:
+            self.activation_gate.activate_skills(staged.values())
         self._packages = staged
         return self.list()
 

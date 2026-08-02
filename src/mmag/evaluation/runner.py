@@ -9,11 +9,10 @@ import time
 import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from ..governance import redact_sensitive
 from .assertions import DeterministicEvaluator
-from .loader import EvaluationAssetLoader
 from .models import (
     EvaluationAssertion,
     EvaluationCaseResult,
@@ -22,7 +21,10 @@ from .models import (
     EvaluationRunResult,
     EvaluationScenario,
 )
-from .reporting import JSONEvaluationReporter
+
+if TYPE_CHECKING:
+    from .loader import EvaluationAssetLoader
+    from .reporting import JSONEvaluationReporter
 
 
 class EvaluationDriver(Protocol):

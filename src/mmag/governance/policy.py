@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from ..capabilities import CapabilityAuthorization
+from ..logger import log_context
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -141,8 +142,9 @@ def get_governance_context() -> GovernanceContext | None:
 class PolicyCapabilityAuthorizer:
     """CapabilityAuthorizer adapter used by both runtime bindings."""
 
-    def __init__(self, engine: PolicyEngine):
+    def __init__(self, engine: PolicyEngine, *, audit_sink=None):
         self.engine = engine
+        self.audit_sink = audit_sink
 
     def authorize(
         self, spec: CapabilitySpec, arguments: Mapping[str, Any]
@@ -150,31 +152,88 @@ class PolicyCapabilityAuthorizer:
         context = _GOVERNANCE_CONTEXT.get() or GovernanceContext("anonymous", "*")
         decision = self.engine.evaluate(spec, arguments, context)
         if decision.effect is PolicyEffect.DENY:
-            return CapabilityAuthorization.deny(decision.reason)
-        if decision.effect is PolicyEffect.REQUIRE_APPROVAL:
-            return CapabilityAuthorization.require_approval(decision.reason)
-        return CapabilityAuthorization.allow()
+            authorization = CapabilityAuthorization.deny(decision.reason)
+        elif decision.effect is PolicyEffect.REQUIRE_APPROVAL:
+            authorization = CapabilityAuthorization.require_approval(decision.reason)
+        else:
+            authorization = CapabilityAuthorization.allow()
+        _audit_policy(
+            self.audit_sink,
+            spec,
+            context,
+            authorization,
+            rule_id=decision.rule_id,
+        )
+        return authorization
 
 
 class RegistryPolicyAuthorizer:
     """Resolve the active Agent Package policy for every capability call."""
 
-    def __init__(self, registry) -> None:
+    def __init__(self, registry, *, audit_sink=None) -> None:
         self.registry = registry
+        self.audit_sink = audit_sink
 
     def authorize(
         self, spec: CapabilitySpec, arguments: Mapping[str, Any]
     ) -> CapabilityAuthorization:
         context = get_governance_context()
         if context is None or not context.policy_ref:
-            return CapabilityAuthorization.deny("capability call has no Agent Package policy")
+            authorization = CapabilityAuthorization.deny(
+                "capability call has no Agent Package policy"
+            )
+            _audit_policy(
+                self.audit_sink,
+                spec,
+                context,
+                authorization,
+                rule_id="missing_policy",
+            )
+            return authorization
         if not any(fnmatch(spec.name, name) for name in context.allowed_capabilities):
-            return CapabilityAuthorization.deny(
+            authorization = CapabilityAuthorization.deny(
                 f"capability {spec.name!r} is outside the Agent Package allowlist"
             )
+            _audit_policy(
+                self.audit_sink,
+                spec,
+                context,
+                authorization,
+                rule_id="agent_allowlist",
+            )
+            return authorization
         decision = self.registry.get(context.policy_ref).evaluate(spec, arguments, context)
         if decision.effect is PolicyEffect.DENY:
-            return CapabilityAuthorization.deny(decision.reason)
-        if decision.effect is PolicyEffect.REQUIRE_APPROVAL:
-            return CapabilityAuthorization.require_approval(decision.reason)
-        return CapabilityAuthorization.allow()
+            authorization = CapabilityAuthorization.deny(decision.reason)
+        elif decision.effect is PolicyEffect.REQUIRE_APPROVAL:
+            authorization = CapabilityAuthorization.require_approval(decision.reason)
+        else:
+            authorization = CapabilityAuthorization.allow()
+        _audit_policy(
+            self.audit_sink,
+            spec,
+            context,
+            authorization,
+            rule_id=decision.rule_id,
+        )
+        return authorization
+
+
+def _audit_policy(audit_sink, spec, context, authorization, *, rule_id: str) -> None:
+    if audit_sink is None:
+        return
+    audit_sink.append_audit(
+        "policy.decision",
+        actor_id=context.actor_id if context is not None else "",
+        scope_id=context.scope if context is not None else "",
+        trace_id=log_context.get("trace_id"),
+        target=spec.name,
+        decision=authorization.decision.value,
+        details={
+            "schema_version": "1.0",
+            "run_id": log_context.get("run_id"),
+            "policy_ref": context.policy_ref if context is not None else "",
+            "rule_id": rule_id,
+            "permission": spec.permission,
+        },
+    )

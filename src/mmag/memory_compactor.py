@@ -235,6 +235,11 @@ class MemoryCompactor:
                     ),
                     max_rounds=1,
                     max_tokens=1024,
+                    metadata={
+                        "route": "default",
+                        "model_class": "low-reasoning",
+                        "model_policy_ref": "reasoning-low@1.0.0",
+                    },
                 )
             )
             return result.text

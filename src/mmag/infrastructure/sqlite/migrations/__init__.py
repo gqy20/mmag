@@ -304,6 +304,42 @@ def _v007_add_action_tokens(connection: sqlite3.Connection) -> None:
     )
 
 
+def _v008_add_run_governance(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS quota_reservations (
+        reservation_id TEXT PRIMARY KEY, subject_id TEXT NOT NULL, period TEXT NOT NULL,
+        run_id TEXT NOT NULL, reserved_cost_usd REAL NOT NULL,
+        actual_cost_usd REAL NOT NULL DEFAULT 0,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'reserved', expires_at REAL NOT NULL,
+        created_at REAL NOT NULL, updated_at REAL NOT NULL
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_quota_reservation_subject "
+        "ON quota_reservations(subject_id, period, status)"
+    )
+
+
+def _v009_add_package_releases(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS package_releases (
+        id TEXT PRIMARY KEY, package_kind TEXT NOT NULL, package_name TEXT NOT NULL,
+        package_version TEXT NOT NULL, package_hash TEXT NOT NULL,
+        eval_hash TEXT NOT NULL DEFAULT '', gate_version TEXT NOT NULL,
+        checks TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL, released_by TEXT NOT NULL,
+        created_at REAL NOT NULL, updated_at REAL NOT NULL,
+        UNIQUE(package_kind, package_hash)
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_package_release_active "
+        "ON package_releases(package_kind, package_name, status)"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -346,6 +382,18 @@ DEFAULT_MIGRATIONS = (
         name="add one-time action tokens",
         checksum=_checksum("v007-add-one-time-action-tokens-20260801"),
         upgrade=_v007_add_action_tokens,
+    ),
+    Migration(
+        version=8,
+        name="add durable run governance",
+        checksum=_checksum("v008-add-durable-run-governance-20260802"),
+        upgrade=_v008_add_run_governance,
+    ),
+    Migration(
+        version=9,
+        name="add package release records",
+        checksum=_checksum("v009-add-package-release-records-20260802"),
+        upgrade=_v009_add_package_releases,
     ),
 )
 

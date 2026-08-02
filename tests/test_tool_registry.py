@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from mmag.capabilities import CapabilityBinding, CapabilityRegistry
@@ -21,9 +19,9 @@ async def test_execute_collects_async_generator_results() -> None:
         )
     )
 
-    result = json.loads(await registry.execute("stream_results", {}))
+    result = await registry.execute("stream_results", {})
 
-    assert result == [{"chunk": 1}, {"chunk": 2}]
+    assert result.data == [{"chunk": 1}, {"chunk": 2}]
 
 
 @pytest.mark.asyncio
@@ -38,9 +36,9 @@ async def test_execute_preserves_source_enrichment_for_json_text() -> None:
         )
     )
 
-    result = json.loads(await registry.execute("external_search", {}))
+    result = await registry.execute("external_search", {})
 
-    assert result["_sources"] == [
+    assert result.data["_sources"] == [
         {
             "url": "https://example.com",
             "title": "Example",

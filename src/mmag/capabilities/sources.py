@@ -14,7 +14,7 @@ def enrich_with_sources(
     tool_name: str,
     arguments: dict[str, Any],
 ) -> Any:
-    """Attach normalized ``_sources`` while preserving the input representation."""
+    """Attach normalized ``_sources`` and keep internal JSON values structured."""
     if isinstance(result, dict) and result.get("_sources"):
         return result
 
@@ -29,9 +29,7 @@ def enrich_with_sources(
         return result
 
     if is_json_text:
-        if enriched is data:
-            return result
-        return json.dumps(enriched, ensure_ascii=False, default=str)
+        return enriched if enriched is not data else data
     return enriched
 
 

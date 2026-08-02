@@ -132,9 +132,14 @@ class DeepAgentProvider:
                 ),
                 "skill_ref": request.skill.ref if request.skill is not None else "",
                 "policy_ref": package.manifest.policy_ref,
+                "route": model_policy.route,
+                "model_class": model_policy.model_class,
+                "model_policy_ref": model_policy.ref,
+                "model_policy_hash": model_policy.sha256,
                 "package_hash": package.snapshot.package_hash,
                 "capabilities": ",".join(selected_names),
                 "execution_profiles": ",".join(package.execution_profiles),
+                "max_cost_usd": str(package.manifest.budget.max_cost_usd),
                 **self.platform_provenance,
             }
             if prepared is not None:

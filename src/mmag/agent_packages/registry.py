@@ -12,6 +12,7 @@ from .loader import AgentPackageLoader
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from ..evaluation import PackageActivationGate
     from ..execution import ExecutionProfileRegistry
     from ..governance import ModelPolicyRegistry, PolicyRegistry
     from ..skill_packages import SkillPackageRegistry
@@ -27,12 +28,14 @@ class AgentPackageRegistry:
         model_policy_registry: ModelPolicyRegistry | None = None,
         skill_registry: SkillPackageRegistry | None = None,
         execution_profile_registry: ExecutionProfileRegistry | None = None,
+        activation_gate: PackageActivationGate | None = None,
     ) -> None:
         self.loader = loader or AgentPackageLoader()
         self.policy_registry = policy_registry
         self.model_policy_registry = model_policy_registry
         self.skill_registry = skill_registry
         self.execution_profile_registry = execution_profile_registry
+        self.activation_gate = activation_gate
         self._packages: dict[str, AgentPackage] = {}
 
     def load_directory(self, root: Path) -> tuple[AgentPackage, ...]:
@@ -50,6 +53,8 @@ class AgentPackageRegistry:
             package = self._resolve_governance(package)
             staged_packages[name] = package
             loaded.append(package)
+        if self.activation_gate is not None:
+            self.activation_gate.activate_agents(staged_packages.values())
         self._packages = staged_packages
         return tuple(loaded)
 

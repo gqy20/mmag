@@ -201,7 +201,7 @@ async def test_discovered_mcp_tool_uses_one_governed_capability_binding():
     assert spec.effect is CapabilityEffect.READ
     assert spec.permission == "mcp:docs:search:invoke"
     assert spec.source_policy is SourcePolicy.AUTO
-    assert '"_sources"' in result
+    assert result.data["_sources"]
     session.call_tool.assert_awaited_once()
     authorizer.authorize.assert_called_once()
 
@@ -225,7 +225,7 @@ async def test_mcp_policy_denial_stops_the_canonical_binding():
     result = await registry.execute(spec.name, {"query": "release"})
 
     assert spec.effect is CapabilityEffect.WRITE
-    assert f'"code": "{CapabilityStatus.FORBIDDEN}"' in result
+    assert result.status is CapabilityStatus.FORBIDDEN
     session.call_tool.assert_not_awaited()
 
 

@@ -129,6 +129,9 @@ class TokenUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+    model_calls: int = 0
+    tool_calls: int = 0
+    repair_calls: int = 0
 
 
 @dataclass(frozen=True, slots=True)

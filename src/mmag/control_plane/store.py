@@ -23,6 +23,9 @@ from .models import (
     Scope,
     StateTransition,
 )
+from .quota import QuotaStore
+from .releases import ReleaseStore
+from .runs import AgentRunStore
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -39,6 +42,9 @@ class SQLiteControlPlane:
         self.path = str(path)
         self._connection = SQLiteDatabase(path).connect()
         self._lock = threading.RLock()
+        self.quota = QuotaStore(self._connection, self._lock)
+        self.releases = ReleaseStore(self._connection, self._lock)
+        self.runs = AgentRunStore(self._connection, self._lock)
 
     def close(self) -> None:
         self._connection.close()

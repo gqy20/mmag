@@ -1041,10 +1041,10 @@ class TestToolRegistration:
             },
         )
         with patch("mmag.url_analyzer._github_get", AsyncMock(return_value=resp)):
-            result_str = await registry.execute("analyze_link", {"url": "https://github.com/o/r"})
-        import json
-
-        result = json.loads(result_str)
+            capability_result = await registry.execute(
+                "analyze_link", {"url": "https://github.com/o/r"}
+            )
+        result = capability_result.data
         assert result["status"] == "ok"
         assert result["kind"] == "github_repo"
         assert "stats" in result  # _format_link_info 提取的字段
@@ -1060,12 +1060,10 @@ class TestToolRegistration:
 
         resp = mock_response(status_code=404, headers={"X-RateLimit-Remaining": "59"})
         with patch("mmag.url_analyzer._github_get", AsyncMock(return_value=resp)):
-            result_str = await registry.execute(
+            capability_result = await registry.execute(
                 "analyze_link", {"url": "https://github.com/missing/r"}
             )
-        import json
-
-        result = json.loads(result_str)
+        result = capability_result.data
         assert result["status"] == "not_found"
         assert "error" in result
         # 错误情况下不应包含 stats/repo_info 字段

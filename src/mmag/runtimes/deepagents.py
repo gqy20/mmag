@@ -27,12 +27,13 @@ from pydantic import SecretStr
 
 from ..capabilities import (
     AuthorizationDecision,
-    CapabilityAuthorization,
+    CapabilityResult,
+    CapabilityStatus,
     get_capability_context,
 )
 from ..config import config
 from ..governance import get_governance_context
-from ..logger import get_logger, log_event, safe_hash
+from ..logger import get_logger, log_event
 from ..model_artifacts import strip_model_artifacts
 from ..skill_packages import get_skill_context
 from .base import (
@@ -91,15 +92,45 @@ def _register_mmag_profile() -> None:
 class ManagedChatModelFactory:
     """Create explicit Anthropic models without exposing provider choices to YAML."""
 
-    def __init__(self) -> None:
-        self._models: dict[tuple[int, float], BaseChatModel] = {}
+    def __init__(self, model_classes: Mapping[str, str] | None = None) -> None:
+        self.model_classes = dict(
+            model_classes
+            or {
+                "low-reasoning": config.anthropic_low_model,
+                "medium-reasoning": config.anthropic_medium_model,
+            }
+        )
+        if not self.model_classes or any(not name for name in self.model_classes.values()):
+            raise ValueError("every model class must map to a concrete model")
+        self._models: dict[tuple[str, int, float], BaseChatModel] = {}
 
-    def create(self, *, max_tokens: int, temperature: float) -> BaseChatModel:
-        key = (max_tokens, temperature)
+    def resolve(self, model_class: str) -> str:
+        try:
+            return self.model_classes[model_class]
+        except KeyError as error:
+            raise ValueError(f"unsupported model class {model_class!r}") from error
+
+    def validate(self, *, model_class: str, max_tokens: int, temperature: float) -> None:
+        self.resolve(model_class)
+        if max_tokens < 1:
+            raise ValueError("max_tokens must be positive")
+        if not 0 <= temperature <= 1:
+            raise ValueError("Anthropic temperature must be between 0 and 1")
+
+    def create(
+        self, *, model_class: str, max_tokens: int, temperature: float
+    ) -> BaseChatModel:
+        self.validate(
+            model_class=model_class,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        model_name = self.resolve(model_class)
+        key = (model_name, max_tokens, temperature)
         model = self._models.get(key)
         if model is None:
             model = ChatAnthropic(
-                model_name=config.anthropic_model,
+                model_name=model_name,
                 api_key=SecretStr(config.anthropic_api_key),
                 base_url=config.anthropic_base_url,
                 max_tokens_to_sample=max_tokens,
@@ -188,6 +219,18 @@ class DeepAgentRuntime:
         except Exception as error:
             translated = translate_runtime_error(error, runtime=self.runtime_name)
             raise translated from error
+
+    def resolve_model(self, request: RunRequest) -> str:
+        return self.model_factory.resolve(str(request.metadata.get("model_class") or ""))
+
+    def validate_model_policy(
+        self, *, model_class: str, max_tokens: int, temperature: float
+    ) -> None:
+        self.model_factory.validate(
+            model_class=model_class,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
 
     async def _run(self, request: RunRequest) -> AgentResult:
         await self.start()
@@ -300,6 +343,7 @@ class DeepAgentRuntime:
         )
         graph = create_deep_agent(
             model=self.model_factory.create(
+                model_class=str(request.metadata.get("model_class") or ""),
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
             ),
@@ -336,23 +380,38 @@ class DeepAgentRuntime:
         async def invoke(**arguments: Any) -> str:
             await self._emit(request, RunEventKind.TOOL_STARTED, name=name)
             authorization = self.capability_registry.authorization(name, arguments)
-            self._record_policy_decision(request, name, arguments, authorization)
-            approved = bool(
-                authorization
-                and authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL
+            if (
+                authorization is not None
+                and authorization.decision is AuthorizationDecision.DENY
+            ):
+                result = CapabilityResult(
+                    CapabilityStatus.FORBIDDEN,
+                    message=authorization.reason,
+                )
+            else:
+                result = await self.capability_registry.execute(
+                    name,
+                    arguments,
+                    preauthorized=authorization is not None,
+                )
+            payload = result.to_payload()
+            calls.append(
+                {
+                    "name": name,
+                    "arguments": dict(arguments),
+                    "result": payload,
+                    "status": result.status.value,
+                    "duration_ms": result.duration_ms,
+                    "error_code": (
+                        result.status.value if result.status.value != "success" else ""
+                    ),
+                }
             )
-            content = await self.capability_registry.execute(
-                name,
-                arguments,
-                approval_granted=approved,
-            )
-            payload = _json_payload(content)
-            calls.append({"name": name, "arguments": dict(arguments), "result": payload})
             if isinstance(payload, dict):
                 artifacts.extend(_mapping_items(payload.get("artifacts")))
                 deliveries.extend(_mapping_items(payload.get("deliveries")))
             await self._emit(request, RunEventKind.TOOL_COMPLETED, name=name)
-            return content
+            return _provider_tool_content(payload)
 
         return StructuredTool.from_function(
             coroutine=invoke,
@@ -360,50 +419,6 @@ class DeepAgentRuntime:
             description=str(schema.get("description") or name),
             args_schema=thaw(schema.get("input_schema") or {"type": "object"}),
         )
-
-    def _record_policy_decision(
-        self,
-        request: RunRequest,
-        capability: str,
-        arguments: Mapping[str, Any],
-        authorization: CapabilityAuthorization | None,
-    ) -> None:
-        decision = (
-            authorization.decision.value if authorization is not None else "unavailable"
-        )
-        log_event(
-            log,
-            "policy.decided",
-            status=decision,
-            capability=capability,
-            input_sha256=safe_hash(arguments),
-        )
-        if self.audit_sink is None:
-            return
-        try:
-            self.audit_sink.append_audit(
-                "policy.decision",
-                actor_id=request.context.actor_id,
-                scope_id=request.context.scope,
-                trace_id=request.context.trace_id,
-                target=capability,
-                decision=decision,
-                details={
-                    "schema_version": "1.0",
-                    "run_id": request.context.run_id,
-                    "policy_ref": request.metadata.get("policy_ref", ""),
-                    "input_sha256": safe_hash(arguments),
-                },
-            )
-        except Exception as error:
-            log_event(
-                log,
-                "audit.write_failed",
-                level=40,
-                status="degraded",
-                capability=capability,
-                error_code=type(error).__name__,
-            )
 
     def _interrupt_rules(
         self, capabilities: tuple[Mapping[str, Any], ...]
@@ -471,6 +486,7 @@ class DeepAgentRuntime:
     ) -> AgentResult:
         raw_interrupts = state.get("__interrupt__", ())
         if raw_interrupts:
+            messages = list(state.get("messages") or ())
             interruptions = tuple(
                 _interrupt_payload(item, thread_id, request, session)
                 for item in raw_interrupts
@@ -483,15 +499,14 @@ class DeepAgentRuntime:
                 status=RuntimeStatus.WAITING_APPROVAL,
                 capability_calls=tuple(session.calls),
                 interruptions=interruptions,
+                usage=_usage(messages, tool_calls=len(session.calls)),
             )
         output = state.get("structured_response")
         if output is not None and hasattr(output, "model_dump"):
             output = output.model_dump()
         structured = dict(output) if isinstance(output, Mapping) else None
+        repaired_fields = 0
         messages = list(state.get("messages") or ())
-        if structured is None and request.response_schema is not None:
-            candidate = _json_payload(_result_text(None, messages))
-            structured = dict(candidate) if isinstance(candidate, Mapping) else None
         if structured is not None and request.response_schema is not None:
             structured, repaired_fields = repair_structured_output(
                 structured,
@@ -505,7 +520,11 @@ class DeepAgentRuntime:
                     repaired_fields=repaired_fields,
                 )
         text = _result_text(structured, messages)
-        usage = _usage(messages)
+        usage = _usage(
+            messages,
+            tool_calls=len(session.calls),
+            repair_calls=1 if structured is not None and repaired_fields else 0,
+        )
         return AgentResult(
             text,
             self.runtime_name,
@@ -552,11 +571,11 @@ class DeepAgentRuntime:
             await request.event_sink(RunEvent(kind, text=text, name=name))
 
 
-def _json_payload(content: str) -> Any:
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return content
+def _provider_tool_content(payload: Any) -> str:
+    """Serialize only at the LangChain/model ToolMessage boundary."""
+    if isinstance(payload, str):
+        return payload
+    return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def _mapping_items(value: Any) -> list[Mapping[str, Any]]:
@@ -591,14 +610,26 @@ def _result_text(output: Mapping[str, Any] | None, messages: list[Any]) -> str:
     return ""
 
 
-def _usage(messages: list[Any]) -> TokenUsage:
+def _usage(
+    messages: list[Any], *, tool_calls: int = 0, repair_calls: int = 0
+) -> TokenUsage:
     input_tokens = 0
     output_tokens = 0
+    model_calls = 0
     for message in messages:
         metadata = getattr(message, "usage_metadata", None) or {}
+        if isinstance(message, AIMessage) and metadata:
+            model_calls += 1
         input_tokens += int(metadata.get("input_tokens") or 0)
         output_tokens += int(metadata.get("output_tokens") or 0)
-    return TokenUsage(input_tokens, output_tokens, 0.0)
+    return TokenUsage(
+        input_tokens,
+        output_tokens,
+        0.0,
+        model_calls,
+        tool_calls,
+        repair_calls,
+    )
 
 
 def _interrupt_payload(

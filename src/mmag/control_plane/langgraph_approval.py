@@ -182,31 +182,59 @@ class LangGraphApprovalCoordinator:
             frozenset(str(ref) for ref in execution_profiles if isinstance(ref, str) and ref),
         )
         self._transition_run(thread_id, "running", request_id)
-        with (
-            bind_capability_context(context),
-            skill_scope,
-            bind_governance_context(
-                GovernanceContext(
-                    request.requested_by,
-                    request.scope_id,
-                    resources={
-                        "actor_id": request.requested_by,
-                        "conversation_id": context.conversation_id,
+        try:
+            with (
+                bind_capability_context(context),
+                skill_scope,
+                bind_governance_context(
+                    GovernanceContext(
+                        request.requested_by,
+                        request.scope_id,
+                        resources={
+                            "actor_id": request.requested_by,
+                            "conversation_id": context.conversation_id,
+                        },
+                        roles=frozenset(
+                            str(role) for role in roles if isinstance(role, str) and role
+                        ),
+                        policy_ref=str(governance.get("policy_ref") or ""),
+                        allowed_capabilities=tuple(
+                            str(name)
+                            for name in allowed_capabilities
+                            if isinstance(name, str) and name
+                        ),
+                    )
+                ),
+            ):
+                result = await self.gateway.resume(
+                    thread_id,
+                    {
+                        "decisions": decisions,
+                        "runtime_snapshot": payload.get("runtime_snapshot", {}),
                     },
-                    roles=frozenset(str(role) for role in roles if isinstance(role, str) and role),
-                    policy_ref=str(governance.get("policy_ref") or ""),
-                    allowed_capabilities=tuple(
-                        str(name) for name in allowed_capabilities if isinstance(name, str) and name
-                    ),
                 )
-            ),
-        ):
-            result = await self.gateway.resume(
-                thread_id,
-                {
-                    "decisions": decisions,
-                    "runtime_snapshot": payload.get("runtime_snapshot", {}),
+        except Exception as error:
+            run_id = _lifecycle_run_id(thread_id)
+            if run_id is not None:
+                self.store.runs.record_failure(
+                    run_id, error_code=type(error).__name__
+                )
+            raise
+        run_id = _lifecycle_run_id(thread_id)
+        if run_id is not None:
+            self.store.runs.record_result(
+                run_id,
+                status=result.status.value,
+                usage={
+                    "input_tokens": result.usage.input_tokens,
+                    "output_tokens": result.usage.output_tokens,
+                    "cost_usd": result.usage.cost_usd,
+                    "model_calls": result.usage.model_calls,
+                    "tool_calls": result.usage.tool_calls,
+                    "repair_calls": result.usage.repair_calls,
                 },
+                capability_calls=len(result.capability_calls),
+                artifact_count=len(result.artifacts),
             )
         if result.status is not RuntimeStatus.WAITING_APPROVAL:
             self._transition_run(thread_id, "succeeded", request_id)
@@ -286,3 +314,9 @@ def _decisions(payload: dict[str, Any], approved: bool) -> list[dict[str, str]]:
         }
         for call in payload.get("tool_calls", ())
     ]
+
+
+def _lifecycle_run_id(thread_id: str) -> str | None:
+    if not thread_id.startswith("mattermost:"):
+        return None
+    return f"run:{thread_id.removeprefix('mattermost:')}"

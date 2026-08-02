@@ -66,6 +66,8 @@ _FIELD_TO_ENV: dict[str, str] = {
     "mm_stream_min_chars": "MM_STREAM_MIN_CHARS",
     "anthropic_api_key": "ANTHROPIC_API_KEY",
     "anthropic_model": "ANTHROPIC_MODEL",
+    "anthropic_low_model": "ANTHROPIC_LOW_MODEL",
+    "anthropic_medium_model": "ANTHROPIC_MEDIUM_MODEL",
     "anthropic_base_url": "ANTHROPIC_BASE_URL",
     "max_context_messages": "MAX_CONTEXT_MESSAGES",
     "max_context_chars": "MAX_CONTEXT_CHARS",
@@ -148,6 +150,8 @@ class Config:
     # Anthropic
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    anthropic_low_model: str = _text_env("ANTHROPIC_LOW_MODEL", anthropic_model)
+    anthropic_medium_model: str = _text_env("ANTHROPIC_MEDIUM_MODEL", anthropic_model)
     anthropic_base_url: str | None = os.getenv("ANTHROPIC_BASE_URL") or None
     # Agent
     max_context_messages: int = int(

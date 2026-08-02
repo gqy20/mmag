@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..logger import get_logger
 from .lifecycle import LifecycleService
@@ -157,6 +157,16 @@ class MessagePipeline:
             "source_attempts": source.attempts,
             "source_error": source.last_error,
         }
+        try:
+            source_run = self.store.get_lifecycle_entity(
+                EntityType.AGENT_RUN, f"run:{event_id}"
+            )
+        except KeyError:
+            source_run = None
+        if source_run is not None and isinstance(source_run.payload.get("snapshot"), dict):
+            payload["_mmag_replay"]["package_snapshot"] = dict(
+                source_run.payload["snapshot"]
+            )
         replay = InboundEvent(
             event_id=replay_id,
             platform=source.event.platform,
@@ -349,11 +359,19 @@ class MessagePipeline:
             try:
                 self.store.get_lifecycle_entity(entity_type, entity_id)
             except KeyError:
+                payload: dict[str, Any] = {"inbox_event_id": event.event_id}
+                replay = event.payload.get("_mmag_replay", {})
+                if (
+                    entity_type is EntityType.AGENT_RUN
+                    and isinstance(replay, dict)
+                    and isinstance(replay.get("package_snapshot"), dict)
+                ):
+                    payload["required_snapshot"] = dict(replay["package_snapshot"])
                 self.lifecycle.create(
                     entity_type,
                     entity_id,
                     scope_id=event.conversation_id,
-                    payload={"inbox_event_id": event.event_id},
+                    payload=payload,
                 )
 
     def _fail_execution(self, event: InboundEvent, reason: str) -> None:

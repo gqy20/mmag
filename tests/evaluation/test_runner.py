@@ -26,7 +26,9 @@ class FakeDriver:
             thread_consistent=True,
             duration_seconds=1.5,
             post_ids=("reply-1",),
-            control_plane=ControlPlaneObservation("succeeded", "succeeded", ("delivered",)),
+            control_plane=ControlPlaneObservation(
+                "succeeded", "succeeded", ("delivered",), "mmchat"
+            ),
         )
 
 

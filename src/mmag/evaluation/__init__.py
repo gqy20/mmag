@@ -1,6 +1,7 @@
 """Versioned evaluation assets, runners, assertions, and external drivers."""
 
 from .assertions import DeterministicEvaluator
+from .gate import PackageActivationError, PackageActivationGate
 from .loader import EvaluationAssetError, EvaluationAssetLoader
 from .mattermost import (
     EvaluationConfigurationError,
@@ -41,5 +42,7 @@ __all__ = [
     "EvaluationSuite",
     "JSONEvaluationReporter",
     "MattermostEvaluationDriver",
+    "PackageActivationError",
+    "PackageActivationGate",
     "SQLiteEvaluationObserver",
 ]
