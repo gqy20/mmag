@@ -99,7 +99,7 @@ def test_fresh_database_migrates_to_latest_schema():
     conn.close()
 
 
-def test_existing_database_adds_missing_is_bot_without_losing_rows():
+def test_existing_database_purges_unscoped_profiles():
     conn = _memory_connection()
     _create_legacy_user_profiles(conn)
 
@@ -110,10 +110,10 @@ def test_existing_database_adds_missing_is_bot_without_losing_rows():
         "SELECT user_id, username, is_bot FROM user_profiles WHERE user_id='u1'"
     ).fetchone()
     assert "is_bot" in columns
-    assert dict(profile) == {"user_id": "u1", "username": "alice", "is_bot": 0}
+    assert profile is None
 
 
-def test_legacy_message_cache_moves_data_and_rebuilds_fts():
+def test_legacy_message_cache_is_removed_with_unscoped_data():
     conn = _memory_connection()
     _create_legacy_message_cache(conn)
 
@@ -132,8 +132,8 @@ def test_legacy_message_cache_moves_data_and_rebuilds_fts():
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_cache'"
     ).fetchone()
 
-    assert message["message"] == "部署流程"
-    assert fts["message"] == "部 署 流 程"
+    assert message is None
+    assert fts is None
     assert old_table is None
 
 
@@ -195,7 +195,7 @@ def test_future_database_version_fails_fast():
         apply_migrations(conn)
 
 
-def test_memory_opens_and_migrates_legacy_database():
+def test_memory_opens_and_purges_unscoped_legacy_database():
     path = "file:mmag-legacy-integration?mode=memory&cache=shared"
     legacy = sqlite3.connect(path, uri=True)
     _create_legacy_message_cache(legacy)
@@ -208,5 +208,5 @@ def test_memory_opens_and_migrates_legacy_database():
     verification.close()
     memory.close()
 
-    assert [message["id"] for message in messages] == ["p1"]
+    assert messages == []
     assert version == LATEST_SCHEMA_VERSION

@@ -437,6 +437,24 @@ def _v010_add_tenant_isolation(connection: sqlite3.Connection) -> None:
     )
 
 
+def _v011_purge_pre_isolation_memory(connection: sqlite3.Connection) -> None:
+    """Discard memory whose actor and tenant provenance cannot be trusted.
+
+    Control-plane runs, approvals, artifacts, package releases, and audit records are
+    intentionally retained. Only conversational memory derived before strict scope
+    isolation is removed.
+    """
+    connection.execute("DELETE FROM message_log_fts")
+    connection.execute("DELETE FROM message_log_fts_map")
+    connection.execute("DELETE FROM message_log")
+    connection.execute("DELETE FROM team_knowledge_fts")
+    connection.execute("DELETE FROM team_knowledge")
+    connection.execute("DELETE FROM conversation_segments")
+    connection.execute("DELETE FROM open_items")
+    connection.execute("DELETE FROM user_profiles")
+    connection.execute("DELETE FROM url_cache")
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -497,6 +515,12 @@ DEFAULT_MIGRATIONS = (
         name="add tenant isolation",
         checksum=_checksum("v010-add-tenant-isolation-20260802"),
         upgrade=_v010_add_tenant_isolation,
+    ),
+    Migration(
+        version=11,
+        name="purge pre-isolation memory",
+        checksum=_checksum("v011-purge-pre-isolation-memory-20260802"),
+        upgrade=_v011_purge_pre_isolation_memory,
     ),
 )
 

@@ -107,6 +107,34 @@ def _posted_event() -> dict:
     }
 
 
+def test_post_edit_updates_persisted_and_working_memory():
+    handler, _ = _make_handler()
+    handler.memory.update_message.return_value = True
+    handler.working_memory["channel-1"] = [dict(_posted_event()["data"]["post"])]
+    event = _posted_event()
+    event["data"]["post"]["message"] = "更新后的方案"
+    event["data"]["post"]["edit_at"] = 1_753_929_700_000
+
+    handler.on_post_edited(event)
+
+    handler.memory.update_message.assert_called_once_with(event["data"]["post"])
+    assert handler.working_memory["channel-1"][0]["message"] == "更新后的方案"
+
+
+def test_post_delete_removes_persisted_and_working_memory():
+    handler, _ = _make_handler()
+    handler.memory.delete_message.return_value = True
+    handler.working_memory["channel-1"] = [dict(_posted_event()["data"]["post"])]
+    event = _posted_event()
+    event["event"] = "post_deleted"
+    event["data"]["post"] = '{"id":"post-1","channel_id":"channel-1"}'
+
+    handler.on_post_deleted(event)
+
+    handler.memory.delete_message.assert_called_once_with("post-1")
+    assert handler.working_memory["channel-1"] == []
+
+
 @pytest.mark.asyncio
 async def test_explicit_message_routes_and_delivers_reply():
     handler, runtime = _make_handler("任务完成")

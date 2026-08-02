@@ -25,7 +25,8 @@
 
 - 当前 Scope 形式为 `mattermost:<installation>:<tenant>:usr:<user>` 或
   `mattermost:<installation>:<tenant>:chn:<channel>`。
-- 现有消息、知识、摘要、URL 缓存和用户画像已建立租户查询边界；历史数据迁移到 `default/default`，生产
-  升级后应显式配置对应 ID。
-- PersonalSpace、WorkCase、SkillDraft、成员变更/消息删除传播、向量索引以及生产 Sandbox 仍是后续阶段，
+- 现有消息、知识、摘要、URL 缓存和用户画像已建立租户查询边界。由于旧数据没有可信的租户与身份来源，
+  v11 升级会清空这些历史记忆；Run、审批、Artifact、Package Release 与审计记录不受影响。
+- `post_edited` 会同步更新消息和 FTS，`post_deleted` 会删除消息和 FTS 并使相关摘要失效。
+- PersonalSpace、WorkCase、SkillDraft、成员关系传播、知识溯源删除、向量索引以及生产 Sandbox 仍是后续阶段，
   本 ADR 不将它们视为已完成。

@@ -352,8 +352,8 @@ Sandbox；切换远程 Sandbox 只替换 Execution Backend。
   O/P/G 使用 Channel Scope，不再以 Team 充当租户；
 - [x] 用户画像以及现有消息、知识、摘要和 URL 缓存查询已按 Installation + Tenant 分区；
 - [x] 普通频道不再注入或投影当前用户私人画像；
-- [ ] 个人案例、个人长期记忆和 Skill 草稿还没有独立 PersonalSpace；消息编辑/删除、成员退出和用户停用
-  尚未同步清理上下文、索引和后台任务权限；
+- [ ] 个人案例、个人长期记忆和 Skill 草稿还没有独立 PersonalSpace；消息编辑/删除已同步消息库与 FTS，
+  但成员退出、用户停用及派生知识的权限撤销传播尚未实现；
 - [x] LangGraph Checkpoint 恢复强制匹配原 actor、scope、installation 和 tenant；
 - [ ] 本地完整 Shell 是 Demo 例外，Run 目录约定不能构成生产级文件系统隔离。
 
@@ -371,8 +371,9 @@ Sandbox；切换远程 Sandbox 只替换 Execution Backend。
 - [ ] 后续向量索引必须使用相同 Scope 分区，不能先全库召回再在应用层过滤；
 - [ ] Bot Token 只代表服务身份，不继承为发消息用户的权限；读取、恢复、审批、分享和交付前通过
   Mattermost 成员关系/角色及 MMAG Policy 做动态影子授权，授权查询失败时默认拒绝；
-- [ ] 消费 `post_edited`、`post_deleted`、成员关系和用户状态事件，及时更新或撤销消息、摘要、索引、
-  缓存与后台任务权限；MMAG 保留策略不得绕过 Mattermost/企业数据保留要求；
+- [ ] `post_edited`、`post_deleted` 已更新或撤销消息、FTS 和摘要有效状态；继续消费成员关系和用户状态
+  事件，并将撤销传播到派生知识、Artifact 和待恢复任务；MMAG 保留策略不得绕过 Mattermost/企业数据
+  保留要求；
 - [ ] 个人 Artifact 默认只交付到本人 DM；发布到项目或频道时创建带 provenance 的新版本并显式审批，
   不原地放宽原对象 Scope；
 - [ ] 覆盖跨用户 WorkCase/Artifact/检索、DM 空 `team_id`、退出私有频道、删除消息、伪造 actor/scope、

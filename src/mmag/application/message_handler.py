@@ -102,6 +102,34 @@ class MessageHandler:
         if inbound is not None:
             await self.pipeline.accept(inbound, on_accepted=self._acknowledge_accepted)
 
+    def on_post_edited(self, event: dict) -> None:
+        post = self._parse_event_post(event)
+        if post is None or not self.memory.update_message(post):
+            return
+        channel_id = str(post.get("channel_id") or "")
+        for cached in self.working_memory.get(channel_id, []):
+            if cached.get("id") == post.get("id"):
+                cached["message"] = post.get("message", "")
+                cached["edit_at"] = post.get("edit_at", 0)
+                break
+        log_event(log, "message.edited", status="completed", message_id=post["id"])
+
+    def on_post_deleted(self, event: dict) -> None:
+        post = self._parse_event_post(event)
+        if post is None:
+            return
+        post_id = str(post.get("id") or "")
+        if not post_id or not self.memory.delete_message(post_id):
+            return
+        channel_id = str(post.get("channel_id") or "")
+        if channel_id in self.working_memory:
+            self.working_memory[channel_id] = [
+                cached
+                for cached in self.working_memory[channel_id]
+                if cached.get("id") != post_id
+            ]
+        log_event(log, "message.deleted", status="completed", message_id=post_id)
+
     async def _acknowledge_accepted(self, event: InboundEvent) -> None:
         post = self._parse_post(dict(event.payload))
         if post is None or not self._accept(post):
@@ -221,17 +249,23 @@ class MessageHandler:
 
     @staticmethod
     def _parse_post(event: dict) -> dict | None:
+        parsed = MessageHandler._parse_event_post(event)
+        return parsed if parsed is not None and "message" in parsed else None
+
+    @staticmethod
+    def _parse_event_post(event: dict) -> dict | None:
         raw = event.get("data", {}).get("post")
         if isinstance(raw, dict):
-            return raw
-        if not isinstance(raw, str):
+            parsed = raw
+        elif isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as error:
+                log.warning("无法解析 post JSON: %s", error)
+                return None
+        else:
             return None
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError as error:
-            log.warning("无法解析 post JSON: %s", error)
-            return None
-        return parsed if isinstance(parsed, dict) and {"id", "message"} <= parsed.keys() else None
+        return parsed if isinstance(parsed, dict) and "id" in parsed else None
 
     def _accept(self, post: dict) -> bool:
         if post.get("user_id") == self.identity.user_id or post.get("type"):

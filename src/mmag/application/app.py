@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import time
 from importlib.metadata import version
 from ipaddress import ip_address
@@ -416,20 +417,39 @@ class Agent:
         event_type = message.get("event", "")
         if event_type == "posted":
             await self.message_handler.on_posted(message)
+        elif event_type == "post_edited":
+            self.message_handler.on_post_edited(message)
+        elif event_type == "post_deleted":
+            self.message_handler.on_post_deleted(message)
+        elif event_type in {"channel_created", "channel_updated", "channel_deleted"}:
+            self.mm.invalidate_channel(self._ws_entity_id(message, "channel", "channel_id"))
+        elif event_type == "user_updated":
+            self.mm.invalidate_user(self._ws_entity_id(message, "user", "user_id"))
+        elif event_type in {"user_added", "user_removed", "channel_member_updated"}:
+            self.mm.invalidate_channel(self._ws_entity_id(message, "channel", "channel_id"))
+            self.mm.invalidate_user(self._ws_entity_id(message, "user", "user_id"))
         elif event_type not in {
             "hello",
-            "post_edited",
-            "post_deleted",
             "typing",
             "reaction_added",
             "reaction_removed",
             "status_change",
-            "channel_created",
-            "channel_updated",
-            "user_updated",
             "ephemeral_message",
         }:
             log.debug("未处理事件: %s", event_type)
+
+    @staticmethod
+    def _ws_entity_id(message: dict, object_key: str, id_key: str) -> str:
+        data = message.get("data") or {}
+        raw = data.get(object_key)
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                raw = None
+        if isinstance(raw, dict) and raw.get("id"):
+            return str(raw["id"])
+        return str(data.get(id_key) or "")
 
     @staticmethod
     def on_ws_response(message: dict) -> None:

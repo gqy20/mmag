@@ -161,6 +161,13 @@ class MMClient:
     def get_username(self, user_id: str) -> str:
         return self.get_user(user_id).get("username", user_id[:8])
 
+    def invalidate_user(self, user_id: str) -> None:
+        """Drop cached user metadata after a Mattermost lifecycle event."""
+        if user_id:
+            self._users.pop(user_id, None)
+            if self._me is not None and self._me.get("id") == user_id:
+                self._me = None
+
     def get_channel(self, channel_id: str) -> dict:
         if channel_id not in self._channels:
             try:
@@ -185,6 +192,11 @@ class MMClient:
                     "display_name": channel_id[:8],
                 }
         return self._channels[channel_id]
+
+    def invalidate_channel(self, channel_id: str) -> None:
+        """Drop cached channel metadata after membership or channel changes."""
+        if channel_id:
+            self._channels.pop(channel_id, None)
 
     def send_post(
         self,

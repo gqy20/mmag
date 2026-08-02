@@ -118,6 +118,77 @@ class Memory:
             )
             return False
 
+    def update_message(self, post: dict) -> bool:
+        """Update one namespaced message and its FTS entry after post_edited."""
+        post_id = str(post.get("id") or "")
+        message = str(post.get("message") or "")
+        if not post_id or not message or len(message) > 50000:
+            return False
+        truncated = message[:10000]
+        row = self._conn.execute(
+            """SELECT map.rowid
+            FROM message_log AS log
+            JOIN message_log_fts_map AS map ON map.message_id=log.id
+            WHERE log.installation_id=? AND log.tenant_id=? AND log.id=?""",
+            (self.installation_id, self.tenant_id, post_id),
+        ).fetchone()
+        if row is None:
+            return False
+        try:
+            self._conn.execute(
+                """UPDATE message_log SET message=?
+                WHERE installation_id=? AND tenant_id=? AND id=?""",
+                (truncated, self.installation_id, self.tenant_id, post_id),
+            )
+            self._conn.execute(
+                "UPDATE message_log_fts SET message=? WHERE rowid=?",
+                (_cjk_tokenize_for_fts(truncated), int(row[0])),
+            )
+            self._conn.commit()
+            return True
+        except Exception:
+            self._conn.rollback()
+            log.exception("update_message 失败 (id=%s)", post_id[:12])
+            return False
+
+    def delete_message(self, post_id: str) -> bool:
+        """Delete one namespaced message and invalidate summaries derived from it."""
+        row = self._conn.execute(
+            """SELECT log.channel_id, map.rowid
+            FROM message_log AS log
+            LEFT JOIN message_log_fts_map AS map ON map.message_id=log.id
+            WHERE log.installation_id=? AND log.tenant_id=? AND log.id=?""",
+            (self.installation_id, self.tenant_id, post_id),
+        ).fetchone()
+        if row is None:
+            return False
+        channel_id, fts_rowid = str(row[0]), row[1]
+        try:
+            if fts_rowid is not None:
+                self._conn.execute(
+                    "DELETE FROM message_log_fts WHERE rowid=?", (int(fts_rowid),)
+                )
+            self._conn.execute(
+                "DELETE FROM message_log_fts_map WHERE message_id=?", (post_id,)
+            )
+            self._conn.execute(
+                """DELETE FROM message_log
+                WHERE installation_id=? AND tenant_id=? AND id=?""",
+                (self.installation_id, self.tenant_id, post_id),
+            )
+            self._conn.execute(
+                """UPDATE conversation_segments SET status='stale'
+                WHERE installation_id=? AND tenant_id=? AND channel_id=?
+                  AND status='active'""",
+                (self.installation_id, self.tenant_id, channel_id),
+            )
+            self._conn.commit()
+            return True
+        except Exception:
+            self._conn.rollback()
+            log.exception("delete_message 失败 (id=%s)", post_id[:12])
+            return False
+
     def get_recent_messages(self, channel_id: str, limit: int = 30) -> list[dict]:
         """获取频道最近 N 条消息(时间正序,旧→新)"""
         return self.repositories.messages.recent(channel_id, limit)
