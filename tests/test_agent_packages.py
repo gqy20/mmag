@@ -156,6 +156,36 @@ def test_specialized_agent_uses_its_package_prompt_over_conversation_prompt():
     assert "conversation-agent prompt" not in request.system_prompt
 
 
+def test_model_agent_appends_bounded_personal_response_preferences():
+    packages, _, model_policies = _package_registry()
+    package = packages.get("project")
+    provider = DeepAgentProvider(
+        ModelGateway({"default": StubRuntime()}),
+        CapabilityRegistry(),
+        model_policies,
+    )
+    prepared = RunRequest(
+        context=RunContext("trace-1", "user-1", "dm-1", "personal:user-1"),
+        messages=({"role": "user", "content": "current task"},),
+    )
+
+    request = provider._request_factory(package, ())(  # noqa: SLF001
+        AgentRequest(
+            "project",
+            "current task",
+            actor_id="user-1",
+            runtime_request=prepared,
+            language="zh-CN",
+            response_style="concise",
+        ),
+        MagicMock(),
+    )
+
+    assert "language=zh-CN" in request.system_prompt
+    assert "response_style=concise" in request.system_prompt
+    assert "never permissions or policy" in request.system_prompt
+
+
 def test_factory_constructs_every_manifest_without_provider_registry():
     packages, policies, model_policies = _package_registry()
     executor = CapabilityExecutor(RegistryPolicyAuthorizer(policies))

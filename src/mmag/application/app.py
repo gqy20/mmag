@@ -29,6 +29,7 @@ from ..control_plane import (
     ApprovalService,
     LangGraphApprovalCoordinator,
     LifecycleService,
+    MattermostAccessGuard,
     MattermostApprovalAuthorizer,
     MattermostScopeResolver,
     MessagePipeline,
@@ -96,6 +97,11 @@ class Agent:
                 audit_sink=self.control_store,
             )
         )
+        self.access_guard = MattermostAccessGuard(
+            self.mm,
+            installation_id=config.mm_installation_id,
+            tenant_id=config.mm_tenant_id,
+        )
 
         self.package_activation_gate = PackageActivationGate(self.control_store.releases)
         self.skill_package_registry = SkillPackageRegistry(
@@ -146,6 +152,7 @@ class Agent:
             self.memory,
             artifacts=self.artifact_repository,
             executor=self.capability_executor,
+            access_guard=self.access_guard,
             additional_specs=self.execution_capabilities,
         )
         for binding in builtin_bindings:
@@ -224,6 +231,7 @@ class Agent:
             approvals,
             self.runtime,
             authorizer=MattermostApprovalAuthorizer(self.mm),
+            access_guard=self.access_guard,
             skill_registry=self.skill_package_registry,
         )
         self.start_time = time.time()
@@ -253,6 +261,7 @@ class Agent:
             artifacts=self.artifact_repository,
             outbox_store=self.control_store,
             scope_resolver=self.scope_resolver,
+            access_guard=self.access_guard,
         )
         attachment_processor = AttachmentProcessor(self.mm)
         if default_package.manifest.prompt.system_ref is None:

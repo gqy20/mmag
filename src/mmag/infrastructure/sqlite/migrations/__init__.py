@@ -455,6 +455,16 @@ def _v011_purge_pre_isolation_memory(connection: sqlite3.Connection) -> None:
     connection.execute("DELETE FROM url_cache")
 
 
+def _v012_add_delivery_actor(connection: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(outbox_deliveries)")
+    }
+    if "actor_id" not in columns:
+        connection.execute(
+            "ALTER TABLE outbox_deliveries ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''"
+        )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -521,6 +531,12 @@ DEFAULT_MIGRATIONS = (
         name="purge pre-isolation memory",
         checksum=_checksum("v011-purge-pre-isolation-memory-20260802"),
         upgrade=_v011_purge_pre_isolation_memory,
+    ),
+    Migration(
+        version=12,
+        name="add delivery actor",
+        checksum=_checksum("v012-add-delivery-actor-20260802"),
+        upgrade=_v012_add_delivery_actor,
     ),
 )
 

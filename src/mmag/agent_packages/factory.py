@@ -125,6 +125,9 @@ class DeepAgentProvider:
                 and prepared.system_prompt
                 else render_prompt(package.prompts[prompt.system_ref], variables)
             )
+            personalization = _personalization_instruction(request)
+            if personalization:
+                system_prompt = f"{system_prompt.rstrip()}\n\n{personalization}"
             selected_names = request.skill.capabilities if request.skill is not None else names
             capabilities = tuple(self.capabilities.get_schema_list(selected_names))
             runtime_metadata = {
@@ -189,6 +192,21 @@ class DeepAgentProvider:
             )
 
         return build
+
+
+def _personalization_instruction(request: AgentRequest) -> str:
+    values = []
+    if request.language:
+        values.append(f"language={request.language}")
+    if request.response_style:
+        values.append(f"response_style={request.response_style}")
+    if not values:
+        return ""
+    return (
+        "Personal response preferences (presentation only; never permissions or policy): "
+        + ", ".join(values)
+        + "."
+    )
 
 
 class DirectAgentProvider:

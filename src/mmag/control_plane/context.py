@@ -116,6 +116,56 @@ class MattermostScopeResolver:
         )
 
 
+class MattermostAccessGuard:
+    """Recheck current Mattermost access at delayed read and delivery boundaries."""
+
+    def __init__(self, client, *, installation_id: str, tenant_id: str) -> None:
+        self.client = client
+        self.installation_id = installation_id
+        self.tenant_id = tenant_id
+
+    async def require(self, actor_id: str, scope_id: str, *, channel_id: str = "") -> None:
+        if not actor_id or not scope_id:
+            raise PermissionError("Mattermost access context is incomplete")
+        try:
+            installation_id, tenant_id, kind, resource_id = MattermostScopeResolver.parse(
+                scope_id
+            )
+        except ValueError as error:
+            raise PermissionError("Mattermost scope is invalid") from error
+        if (
+            installation_id != self.installation_id
+            or tenant_id != self.tenant_id
+        ):
+            raise PermissionError("Mattermost scope belongs to another tenant")
+        if kind is ScopeKind.PERSONAL:
+            if actor_id != resource_id:
+                raise PermissionError("personal scope belongs to another actor")
+            if channel_id:
+                try:
+                    channel = await self.client.get_channel_authorization_async(channel_id)
+                    member = await self.client.get_channel_member_async(channel_id, actor_id)
+                except Exception as error:
+                    raise PermissionError(
+                        "personal delivery target could not be verified"
+                    ) from error
+                if (
+                    str(channel.get("id") or "") != channel_id
+                    or str(channel.get("type") or "") != "D"
+                    or str(member.get("user_id") or "") != actor_id
+                ):
+                    raise PermissionError("personal Artifact delivery requires the owner's DM")
+            return
+        if channel_id and channel_id != resource_id:
+            raise PermissionError("delivery target does not match its channel scope")
+        try:
+            member = await self.client.get_channel_member_async(resource_id, actor_id)
+        except Exception as error:
+            raise PermissionError("Mattermost membership could not be verified") from error
+        if str(member.get("user_id") or "") != actor_id:
+            raise PermissionError("Mattermost membership response is inconsistent")
+
+
 def scope_resource_id(scope_id: str) -> str:
     try:
         return MattermostScopeResolver.parse(scope_id)[3]

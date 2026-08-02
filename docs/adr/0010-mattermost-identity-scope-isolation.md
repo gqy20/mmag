@@ -28,5 +28,7 @@
 - 现有消息、知识、摘要、URL 缓存和用户画像已建立租户查询边界。由于旧数据没有可信的租户与身份来源，
   v11 升级会清空这些历史记忆；Run、审批、Artifact、Package Release 与审计记录不受影响。
 - `post_edited` 会同步更新消息和 FTS，`post_deleted` 会删除消息和 FTS 并使相关摘要失效。
+- Artifact 读取意图、Checkpoint 审批恢复和 Outbox 发送通过同一动态访问检查重新确认原 actor 的当前
+  频道成员关系；个人 Artifact 只能交付到 owner 的 DM，Mattermost 鉴权异常时默认拒绝。
 - PersonalSpace、WorkCase、SkillDraft、成员关系传播、知识溯源删除、向量索引以及生产 Sandbox 仍是后续阶段，
   本 ADR 不将它们视为已完成。

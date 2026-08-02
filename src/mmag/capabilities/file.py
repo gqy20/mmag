@@ -10,6 +10,7 @@ from .context import CapabilityContext, get_capability_context
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from ..control_plane import MattermostAccessGuard
     from ..execution import ArtifactRepository
 
 _FILE_REQUEST_KEYWORDS = (
@@ -41,6 +42,7 @@ def create_send_file_capability(
     artifacts: ArtifactRepository | None = None,
     *,
     context_provider: Callable[[], CapabilityContext | None] = get_capability_context,
+    access_guard: MattermostAccessGuard | None = None,
 ) -> CapabilitySpec:
     """Create an approval-gated delivery intent for an existing Artifact."""
 
@@ -53,6 +55,12 @@ def create_send_file_capability(
         if artifacts is None:
             return {"error": "Artifact Repository 未配置。"}
         try:
+            if access_guard is not None:
+                await access_guard.require(
+                    context.actor_id,
+                    context.scope,
+                    channel_id=context.conversation_id,
+                )
             stored, _ = artifacts.resolve(artifact_ref, scope_id=context.scope)
         except (
             KeyError,

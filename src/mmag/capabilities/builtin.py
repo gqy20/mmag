@@ -19,6 +19,7 @@ from .link import create_analyze_link_capability
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from ..control_plane import MattermostAccessGuard
     from ..execution import ArtifactRepository
     from .base import CapabilityExecutor, CapabilitySpec
     from .registry import CapabilityBinding
@@ -30,6 +31,7 @@ def create_builtin_capabilities(
     *,
     artifacts: ArtifactRepository | None = None,
     context_provider: Callable[[], CapabilityContext | None] = get_capability_context,
+    access_guard: MattermostAccessGuard | None = None,
     additional_specs: tuple[CapabilitySpec, ...] = (),
 ) -> list[CapabilitySpec]:
     """Create the ordered built-in catalog shared by every Runtime binding."""
@@ -41,7 +43,11 @@ def create_builtin_capabilities(
         create_save_knowledge_capability(memory),
         create_get_user_profile_capability(mm_client, memory),
         create_analyze_link_capability(memory),
-        create_send_file_capability(artifacts, context_provider=context_provider),
+        create_send_file_capability(
+            artifacts,
+            context_provider=context_provider,
+            access_guard=access_guard,
+        ),
         *additional_specs,
     ]
 
@@ -52,6 +58,7 @@ def build_builtin_bindings(
     *,
     artifacts: ArtifactRepository | None = None,
     executor: CapabilityExecutor,
+    access_guard: MattermostAccessGuard | None = None,
     additional_specs: tuple[CapabilitySpec, ...] = (),
 ) -> list[CapabilityBinding]:
     """Project the canonical built-in catalog onto the default runtime surface."""
@@ -63,6 +70,7 @@ def build_builtin_bindings(
             mm_client,
             memory,
             artifacts=artifacts,
+            access_guard=access_guard,
             additional_specs=additional_specs,
         )
     ]

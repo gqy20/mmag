@@ -739,6 +739,18 @@ class Memory:
         """
         return self.repositories.profiles.get(user_id, decode=True)
 
+    def get_personal_preferences(self, user_id: str) -> dict[str, object]:
+        """Return bounded routing and response preferences for one tenant actor."""
+        return self.repositories.profiles.preferences(user_id)
+
+    def set_personal_preferences(
+        self, user_id: str, preferences: object
+    ) -> dict[str, object]:
+        """Persist a normalized personal preference contract."""
+        if not user_id:
+            raise ValueError("personal preference user_id is required")
+        return self.repositories.profiles.set_preferences(user_id, preferences)
+
     # ---- 团队知识 ----
 
     def add_knowledge(self, channel_id: str, key: str, value: str, confidence: float = 0.5):

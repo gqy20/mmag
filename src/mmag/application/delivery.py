@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from ..client import PROP_FROM_BOT, PROP_TRUE
 from ..config import config
-from ..control_plane import MattermostScopeResolver, OutboundMessage
+from ..control_plane import MattermostAccessGuard, MattermostScopeResolver, OutboundMessage
 from ..logger import get_logger
 
 if TYPE_CHECKING:
@@ -37,6 +37,7 @@ class MattermostDelivery:
         artifacts: ArtifactRepository | None = None,
         outbox_store=None,
         scope_resolver: MattermostScopeResolver | None = None,
+        access_guard: MattermostAccessGuard | None = None,
     ):
         self.mm = mm_client
         self.memory = memory
@@ -45,6 +46,11 @@ class MattermostDelivery:
         self.artifacts = artifacts
         self.outbox_store = outbox_store
         self.scope_resolver = scope_resolver or MattermostScopeResolver(
+            mm_client,
+            installation_id=config.mm_installation_id,
+            tenant_id=config.mm_tenant_id,
+        )
+        self.access_guard = access_guard or MattermostAccessGuard(
             mm_client,
             installation_id=config.mm_installation_id,
             tenant_id=config.mm_tenant_id,
@@ -94,6 +100,13 @@ class MattermostDelivery:
         if not message:
             log.warning("reply(): 消息为空，跳过发送")
             return None
+        scope_id = self.scope(post)
+        actor_id = str(post.get("user_id") or "")
+        await self.access_guard.require(
+            actor_id,
+            scope_id,
+            channel_id=str(post.get("channel_id") or ""),
+        )
         collector = OUTBOUND_COLLECTOR.get()
         if collector is not None:
             collector.append(
@@ -103,7 +116,8 @@ class MattermostDelivery:
                     text=message,
                     props={PROP_FROM_BOT: PROP_TRUE},
                     root_id=self.thread_root(post),
-                    scope_id=self.scope(post),
+                    scope_id=scope_id,
+                    actor_id=actor_id,
                 )
             )
             return "outbox:pending"
@@ -125,7 +139,7 @@ class MattermostDelivery:
             post["channel_id"],
             message,
             self.thread_root(post),
-            self.scope(post),
+            scope_id,
         )
         return post_id
 
@@ -155,6 +169,7 @@ class MattermostDelivery:
                     scope_id=scope_id,
                     actions=rendered.actions if index == 0 else (),
                     update_post_id=update_post_id if index == 0 else "",
+                    actor_id=str(post.get("user_id") or ""),
                 )
             )
         if rendered.artifact_refs:
@@ -169,6 +184,7 @@ class MattermostDelivery:
                     message_kind="artifact",
                     scope_id=scope_id,
                     artifact_refs=rendered.artifact_refs,
+                    actor_id=str(post.get("user_id") or ""),
                 )
             )
         collector = OUTBOUND_COLLECTOR.get()
@@ -201,6 +217,11 @@ class MattermostDelivery:
 
     async def deliver(self, outbound: OutboundMessage) -> str:
         channel_id = outbound.channel_id or outbound.conversation_id
+        await self.access_guard.require(
+            outbound.actor_id,
+            outbound.scope_id,
+            channel_id=channel_id,
+        )
         file_ids = list(outbound.file_ids)
         if outbound.artifact_refs:
             if self.artifacts is None:

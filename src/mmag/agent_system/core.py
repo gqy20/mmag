@@ -54,6 +54,10 @@ class AgentRequest:
     runtime_request: Any | None = None
     requested_skill: str = ""
     skill: SkillInvocation | None = None
+    preferred_agents: tuple[str, ...] = ()
+    preferred_skills: tuple[str, ...] = ()
+    response_style: str = ""
+    language: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,13 +189,21 @@ class AgentRouter:
     @staticmethod
     def _score(
         descriptor: AgentDescriptor, request: AgentRequest
-    ) -> tuple[int, int, int, int, str]:
+    ) -> tuple[int, int, int, int, int, str]:
         exact = int(request.intent.lower() in {intent.lower() for intent in descriptor.intents})
         keywords = sum(
             keyword.lower() in request.prompt.lower() for keyword in descriptor.routing_keywords
         )
         specialized = int(not descriptor.is_default and bool(exact or keywords))
-        return specialized, descriptor.routing_priority, exact, keywords, descriptor.name
+        preferred = int(descriptor.name.lower() in request.preferred_agents)
+        return (
+            specialized,
+            preferred,
+            descriptor.routing_priority,
+            exact,
+            keywords,
+            descriptor.name,
+        )
 
 
 class RuntimeAgent:

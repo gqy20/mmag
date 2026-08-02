@@ -158,6 +158,11 @@ class MMClient:
         response = await self._request_async("GET", f"/channels/{channel_id}/members/{user_id}")
         return response.json()
 
+    async def get_channel_authorization_async(self, channel_id: str) -> dict:
+        """Fetch uncached channel metadata for an authorization decision."""
+        response = await self._request_async("GET", f"/channels/{channel_id}")
+        return response.json()
+
     def get_username(self, user_id: str) -> str:
         return self.get_user(user_id).get("username", user_id[:8])
 

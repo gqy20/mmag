@@ -108,11 +108,16 @@ class SkillResolver:
         return intent_match or keyword_match
 
     @staticmethod
-    def _score(skill: SkillPackage, request: AgentRequest) -> tuple[int, int, int, str]:
+    def _score(skill: SkillPackage, request: AgentRequest) -> tuple[int, int, int, int, str]:
         activation = skill.manifest.activation
         exact = int(request.intent.lower() in {item.lower() for item in activation.intents})
         keywords = sum(item.lower() in request.prompt.lower() for item in activation.keywords)
-        return activation.priority, exact, keywords, skill.manifest.metadata.ref
+        metadata = skill.manifest.metadata
+        preferred = int(
+            metadata.name.lower() in request.preferred_skills
+            or metadata.ref.lower() in request.preferred_skills
+        )
+        return preferred, activation.priority, exact, keywords, metadata.ref
 
     def _invocation(
         self,

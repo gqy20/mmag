@@ -14,6 +14,7 @@ from .approval_policy import (
 from .context import (
     AssembledContext,
     ContextAssembler,
+    MattermostAccessGuard,
     MattermostScopeResolver,
     ScopeResolver,
     scope_resource_id,
@@ -77,6 +78,7 @@ __all__ = [
     "LifecycleService",
     "LangGraphApprovalCoordinator",
     "MessagePipeline",
+    "MattermostAccessGuard",
     "MattermostScopeResolver",
     "MattermostApprovalAuthorizer",
     "OutboundMessage",

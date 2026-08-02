@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from ..skill_packages import SkillPackageRegistry
     from .approval import ApprovalService
     from .approval_policy import ApprovalAuthorizer
+    from .context import MattermostAccessGuard
     from .lifecycle import LifecycleService
     from .models import ApprovalRequest
     from .store import SQLiteControlPlane
@@ -34,6 +35,7 @@ class LangGraphApprovalCoordinator:
         gateway: ModelGateway,
         *,
         authorizer: ApprovalAuthorizer,
+        access_guard: MattermostAccessGuard,
         skill_registry: SkillPackageRegistry,
     ) -> None:
         self.store = store
@@ -42,6 +44,7 @@ class LangGraphApprovalCoordinator:
         self.gateway = gateway
         self.skill_registry = skill_registry
         self.authorizer = authorizer
+        self.access_guard = access_guard
 
     def register(
         self,
@@ -127,6 +130,7 @@ class LangGraphApprovalCoordinator:
                 decision="unauthorized",
             )
             raise PermissionError("actor is not authorized to decide this approval")
+        await self.access_guard.require(request.requested_by, request.scope_id)
         request = self.approvals.decide(
             request_id, approved=approved, actor_id=actor_id, reason=reason
         )

@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -111,3 +112,20 @@ async def test_send_file_fails_closed_without_repository():
     result = await spec.handler(_REF)
 
     assert result == {"error": "Artifact Repository 未配置。"}
+
+
+@pytest.mark.asyncio
+async def test_send_file_rechecks_current_scope_access():
+    artifacts = FakeArtifacts()
+    guard = SimpleNamespace(require=AsyncMock())
+    guard.require.side_effect = PermissionError("membership revoked")
+    spec = create_send_file_capability(
+        artifacts,
+        context_provider=_context,
+        access_guard=guard,
+    )
+
+    result = await spec.handler(_REF)
+
+    assert "Artifact 不可交付" in result["error"]
+    assert artifacts.calls == []

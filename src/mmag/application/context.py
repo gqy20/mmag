@@ -369,6 +369,9 @@ class ContextBuilder:
         current_user_id = str(post.get("user_id") or "")
         access_scope = self.scope_resolver.resolve_post(post)
         personal_mode = access_scope.kind is ScopeKind.PERSONAL
+        personal_preferences = (
+            self.memory.get_personal_preferences(current_user_id) if personal_mode else {}
+        )
         window = self.working_memory.get(channel_id, [])
         system = render_prompt(
             self.system_prompt,
@@ -428,7 +431,11 @@ class ContextBuilder:
         current_content: Any = list(blocks) + [{"type": "text", "text": text}] if blocks else text
         messages.append({"role": "user", "content": current_content})
         self._trim(messages)
-        return {"system": system, "messages": messages}
+        return {
+            "system": system,
+            "messages": messages,
+            "personal_preferences": personal_preferences,
+        }
 
     @staticmethod
     def _message_chars(message: dict) -> int:

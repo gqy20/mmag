@@ -98,3 +98,31 @@ def test_user_profiles_are_isolated_by_installation_and_tenant(tmp_path):
     assert second.get_user_profile("same-user") == {}
     first.close()
     second.close()
+
+
+def test_personal_preferences_are_normalized_and_tenant_isolated(tmp_path):
+    database = tmp_path / "memory.db"
+    first = Memory(str(database), installation_id="install-a", tenant_id="tenant-a")
+    second = Memory(str(database), installation_id="install-a", tenant_id="tenant-b")
+
+    stored = first.set_personal_preferences(
+        "user-1",
+        {
+            "language": "zh-CN",
+            "response_style": "concise",
+            "preferred_agents": ["ppt", "PPT", "invalid prompt!"],
+            "preferred_skills": ["slides@3.1.0"],
+            "capabilities": ["shell.exec"],
+        },
+    )
+
+    assert stored == {
+        "language": "zh-CN",
+        "response_style": "concise",
+        "preferred_agents": ("ppt",),
+        "preferred_skills": ("slides@3.1.0",),
+    }
+    assert first.get_personal_preferences("user-1") == stored
+    assert second.get_personal_preferences("user-1") == {}
+    first.close()
+    second.close()

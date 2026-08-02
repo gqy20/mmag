@@ -3,12 +3,45 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import sqlite3
+
+
+_PREFERENCE_REF = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}(?:@[0-9]+\.[0-9]+\.[0-9]+)?$")
+_LANGUAGES = frozenset({"auto", "zh-CN", "en-US"})
+_RESPONSE_STYLES = frozenset({"concise", "detailed", "formal", "casual"})
+
+
+def normalize_personal_preferences(value: object) -> dict[str, object]:
+    """Return the bounded preference contract accepted by routing and prompts."""
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, object] = {}
+    language = str(value.get("language") or "")
+    if language in _LANGUAGES:
+        normalized["language"] = language
+    response_style = str(value.get("response_style") or "")
+    if response_style in _RESPONSE_STYLES:
+        normalized["response_style"] = response_style
+    for key in ("preferred_agents", "preferred_skills"):
+        raw = value.get(key)
+        if not isinstance(raw, (list, tuple)):
+            continue
+        refs = tuple(
+            dict.fromkeys(
+                str(item).lower()
+                for item in raw[:10]
+                if isinstance(item, str) and _PREFERENCE_REF.fullmatch(item.lower())
+            )
+        )
+        if refs:
+            normalized[key] = refs
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +108,48 @@ class ProfileRepository:
                 profile[key] = json.loads(profile.get(key) or "")
             except (TypeError, json.JSONDecodeError):
                 profile[key] = default
+        try:
+            profile["preferences"] = normalize_personal_preferences(
+                json.loads(profile.get("preferences") or "{}")
+            )
+        except (TypeError, json.JSONDecodeError):
+            profile["preferences"] = {}
         return profile
+
+    def preferences(self, user_id: str) -> dict[str, object]:
+        row = self.connection.execute(
+            """SELECT preferences FROM user_profiles
+            WHERE installation_id=? AND tenant_id=? AND user_id=?""",
+            (self.installation_id, self.tenant_id, user_id),
+        ).fetchone()
+        if row is None:
+            return {}
+        try:
+            return normalize_personal_preferences(json.loads(row["preferences"] or "{}"))
+        except (TypeError, json.JSONDecodeError):
+            return {}
+
+    def set_preferences(self, user_id: str, value: object) -> dict[str, object]:
+        preferences = normalize_personal_preferences(value)
+        now = time.time()
+        self.connection.execute(
+            """INSERT INTO user_profiles
+            (installation_id, tenant_id, user_id, preferences, first_seen, last_interaction)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(installation_id, tenant_id, user_id) DO UPDATE SET
+              preferences=excluded.preferences,
+              last_interaction=excluded.last_interaction""",
+            (
+                self.installation_id,
+                self.tenant_id,
+                user_id,
+                json.dumps(preferences, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        self.connection.commit()
+        return preferences
 
 
 @dataclass(frozen=True, slots=True)

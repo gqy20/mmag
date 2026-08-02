@@ -94,6 +94,21 @@ def test_resolver_projects_agent_and_skill_capability_intersection():
     assert invocation.capabilities == ("analyze_link", "search_knowledge")
 
 
+def test_skill_score_prefers_a_matching_personal_default():
+    skills, _ = _packages()
+    report = skills.get("report@1.3.0")
+    web = skills.get("web-research@1.2.0")
+    request = AgentRequest(
+        "research",
+        "调研市场并生成报告",
+        preferred_skills=("web-research",),
+    )
+
+    assert SkillResolver._matches(report, request)
+    assert SkillResolver._matches(web, request)
+    assert SkillResolver._score(web, request) > SkillResolver._score(report, request)
+
+
 def test_selected_skill_projects_to_deep_agents_filesystem():
     skills, agents = _packages()
     package = agents.get("project")

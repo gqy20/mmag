@@ -177,4 +177,5 @@ def test_outbox_round_trips_thread_artifact_and_update_contract(tmp_path):
     assert delivery.actions == ({"id": "approve"},)
     assert delivery.update_post_id == "status-1"
     assert delivery.idempotency_key == "run-1:artifact"
+    assert delivery.actor_id == "user-1"
     store.close()

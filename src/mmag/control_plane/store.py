@@ -158,8 +158,8 @@ class SQLiteControlPlane:
                         (id, conversation_id, channel_id, message, props, status,
                          agent_run_id, root_id, message_kind, scope_id, artifact_refs,
                          file_ids, actions, update_post_id, idempotency_key,
-                         created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                         actor_id, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             delivery_id,
                             message.conversation_id,
@@ -175,6 +175,7 @@ class SQLiteControlPlane:
                             _json([dict(action) for action in message.actions]),
                             message.update_post_id,
                             stable_key,
+                            message.actor_id or self._inbox_actor(event_id),
                             now,
                             now,
                         ),
@@ -736,6 +737,7 @@ class SQLiteControlPlane:
                 tuple(json.loads(row["file_ids"])),
                 tuple(json.loads(row["actions"])),
                 row["update_post_id"],
+                row["actor_id"],
             ),
             row["status"],
             row["attempts"],
@@ -743,6 +745,12 @@ class SQLiteControlPlane:
             row["last_error"],
             row["remote_id"],
         )
+
+    def _inbox_actor(self, event_id: str) -> str:
+        row = self._connection.execute(
+            "SELECT actor_id FROM inbox_events WHERE event_id=?", (event_id,)
+        ).fetchone()
+        return str(row["actor_id"]) if row is not None else ""
 
     @staticmethod
     def _lifecycle_entity(row: Any) -> LifecycleEntity:

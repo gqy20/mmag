@@ -40,6 +40,7 @@ class OutboundMessage:
     file_ids: tuple[str, ...] = ()
     actions: tuple[Mapping[str, Any], ...] = ()
     update_post_id: str = ""
+    actor_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)

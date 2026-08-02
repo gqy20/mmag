@@ -39,11 +39,16 @@ def _make_handler(runtime_result: str = "已完成"):
     mm.send_post.return_value = "reply-1"
     mm.send_post_async = AsyncMock(return_value="reply-1")
     mm.update_post_async = AsyncMock(return_value="reply-1")
+    mm.get_channel_member_async = AsyncMock(return_value={"user_id": "user-1"})
+    mm.get_channel_authorization_async = AsyncMock(
+        return_value={"id": "channel-1", "type": "O"}
+    )
     memory = MagicMock()
     memory.has_message.return_value = False
     memory.log_message.return_value = True
     memory.get_user_profile_decoded.return_value = None
     memory.get_user_profile.return_value = {}
+    memory.get_personal_preferences.return_value = {}
     memory.get_recent_summary.return_value = None
     memory.get_relevant_knowledge.return_value = []
     compactor = MagicMock()
@@ -240,10 +245,20 @@ async def test_direct_message_uses_personal_scope_even_with_team_filter():
         "type": "D",
         "team_id": "",
     }
+    handler.mm.get_channel_authorization_async.return_value = {
+        "id": "dm-1",
+        "type": "D",
+    }
     event = _posted_event()
     post = event["data"]["post"]
     post["channel_id"] = "dm-1"
     post["message"] = "整理我的工作案例"
+    handler.memory.get_personal_preferences.return_value = {
+        "language": "zh-CN",
+        "response_style": "concise",
+        "preferred_agents": ("mmchat",),
+        "preferred_skills": ("web-research",),
+    }
 
     with patch.multiple(config, mm_channel_id="", mm_team_id="team-1"):
         await handler.process_posted_event(event)
@@ -252,4 +267,15 @@ async def test_direct_message_uses_personal_scope_even_with_team_filter():
     assert request.context.scope == "mattermost:default:default:usr:user-1"
     assert request.context.scope_kind == "personal"
     assert request.context.owner_id == "user-1"
+    handler.memory.get_personal_preferences.assert_called_once_with("user-1")
     handler.memory.update_profile_from_message.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_channel_context_does_not_load_personal_preferences():
+    handler, _ = _make_handler("共享任务完成")
+
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
+        await handler.process_posted_event(_posted_event())
+
+    handler.memory.get_personal_preferences.assert_not_called()

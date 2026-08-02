@@ -293,7 +293,11 @@ class MessageHandler:
         await self.delivery.typing_indicator(post["channel_id"])
         context = self.context_builder.build(post, mention=False)
         try:
-            request = self.build_agent_request(post, "chat")
+            request = self.build_agent_request(
+                post,
+                "chat",
+                personal_preferences=context.get("personal_preferences"),
+            )
             selection = self.agent_router.default(request)
             runtime_request = self.build_run_request(
                 post, context, capabilities=(), max_rounds=config.max_tool_rounds
@@ -360,7 +364,11 @@ class MessageHandler:
         await self.delivery.typing_indicator(post["channel_id"])
         context = self.context_builder.build(post, mention=tag == "mention")
         rounds = max_rounds if max_rounds is not None else config.max_tool_rounds
-        request = self.build_agent_request(post, tag)
+        request = self.build_agent_request(
+            post,
+            tag,
+            personal_preferences=context.get("personal_preferences"),
+        )
         stream: MattermostStream | None = None
         try:
             selection = self.agent_router.route(request)
@@ -469,7 +477,14 @@ class MessageHandler:
             return True
         return package.manifest.runtime.mode == "agent"
 
-    def build_agent_request(self, post: dict, intent: str) -> AgentRequest:
+    def build_agent_request(
+        self,
+        post: dict,
+        intent: str,
+        *,
+        personal_preferences: object = None,
+    ) -> AgentRequest:
+        preferences = personal_preferences if isinstance(personal_preferences, dict) else {}
         return AgentRequest(
             intent=intent,
             prompt=str(post.get("message") or ""),
@@ -479,6 +494,14 @@ class MessageHandler:
             actor_id=str(post.get("user_id") or ""),
             task_id=f"task:{post.get('id') or ''}",
             run_id=self._run_id(post),
+            preferred_agents=tuple(
+                str(item) for item in preferences.get("preferred_agents", ())
+            ),
+            preferred_skills=tuple(
+                str(item) for item in preferences.get("preferred_skills", ())
+            ),
+            response_style=str(preferences.get("response_style") or ""),
+            language=str(preferences.get("language") or ""),
         )
 
     def _register_approval_interrupt(

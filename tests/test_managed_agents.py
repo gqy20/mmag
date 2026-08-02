@@ -117,6 +117,40 @@ def test_router_prefers_yaml_specialization_and_normalizes_intent():
     assert selection.intent == "link"
 
 
+def test_router_uses_personal_agent_preference_only_after_hard_route_match():
+    preferred = StubAgent(
+        AgentDescriptor(
+            "preferred",
+            "preferred",
+            intents=("report",),
+            scopes=("mattermost:*",),
+            routing_priority=1,
+        ),
+        "preferred",
+    )
+    higher_priority = StubAgent(
+        AgentDescriptor(
+            "standard",
+            "standard",
+            intents=("report",),
+            scopes=("mattermost:*",),
+            routing_priority=100,
+        ),
+        "standard",
+    )
+
+    selection = AgentRouter(AgentRegistry((preferred, higher_priority))).route(
+        AgentRequest(
+            "report",
+            "生成报告",
+            scope="mattermost:install:tenant:usr:user-1",
+            preferred_agents=("preferred",),
+        )
+    )
+
+    assert selection.agent.descriptor.name == "preferred"
+
+
 def test_registry_rejects_multiple_default_agents():
     first = StubAgent(AgentDescriptor("first", "first", is_default=True), "first")
     second = StubAgent(AgentDescriptor("second", "second", is_default=True), "second")
