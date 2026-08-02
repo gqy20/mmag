@@ -64,6 +64,42 @@ StateBackend 文件属于当前 LangGraph thread，并随 checkpoint 持久化�
 交集同时收窄模型 Tool Schema、CapabilityContext 与 GovernanceContext。Skill 即使在 SKILL.md 中要求
 额外工具，也不会获得该工具。
 
+## Personal Skill 覆盖层
+
+平台 Skill Package 仍只来自仓库 `skills/`。用户在 Bot DM 中沉淀的 Personal Skill 是受控覆盖层，不会
+创建新的 Package、Capability、脚本、MCP、Secret 或 Execution Profile。第一版使用 SQLite
+`personal_skills` 保存有界 instruction/template 和不可变 revision：
+
+```text
+draft → active → archived
+
+pskill://<id>@<revision>
+```
+
+一个 Run 只能选择一个平台基础 Skill，并最多叠加一个属于当前 owner 的 active Personal Skill。显式选择
+会提供受治理的 `preferred_agent` 与 `base_skill_ref` 路由提示；自动选择只检查 owner 的 active、
+`auto_select=true` 且 activation 唯一命中的记录。两者都必须处于 Personal Scope。
+
+```text
+AgentRouter 硬约束
+  → 平台 SkillResolver
+  → PersonalSkillResolver
+  → PersonalSkillCompiler
+  → /skills/<base>/personal.md
+```
+
+个人层只增加工作步骤、模板和展示偏好，Capability 集合始终沿用平台基础 Skill 的交集。Personal Skill ref、
+revision Hash 和 base ref 会进入 Runtime metadata、checkpoint SkillContext、Audit 和最终 provenance。频道请求、
+跨 owner 请求、未激活 revision、租户不匹配及 Agent/基础 Skill 不匹配均默认拒绝。
+
+Mattermost Bot DM 已提供“我的 Skills”和“我的案例”入口。成功的个人任务会生成私有候选 WorkCase，用户
+可通过按钮保存、评价或生成 Personal Skill 草稿；同一基础 Skill 的多个已保存案例可合并生成草稿。Skill
+支持运行、编辑执行要求、启用、停用和 revision 查看。运行与编辑使用带过期时间的持久化交互会话承接下一
+条 DM，按钮继续使用签名、短时、一次性 Action Token。频道 Scope 不生成、展示或操作这些个人对象。
+
+当前 Mattermost 编辑入口只编辑 instruction；名称、关键词、模板等完整字段表单和更精细的相似度模型仍是
+后续体验优化，不影响 Personal Skill 的创建、启用和显式运行闭环。
+
 ## 契约与 provenance
 
 Skill 输入固定投影为 `intent`、`goal`、`parameters`。结果先经过 Skill output Schema，再经过 Agent

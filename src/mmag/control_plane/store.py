@@ -23,9 +23,11 @@ from .models import (
     Scope,
     StateTransition,
 )
+from .personal_skills import PersonalSkillStore
 from .quota import QuotaStore
 from .releases import ReleaseStore
 from .runs import AgentRunStore
+from .work_cases import InteractionSessionStore, WorkCaseStore
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -45,6 +47,9 @@ class SQLiteControlPlane:
         self.quota = QuotaStore(self._connection, self._lock)
         self.releases = ReleaseStore(self._connection, self._lock)
         self.runs = AgentRunStore(self._connection, self._lock)
+        self.personal_skills = PersonalSkillStore(self._connection, self._lock)
+        self.work_cases = WorkCaseStore(self._connection, self._lock)
+        self.interactions = InteractionSessionStore(self._connection, self._lock)
 
     def close(self) -> None:
         self._connection.close()

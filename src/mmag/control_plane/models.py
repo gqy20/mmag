@@ -79,6 +79,24 @@ class ScopeKind(StrEnum):
     TASK = "task"
 
 
+class PersonalSkillStatus(StrEnum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class WorkCaseStatus(StrEnum):
+    CANDIDATE = "candidate"
+    SAVED = "saved"
+    ARCHIVED = "archived"
+
+
+class InteractionStatus(StrEnum):
+    OPEN = "open"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
 class TaskState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -213,6 +231,63 @@ class Artifact:
     kind: str
     content: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class PersonalSkill:
+    id: str
+    revision: int
+    installation_id: str
+    tenant_id: str
+    owner_id: str
+    scope_id: str
+    name: str
+    description: str
+    base_skill_ref: str
+    preferred_agent: str
+    activation_intents: tuple[str, ...]
+    activation_keywords: tuple[str, ...]
+    auto_select: bool
+    instruction: str
+    template: str
+    sha256: str
+    status: PersonalSkillStatus = PersonalSkillStatus.DRAFT
+
+    @property
+    def ref(self) -> str:
+        return f"pskill://{self.id}@{self.revision}"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkCase:
+    id: str
+    installation_id: str
+    tenant_id: str
+    owner_id: str
+    scope_id: str
+    goal: str
+    result_summary: str
+    agent_name: str = ""
+    skill_ref: str = ""
+    personal_skill_ref: str = ""
+    artifact_refs: tuple[str, ...] = ()
+    feedback: str = ""
+    status: WorkCaseStatus = WorkCaseStatus.CANDIDATE
+    created_at: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class InteractionSession:
+    id: str
+    installation_id: str
+    tenant_id: str
+    owner_id: str
+    scope_id: str
+    conversation_id: str
+    kind: str
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    expires_at: float = 0.0
+    status: InteractionStatus = InteractionStatus.OPEN
 
 
 @dataclass(frozen=True, slots=True)

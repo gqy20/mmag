@@ -216,6 +216,7 @@ class Agent:
         self.skill_resolver = SkillResolver(
             self.skill_package_registry,
             self.capability_registry,
+            personal_skills=self.control_store.personal_skills,
         )
         default_agent = self.agent_registry.default()
         default_package = self.agent_package_registry.get(default_agent.descriptor.name)
@@ -291,6 +292,9 @@ class Agent:
             stats=self.stats,
             action_tokens=self.action_tokens,
             scope_resolver=self.scope_resolver,
+            personal_skills=self.control_store.personal_skills,
+            work_cases=self.control_store.work_cases,
+            interactions=self.control_store.interactions,
         )
         self.capability_probe = MattermostCapabilityProbe(self.mm)
         if self.action_tokens is not None:

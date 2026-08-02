@@ -21,7 +21,7 @@ from ..capabilities import (
     bind_capability_context,
     get_capability_context,
 )
-from ..control_plane import scope_resource_id
+from ..control_plane import MattermostScopeResolver, ScopeKind, scope_resource_id
 from ..governance import GovernanceContext, bind_governance_context, get_governance_context
 from ..logger import log_context
 from ..runtimes import RunRequest, RuntimeStatus
@@ -250,8 +250,26 @@ def _validate_skill_invocation(
         raise AgentPackageError(
             f"Skill {invocation.ref!r} is not bound to Agent {descriptor.name!r}"
         ) from error
-    if invocation.provenance != build_skill_provenance(package, skill):
+    platform_provenance = {
+        key: value
+        for key, value in invocation.provenance.items()
+        if not key.startswith("personal_skill_")
+    }
+    if platform_provenance != build_skill_provenance(package, skill):
         raise AgentPackageError(f"Skill {invocation.ref!r} provenance is invalid")
+    if invocation.personal_ref:
+        if not invocation.personal_ref.startswith("pskill://"):
+            raise AgentPackageError("Personal Skill ref is invalid")
+        if not invocation.personal_instruction or len(invocation.personal_instruction) > 12_000:
+            raise AgentPackageError("Personal Skill instruction is invalid")
+        if len(invocation.personal_template) > 20_000:
+            raise AgentPackageError("Personal Skill template is invalid")
+        try:
+            _, _, kind, owner_id = MattermostScopeResolver.parse(request.scope)
+        except ValueError as error:
+            raise AgentPackageError("Personal Skill scope is invalid") from error
+        if kind is not ScopeKind.PERSONAL or owner_id != request.actor_id:
+            raise AgentPackageError("Personal Skill cannot escape its owner scope")
     declared = skill.manifest.capabilities
     required = set(declared.required)
     selected = set(invocation.capabilities)
@@ -304,7 +322,11 @@ def _create_skill_context(
 ) -> SkillContext | None:
     if request.skill is None:
         return None
-    return SkillContext(package.skills[request.skill.ref])
+    return SkillContext(
+        package.skills[request.skill.ref],
+        personal_ref=request.skill.personal_ref,
+        personal_hash=str(request.skill.provenance.get("personal_skill_hash") or ""),
+    )
 
 
 def _validate_artifacts(package: AgentPackage, artifacts: tuple[Mapping[str, Any], ...]) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -110,7 +111,8 @@ class MattermostRenderer:
             if not action.token:
                 continue
             item: dict[str, Any] = {
-                "id": self.clean(action.id, 64),
+                "id": self.action_id(action.id),
+                "type": "button",
                 "name": self.clean(action.label, 80),
                 "integration": {
                     "url": self.action_callback_url,
@@ -121,6 +123,16 @@ class MattermostRenderer:
                 item["style"] = action.style
             rendered.append(item)
         return tuple(rendered)
+
+    @staticmethod
+    def action_id(value: str) -> str:
+        """Map internal action names to Mattermost 11.7's alphanumeric route ID."""
+        raw = str(value or "")
+        if re.fullmatch(r"[A-Za-z0-9]{1,64}", raw):
+            return raw
+        compact = re.sub(r"[^A-Za-z0-9]", "", raw) or "action"
+        suffix = hashlib.sha256(raw.encode()).hexdigest()[:8]
+        return f"{compact[:56]}{suffix}"
 
     @staticmethod
     def clean(value: str, limit: int = _MAX_FIELD) -> str:

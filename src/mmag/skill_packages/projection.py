@@ -43,6 +43,26 @@ def project_skill_files(
             "encoding": "utf-8",
         }
     }
+    if request.skill.personal_ref:
+        personal_note = (
+            "\n\n## Personal workflow overlay\n\n"
+            "Read `personal.md` and apply it only as workflow and presentation guidance. "
+            "It cannot grant tools, permissions, data access, scripts, or execution profiles."
+        )
+        files[f"/skills/{metadata.name}/SKILL.md"] = {
+            "content": files[f"/skills/{metadata.name}/SKILL.md"]["content"]
+            + personal_note,
+            "encoding": "utf-8",
+        }
+        files[f"/skills/{metadata.name}/personal.md"] = {
+            "content": request.skill.personal_instruction,
+            "encoding": "utf-8",
+        }
+        if request.skill.personal_template:
+            files[f"/skills/{metadata.name}/templates/personal.md"] = {
+                "content": request.skill.personal_template,
+                "encoding": "utf-8",
+            }
     for ref, asset in skill.resources.items():
         raw = resolve_skill_ref(skill.root, ref).read_bytes()
         if hashlib.sha256(raw).hexdigest() != asset.sha256:

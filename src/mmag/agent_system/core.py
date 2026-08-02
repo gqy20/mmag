@@ -34,6 +34,9 @@ class SkillInvocation:
     ref: str
     capabilities: tuple[str, ...]
     provenance: Mapping[str, str]
+    personal_ref: str = ""
+    personal_instruction: str = ""
+    personal_template: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +56,8 @@ class AgentRequest:
     artifact_refs: tuple[str, ...] = ()
     runtime_request: Any | None = None
     requested_skill: str = ""
+    requested_personal_skill: str = ""
+    requested_agent: str = ""
     skill: SkillInvocation | None = None
     preferred_agents: tuple[str, ...] = ()
     preferred_skills: tuple[str, ...] = ()
@@ -178,6 +183,8 @@ class AgentRouter:
 
     @staticmethod
     def _matches_route(descriptor: AgentDescriptor, request: AgentRequest) -> bool:
+        if request.requested_agent:
+            return descriptor.name == request.requested_agent
         prompt = request.prompt.lower()
         exact_intent = request.intent.lower() in {intent.lower() for intent in descriptor.intents}
         keyword_match = any(keyword.lower() in prompt for keyword in descriptor.routing_keywords)
@@ -196,9 +203,10 @@ class AgentRouter:
         )
         specialized = int(not descriptor.is_default and bool(exact or keywords))
         preferred = int(descriptor.name.lower() in request.preferred_agents)
+        requested = int(descriptor.name == request.requested_agent)
         return (
             specialized,
-            preferred,
+            max(preferred, requested),
             descriptor.routing_priority,
             exact,
             keywords,

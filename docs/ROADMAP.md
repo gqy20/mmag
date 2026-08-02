@@ -352,8 +352,9 @@ Sandbox；切换远程 Sandbox 只替换 Execution Backend。
   O/P/G 使用 Channel Scope，不再以 Team 充当租户；
 - [x] 用户画像以及现有消息、知识、摘要和 URL 缓存查询已按 Installation + Tenant 分区；
 - [x] 普通频道不再注入或投影当前用户私人画像；
-- [ ] 个人案例、个人长期记忆和 Skill 草稿还没有独立 PersonalSpace；消息编辑/删除已同步消息库与 FTS，
-  但成员退出、用户停用及派生知识的权限撤销传播尚未实现；
+- [x] Personal Skill 已支持 owner/tenant 隔离、不可变 revision、激活/归档、显式或自动解析、运行时覆盖层，
+  并提供 Mattermost “我的 Skills / 我的案例”、WorkCase 保存与反馈、单案例或同基础 Skill 多案例生成草稿；
+- [ ] PersonalMemory、成员退出、用户停用及派生知识的权限撤销传播仍不完整；
 - [x] LangGraph Checkpoint 恢复强制匹配原 actor、scope、installation 和 tenant；
 - [x] Artifact 交付意图、审批恢复和 Outbox 实际发送前重新查询 Mattermost 成员关系；原 actor 已退出频道、
   身份接口异常或个人 Artifact 目标不是本人 DM 时默认拒绝；
@@ -368,7 +369,8 @@ Sandbox；切换远程 Sandbox 只替换 Execution Backend。
 - [x] 当前个人模式可加载本人画像和 DM 上下文；共享模式只加载频道/项目上下文，不注入或投影私人画像；
 - [x] 将用户画像升级为 Installation + Tenant + User 联合身份，现有 Memory Repository 查询固定绑定
   当前 Installation/Tenant；
-- [ ] 新增 PersonalSpace、WorkCase、PersonalMemory 和 SkillDraft，并让群聊私人操作转入 DM 或私有交付；
+- [x] Personal Skill Draft/Active/Archived、基础 Skill 覆盖层、WorkCase 及 Mattermost DM 管理入口已实现；
+- [ ] 继续新增 PersonalMemory，并让群聊私人操作转入 DM 或私有交付；
 - [x] 为现有 SQLite FTS、缓存、Artifact 和 Checkpoint 增加 Tenant/Scope 查询或终局校验；
 - [ ] 后续向量索引必须使用相同 Scope 分区，不能先全库召回再在应用层过滤；
 - [x] Bot Token 只代表服务身份，不继承为发消息用户的权限；Artifact 读取、Checkpoint 恢复、审批和交付
@@ -391,9 +393,10 @@ Checkpoint、审批或执行目录越界读取彼此数据；权限撤销和源�
 
 ### 场景一：个人工作台与 Skill 沉淀
 
-用户在 Bot DM 中调用受允许的 Skill 完成典型工作，把输入、过程、结果和反馈沉淀为私有 WorkCase，并可
-生成个人 Skill 草稿。当前 Agent/Skill/Artifact 基础可复用，但必须先完成 PersonalSpace、个人检索隔离、
-显式发布和生产 Sandbox。
+用户在 Bot DM 中调用受允许的 Skill 完成典型工作，把输入、结果、Artifact 引用和反馈沉淀为私有
+WorkCase，并可由单个或多个同类案例生成个人 Skill 草稿。“我的 Skills / 我的案例”、启停、显式运行、
+instruction 编辑和 revision 查看已经接通；仍需完整字段表单、更智能的案例聚类、显式跨 Scope 发布和生产
+Sandbox。
 
 ### 场景二：基于历史工作的个人数字人
 

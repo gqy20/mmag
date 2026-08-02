@@ -39,8 +39,12 @@ from .models import (
     EntityType,
     InboundEvent,
     InboxRecord,
+    InteractionSession,
+    InteractionStatus,
     LifecycleEntity,
     OutboundMessage,
+    PersonalSkill,
+    PersonalSkillStatus,
     Principal,
     Scope,
     ScopeKind,
@@ -48,9 +52,13 @@ from .models import (
     Task,
     TaskState,
     TaskStep,
+    WorkCase,
+    WorkCaseStatus,
 )
+from .personal_skills import PersonalSkillStore
 from .pipeline import MessagePipeline, PartitionedScheduler
 from .store import SQLiteControlPlane
+from .work_cases import InteractionSessionStore, WorkCaseStore
 
 __all__ = [
     "AgentRunState",
@@ -72,6 +80,9 @@ __all__ = [
     "EntityType",
     "InboxRecord",
     "InboundEvent",
+    "InteractionSession",
+    "InteractionSessionStore",
+    "InteractionStatus",
     "InvalidTransitionError",
     "LifecycleEntity",
     "LifecycleError",
@@ -83,6 +94,9 @@ __all__ = [
     "MattermostApprovalAuthorizer",
     "OutboundMessage",
     "PartitionedScheduler",
+    "PersonalSkill",
+    "PersonalSkillStatus",
+    "PersonalSkillStore",
     "SQLiteControlPlane",
     "Principal",
     "Scope",
@@ -93,6 +107,9 @@ __all__ = [
     "Task",
     "TaskState",
     "TaskStep",
+    "WorkCase",
+    "WorkCaseStatus",
+    "WorkCaseStore",
     "StaticApprovalAuthorizer",
     "VersionConflictError",
 ]

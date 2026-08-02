@@ -36,6 +36,7 @@ from ..runtimes import (
 )
 from ..skill_packages import SkillPackageError
 from .delivery import OUTBOUND_COLLECTOR, MattermostDelivery
+from .personal_ui import PersonalWorkspaceUI
 from .views import ResponseAction, ResponsePresenter, ResponseView
 
 if TYPE_CHECKING:
@@ -69,6 +70,9 @@ class MessageHandler:
         stats: dict[str, int],
         action_tokens=None,
         scope_resolver: MattermostScopeResolver | None = None,
+        personal_skills=None,
+        work_cases=None,
+        interactions=None,
     ) -> None:
         self.mm = mm_client
         self.memory = memory
@@ -89,6 +93,17 @@ class MessageHandler:
             mm_client,
             installation_id=config.mm_installation_id,
             tenant_id=config.mm_tenant_id,
+        )
+        self.personal_ui = (
+            PersonalWorkspaceUI(
+                personal_skills=personal_skills,
+                work_cases=work_cases,
+                interactions=interactions,
+                action_tokens=action_tokens,
+                audit_store=audit_store,
+            )
+            if personal_skills is not None and work_cases is not None and interactions is not None
+            else None
         )
         self._action_tasks: set[asyncio.Task] = set()
         self.presenter = ResponsePresenter()
@@ -226,6 +241,18 @@ class MessageHandler:
         if access_scope.kind is ScopeKind.PERSONAL:
             self.memory.update_profile_from_message(user_id, post["username"], post)
         log_event(log, "message.accepted", status="accepted", attachment_count=len(file_metas))
+        if self.personal_ui is not None:
+            handled, view, personal_ref = self.personal_ui.consume_message(
+                post, message, access_scope
+            )
+            if personal_ref:
+                post["_requested_personal_skill"] = personal_ref
+            if handled:
+                if view is not None:
+                    await self.delivery.reply_view(
+                        post, view, update_post_id=status_post_id
+                    )
+                return
         approval = self.approval_command(message)
         if approval is not None:
             with log_context.bind(operation="approval"):
@@ -371,6 +398,7 @@ class MessageHandler:
         )
         stream: MattermostStream | None = None
         try:
+            request = self.skill_resolver.prepare_personal_request(request)
             selection = self.agent_router.route(request)
             if self._should_stream(selection.agent):
                 stream = self.delivery.stream(
@@ -415,6 +443,14 @@ class MessageHandler:
                     run_id=self._run_id(post),
                 )
             )
+            if self.personal_ui is not None and runtime_result.status is RuntimeStatus.COMPLETED:
+                response_view = self.personal_ui.attach_work_case(
+                    post,
+                    self.scope_resolver.resolve_post(post),
+                    request,
+                    selection.agent.descriptor.name,
+                    response_view,
+                )
         except (AgentPackageError, AgentRuntimeError, SkillPackageError) as error:
             log_event(
                 log,
@@ -500,6 +536,7 @@ class MessageHandler:
             preferred_skills=tuple(
                 str(item) for item in preferences.get("preferred_skills", ())
             ),
+            requested_personal_skill=str(post.get("_requested_personal_skill") or ""),
             response_style=str(preferences.get("response_style") or ""),
             language=str(preferences.get("language") or ""),
         )
@@ -606,6 +643,20 @@ class MessageHandler:
         scope_id = self.post_scope({"channel_id": channel_id, "user_id": actor_id})
         if scope_id != claims.scope_id:
             raise PermissionError("action belongs to another scope")
+        if claims.action.startswith(("pskill_", "case_")):
+            if self.personal_ui is None:
+                raise RuntimeError("personal workspace is not configured")
+            claims = self.action_tokens.consume(str(token), actor_id=actor_id)
+            scope = self.scope_resolver.resolve_post(
+                {"channel_id": channel_id, "user_id": actor_id}
+            )
+            message = self.personal_ui.handle_action(
+                claims,
+                actor_id=actor_id,
+                post={"channel_id": channel_id, "user_id": actor_id},
+                scope=scope,
+            )
+            return {"ephemeral_text": message}
         if claims.action not in {"approve", "reject"}:
             raise ValueError("action is not supported by this callback")
         approval = self.approval_coordinator.store.get_approval_request(claims.target)

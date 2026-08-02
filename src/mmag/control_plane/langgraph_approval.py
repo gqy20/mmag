@@ -281,7 +281,11 @@ class LangGraphApprovalCoordinator:
                     trace_id=context.trace_id,
                     target=skill_context.skill_ref,
                     decision="completed",
-                    details=skill_context.package.snapshot.to_dict(),
+                    details={
+                        **skill_context.package.snapshot.to_dict(),
+                        "personal_skill_ref": skill_context.personal_ref,
+                        "personal_skill_hash": skill_context.personal_hash,
+                    },
                 )
         return result
 
@@ -295,7 +299,11 @@ class LangGraphApprovalCoordinator:
         skill_ref = state.get("skill_ref")
         if not isinstance(skill_ref, str) or not skill_ref:
             raise ValueError("approval contains an invalid Skill context")
-        return SkillContext(self.skill_registry.get(skill_ref))
+        return SkillContext(
+            self.skill_registry.get(skill_ref),
+            personal_ref=str(state.get("personal_skill_ref") or ""),
+            personal_hash=str(state.get("personal_skill_hash") or ""),
+        )
 
     def _transition_run(self, thread_id: str, target: str, command: str) -> None:
         if not thread_id.startswith("mattermost:"):

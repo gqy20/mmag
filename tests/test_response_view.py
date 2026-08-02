@@ -114,6 +114,28 @@ def test_renderer_preserves_markdown_for_agent_content():
     assert "\\[" not in markdown
 
 
+def test_renderer_maps_internal_action_names_to_mattermost_route_ids():
+    renderer = MattermostRenderer(action_callback_url="https://mmag.example.com/actions")
+    view = ResponseView(
+        kind=ResponseKind.STATUS,
+        title="个人工作台",
+        summary="请选择",
+        status=RunStatus.SUCCEEDED,
+        actions=(
+            ResponseAction("pskill_run", "运行", "pskill_run", "skill-1", token="one"),
+            ResponseAction("pskillrun", "另一个", "other", "skill-2", token="two"),
+        ),
+    )
+
+    actions = renderer.render(view).actions
+
+    assert all(action["id"].isalnum() for action in actions)
+    assert all(len(action["id"]) <= 64 for action in actions)
+    assert actions[0]["id"] != actions[1]["id"]
+    assert all(action["type"] == "button" for action in actions)
+    assert actions[0]["integration"]["context"] == {"token": "one"}
+
+
 def test_action_token_is_signed_short_lived_and_one_time(tmp_path):
     store = SQLiteControlPlane(str(tmp_path / "control.db"))
     service = ActionTokenService("s" * 32, store, ttl_seconds=60)

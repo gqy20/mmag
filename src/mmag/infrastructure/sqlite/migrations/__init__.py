@@ -465,6 +465,59 @@ def _v012_add_delivery_actor(connection: sqlite3.Connection) -> None:
         )
 
 
+def _v013_add_personal_skills(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE personal_skills (
+        id TEXT NOT NULL, revision INTEGER NOT NULL,
+        installation_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL, scope_id TEXT NOT NULL,
+        name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+        base_skill_ref TEXT NOT NULL, preferred_agent TEXT NOT NULL DEFAULT '',
+        activation_intents TEXT NOT NULL DEFAULT '[]',
+        activation_keywords TEXT NOT NULL DEFAULT '[]',
+        auto_select INTEGER NOT NULL DEFAULT 0,
+        instruction TEXT NOT NULL, template TEXT NOT NULL DEFAULT '',
+        sha256 TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft',
+        created_at REAL NOT NULL, updated_at REAL NOT NULL,
+        PRIMARY KEY(id, revision)
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX idx_personal_skills_owner ON personal_skills"
+        "(installation_id, tenant_id, owner_id, status, updated_at DESC)"
+    )
+
+
+def _v014_add_work_cases_and_interactions(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE work_cases (
+        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL, scope_id TEXT NOT NULL, goal TEXT NOT NULL,
+        result_summary TEXT NOT NULL, agent_name TEXT NOT NULL DEFAULT '',
+        skill_ref TEXT NOT NULL DEFAULT '', personal_skill_ref TEXT NOT NULL DEFAULT '',
+        artifact_refs TEXT NOT NULL DEFAULT '[]', feedback TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'candidate', created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX idx_work_cases_owner ON work_cases"
+        "(installation_id, tenant_id, owner_id, status, updated_at DESC)"
+    )
+    connection.execute(
+        """CREATE TABLE interaction_sessions (
+        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL, scope_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+        kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', expires_at REAL NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open', created_at REAL NOT NULL, updated_at REAL NOT NULL
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX idx_interaction_open ON interaction_sessions"
+        "(installation_id, tenant_id, owner_id, conversation_id, status, updated_at DESC)"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -537,6 +590,18 @@ DEFAULT_MIGRATIONS = (
         name="add delivery actor",
         checksum=_checksum("v012-add-delivery-actor-20260802"),
         upgrade=_v012_add_delivery_actor,
+    ),
+    Migration(
+        version=13,
+        name="add personal skills",
+        checksum=_checksum("v013-add-personal-skills-20260802"),
+        upgrade=_v013_add_personal_skills,
+    ),
+    Migration(
+        version=14,
+        name="add work cases and interactions",
+        checksum=_checksum("v014-add-work-cases-and-interactions-20260802"),
+        upgrade=_v014_add_work_cases_and_interactions,
     ),
 )
 

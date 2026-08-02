@@ -136,6 +136,14 @@ class DeepAgentProvider:
                     f"{package.manifest.metadata.name}@{package.manifest.metadata.version}"
                 ),
                 "skill_ref": request.skill.ref if request.skill is not None else "",
+                "personal_skill_ref": (
+                    request.skill.personal_ref if request.skill is not None else ""
+                ),
+                "personal_skill_hash": (
+                    str(request.skill.provenance.get("personal_skill_hash") or "")
+                    if request.skill is not None
+                    else ""
+                ),
                 "policy_ref": package.manifest.policy_ref,
                 "route": model_policy.route,
                 "model_class": model_policy.model_class,

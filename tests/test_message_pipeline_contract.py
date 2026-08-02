@@ -13,8 +13,10 @@ from mmag.application import (
     MattermostDelivery,
     MessageHandler,
 )
+from mmag.application.personal_ui import PersonalWorkspaceUI
 from mmag.capabilities import CapabilityRegistry, get_capability_context
 from mmag.config import config
+from mmag.control_plane import SQLiteControlPlane
 from mmag.runtimes import AgentResult, RunRequest, RuntimeUnavailableError
 
 _PACKAGE = AgentPackageLoader().load(
@@ -76,13 +78,15 @@ def _make_handler(runtime_result: str = "已完成"):
     delivery.typing_indicator = AsyncMock()
     attachments = AttachmentProcessor(mm)
     attachments.build_blocks = AsyncMock(return_value=None)
+    skill_resolver = MagicMock()
+    skill_resolver.prepare_personal_request.side_effect = lambda request: request
     handler = MessageHandler(
         mm_client=mm,
         memory=memory,
         compactor=compactor,
         capability_registry=CapabilityRegistry(),
         agent_router=AgentRouter(registry),
-        skill_resolver=MagicMock(),
+        skill_resolver=skill_resolver,
         audit_store=MagicMock(),
         approval_coordinator=MagicMock(),
         working_memory=working_memory,
@@ -110,6 +114,33 @@ def _posted_event() -> dict:
             }
         },
     }
+
+
+async def test_my_skills_dm_is_handled_without_invoking_agent(tmp_path):
+    handler, runtime = _make_handler()
+    store = SQLiteControlPlane(str(tmp_path / "personal-ui.db"))
+    handler.mm.get_channel.return_value = {
+        "id": "channel-1", "name": "dm", "display_name": "DM",
+        "type": "D", "team_id": "",
+    }
+    handler.mm.get_channel_authorization_async.return_value = {
+        "id": "channel-1", "type": "D"
+    }
+    handler.personal_ui = PersonalWorkspaceUI(
+        personal_skills=store.personal_skills,
+        work_cases=store.work_cases,
+        interactions=store.interactions,
+        action_tokens=None,
+    )
+    event = _posted_event()
+    event["data"]["post"]["message"] = "我的 Skills"
+
+    await handler.process_posted_event(event)
+
+    runtime.run.assert_not_awaited()
+    sent = handler.mm.send_post_async.await_args.kwargs
+    assert "我的 Skills" in sent["message"]
+    store.close()
 
 
 def test_post_edit_updates_persisted_and_working_memory():

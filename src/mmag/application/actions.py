@@ -19,7 +19,14 @@ if TYPE_CHECKING:
 
     from ..control_plane import SQLiteControlPlane
 
-_ALLOWED_ACTIONS = frozenset({"approve", "reject", "retry", "download", "rework"})
+_ALLOWED_ACTIONS = frozenset(
+    {
+        "approve", "reject", "retry", "download", "rework",
+        "pskill_run", "pskill_edit", "pskill_activate", "pskill_archive",
+        "pskill_versions",
+        "case_save", "case_good", "case_bad", "case_draft",
+    }
+)
 _MAX_TOKEN_BYTES = 8_192
 _MAX_REQUEST_BYTES = 65_536
 

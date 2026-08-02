@@ -9,6 +9,7 @@ from .errors import (
 )
 from .loader import SkillPackageLoader, load_skill_instructions
 from .models import SkillPackage, SkillVersionSnapshot
+from .personal import PersonalSkillResolver, compile_personal_skill
 from .projection import project_skill_files
 from .registry import SkillPackageRegistry
 from .resolver import SkillResolver, build_skill_provenance, validate_skill_contract
@@ -25,6 +26,7 @@ __all__ = [
     "SkillPackageError",
     "SkillPackageLoader",
     "SkillPackageRegistry",
+    "PersonalSkillResolver",
     "SkillReferenceError",
     "SkillContext",
     "SkillResolutionError",
@@ -36,4 +38,5 @@ __all__ = [
     "build_skill_provenance",
     "get_skill_context",
     "validate_skill_contract",
+    "compile_personal_skill",
 ]

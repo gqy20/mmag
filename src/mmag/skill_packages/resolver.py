@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +13,7 @@ from jsonschema.exceptions import ValidationError
 
 from ..agent_system import SkillInvocation
 from .errors import SkillContractError, SkillResolutionError
+from .personal import PersonalSkillResolver, compile_personal_skill
 
 if TYPE_CHECKING:
     from ..agent_packages import AgentPackage
@@ -65,9 +67,26 @@ class SkillResolver:
         self,
         registry: SkillPackageRegistry,
         capabilities: CapabilityRegistry,
+        personal_skills=None,
     ) -> None:
         self.registry = registry
         self.capabilities = capabilities
+        self.personal = (
+            PersonalSkillResolver(personal_skills) if personal_skills is not None else None
+        )
+
+    def prepare_personal_request(self, request: AgentRequest) -> AgentRequest:
+        """Apply an explicitly selected Personal Skill's governed routing hints."""
+        if not request.requested_personal_skill:
+            return request
+        if self.personal is None:
+            raise SkillResolutionError("Personal Skill Registry is unavailable")
+        skill = self.personal.requested(request)
+        return replace(
+            request,
+            requested_agent=skill.preferred_agent,
+            requested_skill=skill.base_skill_ref,
+        )
 
     def resolve(
         self,
@@ -85,7 +104,17 @@ class SkillResolver:
             if not matches:
                 return None
             selected = max(matches, key=lambda skill: self._score(skill, request))
-        return self._invocation(package, selected, request, agent_capabilities)
+        invocation = self._invocation(package, selected, request, agent_capabilities)
+        if self.personal is None:
+            if request.requested_personal_skill:
+                raise SkillResolutionError("Personal Skill Registry is unavailable")
+            return invocation
+        personal = self.personal.resolve(
+            request,
+            agent_name=package.manifest.metadata.name,
+            base_skill_ref=selected.manifest.metadata.ref,
+        )
+        return compile_personal_skill(invocation, personal) if personal is not None else invocation
 
     @staticmethod
     def _requested(candidates: list[SkillPackage], requested: str) -> SkillPackage:

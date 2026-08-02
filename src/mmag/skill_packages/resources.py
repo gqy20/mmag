@@ -18,13 +18,19 @@ class SkillContext:
     """Expose the validated active package to capabilities and execution policy."""
 
     package: SkillPackage
+    personal_ref: str = ""
+    personal_hash: str = ""
 
     @property
     def skill_ref(self) -> str:
         return self.package.manifest.metadata.ref
 
     def to_state(self) -> dict[str, str]:
-        return {"skill_ref": self.skill_ref}
+        return {
+            "skill_ref": self.skill_ref,
+            "personal_skill_ref": self.personal_ref,
+            "personal_skill_hash": self.personal_hash,
+        }
 
 
 _CURRENT_SKILL: ContextVar[SkillContext | None] = ContextVar(
