@@ -58,7 +58,12 @@ from ..memory_compactor import MemoryCompactor
 from ..runtimes import DeepAgentRuntime
 from ..skill_packages import SkillPackageRegistry, SkillResolver
 from ..ws_client import WebSocketClient
-from .actions import ActionCallbackServer, ActionTokenService, SlashCommandAdapter
+from .actions import (
+    ActionCallbackServer,
+    ActionTokenService,
+    SlashCommandAdapter,
+    SlashCommandService,
+)
 from .context import AttachmentProcessor, BotIdentity, ContextBuilder
 from .delivery import MattermostDelivery
 from .message_handler import MessageHandler
@@ -182,9 +187,7 @@ class Agent:
         )
         self.agent_package_registry.load_directory(Path(config.agent_packages_path))
         for package in self.agent_package_registry.list():
-            model_policy = self.model_policy_registry.get(
-                package.manifest.model_policy_ref
-            )
+            model_policy = self.model_policy_registry.get(package.manifest.model_policy_ref)
             self.runtime.validate_route(model_policy.route)
             self.deep_agent_runtime.validate_model_policy(
                 model_class=model_policy.model_class,
@@ -255,7 +258,16 @@ class Agent:
         if config.mm_action_callback_url or config.mm_action_signing_secret:
             self.action_tokens = self._build_action_tokens()
         self.slash_commands = (
-            SlashCommandAdapter(config.mm_slash_command_token)
+            SlashCommandAdapter(
+                config.mm_slash_command_token,
+                SlashCommandService(
+                    self.agent_package_registry,
+                    self.skill_package_registry,
+                    self.control_store,
+                    self.scope_resolver,
+                    self.access_guard,
+                ),
+            )
             if config.mm_slash_command_token
             else None
         )
@@ -507,7 +519,8 @@ class Agent:
             (
                 "persona_replies",
                 self.message_handler.persona_replies.close
-                if self.message_handler.persona_replies is not None else None,
+                if self.message_handler.persona_replies is not None
+                else None,
             ),
             ("pipeline", self.pipeline.close if self.pipeline is not None else None),
             ("deep_agent_runtime", self.deep_agent_runtime.close),

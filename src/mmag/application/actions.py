@@ -20,19 +20,37 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
     from concurrent.futures import Future
 
+    from ..agent_packages import AgentPackageRegistry
     from ..control_plane import SQLiteControlPlane
+    from ..control_plane.context import MattermostAccessGuard, MattermostScopeResolver
+    from ..skill_packages import SkillPackageRegistry
 
 _ALLOWED_ACTIONS = frozenset(
     {
-        "approve", "reject", "retry", "download", "rework",
-        "pskill_run", "pskill_edit", "pskill_activate", "pskill_archive",
+        "approve",
+        "reject",
+        "retry",
+        "download",
+        "rework",
+        "pskill_run",
+        "pskill_edit",
+        "pskill_activate",
+        "pskill_archive",
         "pskill_versions",
-        "case_save", "case_good", "case_bad", "case_draft",
+        "case_save",
+        "case_good",
+        "case_bad",
+        "case_draft",
         "memory_forget",
-        "persona_add", "persona_publish", "persona_archive",
-        "persona_reply_approve", "persona_reply_edit", "persona_reply_submit",
+        "persona_add",
+        "persona_publish",
+        "persona_archive",
+        "persona_reply_approve",
+        "persona_reply_edit",
+        "persona_reply_submit",
         "persona_reply_reject",
-        "persona_policy_edit", "persona_policy_submit",
+        "persona_policy_edit",
+        "persona_policy_submit",
     }
 )
 _MAX_TOKEN_BYTES = 8_192
@@ -41,14 +59,14 @@ log = get_logger(__name__)
 
 _SLASH_COMMAND_HELP = """### MMAG 子命令
 
-- `/mmag help`：显示本帮助
-- `/mmag ask <goal>`：让默认 Agent 处理目标
-- `/mmag agents`：列出 Agent
-- `/mmag skills [agent]`：列出 Skill
-- `/mmag run <agent> <goal>`：指定 Agent 运行
-- `/mmag status [run-id]`：查看运行状态
+- `/mmag help`：显示本帮助（可用）
+- `/mmag agents`：列出已激活 Agent（可用）
+- `/mmag skills [agent]`：列出已激活或 Agent 可用的 Skill（可用）
+- `/mmag status [run-id]`：查看本人在当前频道的运行状态（可用）
+- `/mmag ask <goal>`：让默认 Agent 处理目标（待开放）
+- `/mmag run <agent> <goal>`：指定 Agent 运行（待开放）
 
-当前已开放命令发现；业务子命令接入现有权限、Inbox/Outbox 和审批链后再逐项开放。"""
+`ask/run` 接入现有权限、Inbox/Outbox 和审批链后再开放。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,13 +86,140 @@ class ActionTokenError(ValueError):
     pass
 
 
-class SlashCommandAdapter:
-    """Authenticate Mattermost slash requests and return private command discovery."""
+class SlashCommandService:
+    """Fast, authorized read-only commands backed by registered platform state."""
 
-    def __init__(self, token: str) -> None:
+    def __init__(
+        self,
+        agent_registry: AgentPackageRegistry,
+        skill_registry: SkillPackageRegistry,
+        store: SQLiteControlPlane,
+        scope_resolver: MattermostScopeResolver,
+        access_guard: MattermostAccessGuard,
+    ) -> None:
+        self.agent_registry = agent_registry
+        self.skill_registry = skill_registry
+        self.store = store
+        self.scope_resolver = scope_resolver
+        self.access_guard = access_guard
+
+    async def handle(self, payload: dict[str, Any]) -> str:
+        text = str(payload.get("text") or "").strip()
+        parts = text.split(maxsplit=1)
+        subcommand = parts[0].lower() if parts else "help"
+        argument = parts[1].strip() if len(parts) == 2 else ""
+        if subcommand == "help":
+            return _SLASH_COMMAND_HELP
+
+        actor_id = str(payload.get("user_id") or "")
+        channel_id = str(payload.get("channel_id") or "")
+        scope = self.scope_resolver.resolve_post({"user_id": actor_id, "channel_id": channel_id})
+        await self.access_guard.require(actor_id, scope.id, channel_id=channel_id)
+
+        if subcommand == "agents":
+            return self._agents(argument)
+        if subcommand == "skills":
+            return self._skills(argument)
+        if subcommand == "status":
+            return self._status(argument, actor_id=actor_id, channel_id=channel_id)
+        return f"`{subcommand}` 子命令尚未开放。\n\n{_SLASH_COMMAND_HELP}"
+
+    def _agents(self, argument: str) -> str:
+        if argument:
+            return "用法：`/mmag agents`"
+        lines = ["### 已激活 Agents"]
+        for package in self.agent_registry.list():
+            metadata = package.manifest.metadata
+            default = " · 默认" if package.manifest.routing.default else ""
+            lines.append(
+                f"- `{metadata.name}@{metadata.version}`{default} — {metadata.description}"
+            )
+        if len(lines) == 1:
+            lines.append("当前没有已激活的 Agent。")
+        return "\n".join(lines)
+
+    def _skills(self, agent_name: str) -> str:
+        if agent_name and len(agent_name.split()) != 1:
+            return "用法：`/mmag skills [agent]`"
+        if agent_name:
+            try:
+                agent = self.agent_registry.get(agent_name)
+            except LookupError:
+                return f"未找到已激活 Agent `{agent_name}`。"
+            packages = tuple(agent.skills.values())
+            title = f"### `{agent_name}` 可用 Skills"
+        else:
+            packages = self.skill_registry.list()
+            title = "### 已激活 Skills"
+        lines = [title]
+        for package in sorted(packages, key=lambda item: item.manifest.metadata.ref):
+            metadata = package.manifest.metadata
+            lines.append(f"- `{metadata.ref}` — {metadata.description}")
+        if len(lines) == 1:
+            lines.append("当前没有可用的 Skill。")
+        return "\n".join(lines)
+
+    def _status(self, run_id: str, *, actor_id: str, channel_id: str) -> str:
+        from ..control_plane import EntityType
+
+        if run_id and len(run_id.split()) != 1:
+            return "用法：`/mmag status [run-id]`"
+        if run_id:
+            entity_id = run_id if run_id.startswith("run:") else f"run:{run_id}"
+            try:
+                entity = self.store.get_lifecycle_entity(EntityType.AGENT_RUN, entity_id)
+            except KeyError:
+                return "未找到当前频道中属于你的运行记录。"
+            entities = [entity]
+        else:
+            entities = self.store.list_lifecycle_entities_for_scope(
+                EntityType.AGENT_RUN,
+                channel_id,
+                limit=50,
+            )
+
+        owned = [
+            entity
+            for entity in entities
+            if entity.scope_id == channel_id
+            and self._is_owned_run(entity.payload, actor_id, channel_id)
+        ][:5]
+        if not owned:
+            return "未找到当前频道中属于你的运行记录。"
+        lines = ["### 运行状态"]
+        for entity in owned:
+            snapshot = entity.payload.get("snapshot")
+            agent_name = str(snapshot.get("agent_name") or "") if isinstance(snapshot, dict) else ""
+            agent = f" · `{agent_name}`" if agent_name else ""
+            lines.append(f"- `{entity.entity_id}` · **{entity.state}**{agent}")
+        return "\n".join(lines)
+
+    def _is_owned_run(
+        self,
+        payload: Any,
+        actor_id: str,
+        channel_id: str,
+    ) -> bool:
+        if not isinstance(payload, dict):
+            payload = dict(payload)
+        event_id = str(payload.get("inbox_event_id") or "")
+        if not event_id:
+            return False
+        try:
+            source = self.store.get_inbox(event_id).event
+        except KeyError:
+            return False
+        return source.actor_id == actor_id and source.conversation_id == channel_id
+
+
+class SlashCommandAdapter:
+    """Authenticate Mattermost slash requests before command dispatch."""
+
+    def __init__(self, token: str, service: SlashCommandService | None = None) -> None:
         if not token.strip():
             raise ValueError("MM_SLASH_COMMAND_TOKEN must not be empty")
         self._token = token
+        self.service = service
 
     async def handle(self, payload: dict[str, Any]) -> dict[str, Any]:
         supplied_token = str(payload.get("token") or "")
@@ -84,14 +229,19 @@ class SlashCommandAdapter:
             raise PermissionError("invalid Mattermost slash command token")
         if str(payload.get("command") or "") != "/mmag":
             raise ValueError("unexpected Mattermost slash command")
-        if not str(payload.get("user_id") or "") or not str(
-            payload.get("channel_id") or ""
-        ):
+        if not str(payload.get("user_id") or "") or not str(payload.get("channel_id") or ""):
             raise ValueError("Mattermost slash command actor and channel are required")
 
         text = str(payload.get("text") or "").strip()
         subcommand = text.split(maxsplit=1)[0].lower() if text else "help"
-        prefix = "" if subcommand == "help" else f"`{subcommand}` 子命令尚未开放。\n\n"
+        if self.service is None:
+            message = (
+                _SLASH_COMMAND_HELP
+                if subcommand == "help"
+                else f"`{subcommand}` 子命令尚未开放。\n\n{_SLASH_COMMAND_HELP}"
+            )
+        else:
+            message = await self.service.handle(payload)
         log_event(
             log,
             "mattermost.slash_command",
@@ -100,7 +250,7 @@ class SlashCommandAdapter:
         )
         return {
             "response_type": "ephemeral",
-            "text": f"{prefix}{_SLASH_COMMAND_HELP}",
+            "text": message,
         }
 
 
@@ -252,15 +402,10 @@ class ActionCallbackServer:
         self,
         host: str,
         port: int,
-        callback: Callable[
-            [dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]
-        ]
-        | None = None,
+        callback: Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]] | None = None,
         *,
         path: str = "/actions",
-        command_callback: Callable[
-            [dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]
-        ]
+        command_callback: Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]
         | None = None,
         command_path: str = "/integrations/commands",
     ) -> None:

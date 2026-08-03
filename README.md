@@ -105,7 +105,7 @@ Bot 的触发方式：
 1. `@bot`、DM、回复 Bot thread：确定性响应；
 2. 普通频道消息：由模型根据 Package Prompt 决定响应或输出 `<SILENT>`；
 3. “分析链接/Analyze link + URL”：路由到 Link Agent。
-4. `/mmag` 或 `/mmag help`：私有显示 Slash 子命令目录。
+4. `/mmag`、`/mmag help`、`agents`、`skills [agent]` 和 `status [run-id]`：私有显示命令目录及当前 Scope 内的只读信息。
 
 ## 开发与验证
 

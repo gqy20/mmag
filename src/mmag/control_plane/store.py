@@ -468,6 +468,23 @@ class SQLiteControlPlane:
         rows = self._connection.execute("SELECT * FROM lifecycle_entities").fetchall()
         return [self._lifecycle_entity(row) for row in rows]
 
+    def list_lifecycle_entities_for_scope(
+        self,
+        entity_type: EntityType,
+        scope_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[LifecycleEntity]:
+        if not scope_id or limit < 1 or limit > 100:
+            raise ValueError("scope_id and a limit between 1 and 100 are required")
+        rows = self._connection.execute(
+            """SELECT * FROM lifecycle_entities
+            WHERE entity_type=? AND scope_id=?
+            ORDER BY updated_at DESC LIMIT ?""",
+            (entity_type.value, scope_id, limit),
+        ).fetchall()
+        return [self._lifecycle_entity(row) for row in rows]
+
     def put_scope(self, scope: Scope) -> None:
         with self._lock:
             self._connection.execute(
