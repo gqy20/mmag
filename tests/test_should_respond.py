@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from mmag.application import BotIdentity, MessageHandler  # noqa: E402
+from mmag.application.agent_requests import AgentRequestHandler  # noqa: E402
 
 
 def _make_handler(bot_user_id: str, bot_username: str = "agent2") -> MessageHandler:
@@ -102,21 +103,21 @@ class TestIsExplicitInvocation:
 
 class TestIsSilent:
     def test_empty_text_is_silent(self):
-        assert MessageHandler.is_silent("") is True
-        assert MessageHandler.is_silent(None) is True
+        assert AgentRequestHandler.is_silent("") is True
+        assert AgentRequestHandler.is_silent(None) is True
 
     def test_silent_marker_first_line(self):
-        assert MessageHandler.is_silent("<SILENT>") is True
-        assert MessageHandler.is_silent("<SILENT>\n") is True
-        assert MessageHandler.is_silent("<SILENT>") is True
+        assert AgentRequestHandler.is_silent("<SILENT>") is True
+        assert AgentRequestHandler.is_silent("<SILENT>\n") is True
+        assert AgentRequestHandler.is_silent("<SILENT>") is True
         # 后面可以有空白
-        assert MessageHandler.is_silent("<SILENT>\n\n") is True
+        assert AgentRequestHandler.is_silent("<SILENT>\n\n") is True
 
     def test_normal_text_not_silent(self):
-        assert MessageHandler.is_silent("好的,我看看") is False
-        assert MessageHandler.is_silent("收到 👍") is False
+        assert AgentRequestHandler.is_silent("好的,我看看") is False
+        assert AgentRequestHandler.is_silent("收到 👍") is False
 
     def test_silent_marker_in_middle_not_silent(self):
         """<SILENT> 必须出现在第一行才视为沉默"""
         text = "我先看看情况\n<SILENT>"
-        assert MessageHandler.is_silent(text) is False
+        assert AgentRequestHandler.is_silent(text) is False

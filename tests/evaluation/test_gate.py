@@ -18,7 +18,7 @@ def test_package_gate_records_only_fully_validated_registry_batches(tmp_path):
     store = SQLiteControlPlane(tmp_path / "releases.db")
     gate = PackageActivationGate(store.releases)
     skills = SkillPackageRegistry(activation_gate=gate)
-    skills.load_directory(ROOT / "skills")
+    skill_packages = skills.load_directory(ROOT / "skills")
     policies = PolicyRegistry()
     policies.load_directory(ROOT / "policies")
     model_policies = ModelPolicyRegistry()
@@ -32,10 +32,14 @@ def test_package_gate_records_only_fully_validated_registry_batches(tmp_path):
         execution_profile_registry=profiles,
         activation_gate=gate,
     )
-    agents.load_directory(ROOT / "agents")
+    agent_packages = agents.load_directory(ROOT / "agents")
 
-    assert len(store.releases.list_active("skill")) == 4
-    assert len(store.releases.list_active("agent")) == 5
+    assert {
+        record["package_name"] for record in store.releases.list_active("skill")
+    } == {package.manifest.metadata.name for package in skill_packages}
+    assert {
+        record["package_name"] for record in store.releases.list_active("agent")
+    } == {package.manifest.metadata.name for package in agent_packages}
     assert all(record["package_hash"] for record in store.releases.list_active())
     store.close()
 
@@ -47,8 +51,11 @@ def test_failed_gate_does_not_publish_release_record(tmp_path):
     gate = PackageActivationGate(store.releases)
     skills = SkillPackageRegistry()
     packages = skills.load_directory(ROOT / "skills")
+    package = next(
+        item for item in packages if item.manifest.metadata.name == "web-research"
+    )
     invalid = replace(
-        packages[0],
+        package,
         evals=MappingProxyType(
             {
                 "evals.yml": SkillEvalAsset(

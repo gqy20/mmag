@@ -20,6 +20,6 @@ def test_wheel_contains_flat_agent_and_skill_resources(tmp_path):
         renderer = archive.read("mmag/renderers/ppt/ppt.cjs").decode()
 
     assert "## 身份" in prompt
-    assert "# Web Research" in skill
+    assert "# 网络研究" in skill
     assert "kind: ExecutionProfile" in profile
     assert "pptxgenjs" in renderer.lower()
