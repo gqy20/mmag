@@ -94,9 +94,7 @@ def _runtime(
             ),
         )
     )
-    executor = CapabilityExecutor(
-        PolicyCapabilityAuthorizer(policy, audit_sink=audit_sink)
-    )
+    executor = CapabilityExecutor(PolicyCapabilityAuthorizer(policy, audit_sink=audit_sink))
     registry = CapabilityRegistry()
     registry.register(bind_langgraph_capability(spec, executor=executor))
     return DeepAgentRuntime(
@@ -212,6 +210,37 @@ async def test_schema_run_does_not_promote_json_text_to_structured_output():
     assert result.usage.model_calls == 1
     assert result.usage.input_tokens == 7
     assert result.usage.output_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_plain_text_fills_only_the_single_text_result_contract():
+    runtime = _runtime(
+        [],
+        AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "internal"},
+                {"type": "text", "text": "answer"},
+            ],
+            usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+        ),
+    )
+    request = _request(runtime, "text-schema-run")
+    request = RunRequest(
+        request.context,
+        request.messages,
+        capabilities=request.capabilities,
+        response_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        },
+    )
+
+    result = await runtime.run(request)
+
+    assert result.output == {"text": "answer"}
+    assert result.text == "answer"
 
 
 def test_native_middleware_enforces_package_call_limits():

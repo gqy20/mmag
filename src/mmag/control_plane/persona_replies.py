@@ -97,6 +97,37 @@ class PersonaReplyStore:
             raise KeyError(request_id)
         return self._record(row)
 
+    def list_states(self, *states: PersonaReplyState) -> tuple[PersonaReplyRequest, ...]:
+        if not states:
+            return ()
+        placeholders = ",".join("?" for _ in states)
+        rows = self.connection.execute(
+            f"SELECT * FROM persona_reply_requests WHERE state IN ({placeholders}) "
+            "ORDER BY created_at",
+            tuple(state.value for state in states),
+        ).fetchall()
+        return tuple(self._record(row) for row in rows)
+
+    def expire_pending(self, *, now: float | None = None) -> tuple[PersonaReplyRequest, ...]:
+        timestamp = now if now is not None else time.time()
+        with self.lock:
+            rows = self.connection.execute(
+                """SELECT id FROM persona_reply_requests
+                WHERE state='pending' AND expires_at<? ORDER BY created_at""",
+                (timestamp,),
+            ).fetchall()
+            ids = tuple(str(row["id"]) for row in rows)
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                self.connection.execute(
+                    f"""UPDATE persona_reply_requests SET state='expired',
+                    last_error='approval expired', updated_at=?
+                    WHERE id IN ({placeholders}) AND state='pending'""",
+                    (timestamp, *ids),
+                )
+                self.connection.commit()
+        return tuple(self.get(request_id) for request_id in ids)
+
     def decide(
         self,
         request_id: str,
@@ -113,7 +144,7 @@ class PersonaReplyStore:
         if current.state is not PersonaReplyState.PENDING:
             raise ValueError("persona reply request was already decided")
         if current.expires_at < timestamp:
-            self._finish(request_id, PersonaReplyState.FAILED, actor_id, "approval expired")
+            self._finish(request_id, PersonaReplyState.EXPIRED, "", "approval expired")
             raise ValueError("persona reply request has expired")
         final_draft = draft_text.strip()[:16_000] if approved and draft_text.strip() else ""
         with self.lock:
@@ -124,7 +155,8 @@ class PersonaReplyStore:
                 WHERE id=? AND state='pending'""",
                 (
                     PersonaReplyState.APPROVED.value
-                    if approved else PersonaReplyState.REJECTED.value,
+                    if approved
+                    else PersonaReplyState.REJECTED.value,
                     final_draft,
                     final_draft,
                     actor_id,
@@ -139,21 +171,48 @@ class PersonaReplyStore:
         return self.get(request_id)
 
     def mark_delivered(self, request_id: str) -> PersonaReplyRequest:
-        return self._finish(request_id, PersonaReplyState.DELIVERED, "", "")
+        with self.lock:
+            self.connection.execute(
+                """UPDATE persona_reply_requests SET state='delivered', last_error='',
+                updated_at=? WHERE id=? AND state='approved'""",
+                (time.time(), request_id),
+            )
+            self.connection.commit()
+        return self.get(request_id)
 
     def mark_failed(self, request_id: str, error: str) -> PersonaReplyRequest:
         return self._finish(request_id, PersonaReplyState.FAILED, "", error[:500])
 
-    def set_approval_post(self, request_id: str, post_id: str) -> PersonaReplyRequest:
-        if not post_id:
-            raise ValueError("persona approval post ID is required")
+    def set_approval_target(
+        self, request_id: str, *, channel_id: str = "", post_id: str = ""
+    ) -> PersonaReplyRequest:
+        if not channel_id and not post_id:
+            raise ValueError("persona approval channel or post ID is required")
         with self.lock:
             self.connection.execute(
-                """UPDATE persona_reply_requests SET owner_approval_post_id=?, updated_at=?
+                """UPDATE persona_reply_requests SET
+                owner_channel_id=CASE WHEN ?='' THEN owner_channel_id ELSE ? END,
+                owner_approval_post_id=CASE WHEN ?='' THEN owner_approval_post_id ELSE ? END,
+                updated_at=?
                 WHERE id=? AND state='pending'""",
-                (post_id, time.time(), request_id),
+                (channel_id, channel_id, post_id, post_id, time.time(), request_id),
             )
             self.connection.commit()
+        return self.get(request_id)
+
+    def retry_failed(self, request_id: str, *, actor_id: str) -> PersonaReplyRequest:
+        current = self.get(request_id)
+        if current.owner_id != actor_id or not current.decision_by:
+            raise PermissionError("only a decided reply can be retried by its owner")
+        with self.lock:
+            cursor = self.connection.execute(
+                """UPDATE persona_reply_requests SET state='approved', last_error='',
+                updated_at=? WHERE id=? AND state='failed'""",
+                (time.time(), request_id),
+            )
+            self.connection.commit()
+        if cursor.rowcount != 1:
+            raise ValueError("persona reply is not retryable")
         return self.get(request_id)
 
     def _finish(
@@ -190,6 +249,7 @@ class PersonaReplyStore:
             source_root_id=row["source_root_id"],
             source_status_post_id=row["source_status_post_id"],
             owner_approval_post_id=row["owner_approval_post_id"],
+            owner_channel_id=row["owner_channel_id"],
             question=row["question"],
             draft_text=row["draft_text"],
             approval_reason=row["approval_reason"],

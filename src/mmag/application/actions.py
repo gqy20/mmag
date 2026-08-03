@@ -31,6 +31,7 @@ _ALLOWED_ACTIONS = frozenset(
         "persona_add", "persona_publish", "persona_archive",
         "persona_reply_approve", "persona_reply_edit", "persona_reply_submit",
         "persona_reply_reject",
+        "persona_policy_edit", "persona_policy_submit",
     }
 )
 _MAX_TOKEN_BYTES = 8_192

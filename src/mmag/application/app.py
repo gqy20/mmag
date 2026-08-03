@@ -346,6 +346,8 @@ class Agent:
             max_pending=config.pipeline_max_pending,
         )
         await self.pipeline.start()
+        if self.message_handler.persona_replies is not None:
+            await self.message_handler.persona_replies.start(self.pipeline)
         if self.action_server is not None:
             await self.action_server.start()
             log.info(
@@ -486,6 +488,11 @@ class Agent:
                 self.action_server.close if self.action_server is not None else None,
             ),
             ("action_tasks", self.message_handler.close_actions),
+            (
+                "persona_replies",
+                self.message_handler.persona_replies.close
+                if self.message_handler.persona_replies is not None else None,
+            ),
             ("pipeline", self.pipeline.close if self.pipeline is not None else None),
             ("deep_agent_runtime", self.deep_agent_runtime.close),
             ("mcp_bridge", self.mcp_bridge.close_all),

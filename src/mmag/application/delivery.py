@@ -150,7 +150,36 @@ class MattermostDelivery:
         *,
         update_post_id: str = "",
         delivery_key: str = "",
+        agent_run_id: str = "",
+        message_kind: str = "",
     ) -> tuple[str, ...]:
+        messages = self.render_messages(
+            post,
+            view,
+            update_post_id=update_post_id,
+            delivery_key=delivery_key,
+            agent_run_id=agent_run_id,
+            message_kind=message_kind,
+        )
+        collector = OUTBOUND_COLLECTOR.get()
+        if collector is not None:
+            collector.extend(messages)
+            return tuple("outbox:pending" for _ in messages)
+        remote_ids: list[str] = []
+        for message in messages:
+            remote_ids.append(await self.deliver(message))
+        return tuple(remote_ids)
+
+    def render_messages(
+        self,
+        post: dict,
+        view: ResponseView,
+        *,
+        update_post_id: str = "",
+        delivery_key: str = "",
+        agent_run_id: str = "",
+        message_kind: str = "",
+    ) -> tuple[OutboundMessage, ...]:
         rendered = self.renderer.render(view)
         root_id = self.thread_root(post)
         scope_id = self.scope(post)
@@ -163,9 +192,10 @@ class MattermostDelivery:
                     channel_id=post["channel_id"],
                     text=chunk,
                     props=rendered.props if index == 0 else {PROP_FROM_BOT: PROP_TRUE},
+                    agent_run_id=agent_run_id,
                     idempotency_key=f"{run_key}:response:{index}",
                     root_id=root_id,
-                    message_kind=view.kind.value,
+                    message_kind=message_kind or view.kind.value,
                     scope_id=scope_id,
                     actions=rendered.actions if index == 0 else (),
                     update_post_id=update_post_id if index == 0 else "",
@@ -179,6 +209,7 @@ class MattermostDelivery:
                     channel_id=post["channel_id"],
                     text="📎 交付产物",
                     props={PROP_FROM_BOT: PROP_TRUE, "mmag_kind": "artifact"},
+                    agent_run_id=agent_run_id,
                     idempotency_key=f"{run_key}:artifacts",
                     root_id=root_id,
                     message_kind="artifact",
@@ -187,14 +218,7 @@ class MattermostDelivery:
                     actor_id=str(post.get("user_id") or ""),
                 )
             )
-        collector = OUTBOUND_COLLECTOR.get()
-        if collector is not None:
-            collector.extend(messages)
-            return tuple("outbox:pending" for _ in messages)
-        remote_ids: list[str] = []
-        for message in messages:
-            remote_ids.append(await self.deliver(message))
-        return tuple(remote_ids)
+        return tuple(messages)
 
     def stream(
         self,
@@ -242,9 +266,7 @@ class MattermostDelivery:
                     raise RuntimeError(f"Artifact upload failed: {stored.filename}")
                 file_ids.append(file_id)
                 if self.outbox_store is not None and outbound.idempotency_key:
-                    self.outbox_store.save_delivery_files(
-                        outbound.idempotency_key, tuple(file_ids)
-                    )
+                    self.outbox_store.save_delivery_files(outbound.idempotency_key, tuple(file_ids))
         if outbound.update_post_id and not file_ids:
             post_id = await self.mm.update_post_async(
                 outbound.update_post_id,

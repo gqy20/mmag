@@ -646,6 +646,13 @@ def _v019_add_persona_approval_post(connection: sqlite3.Connection) -> None:
     )
 
 
+def _v020_add_persona_approval_channel(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """ALTER TABLE persona_reply_requests
+        ADD COLUMN owner_channel_id TEXT NOT NULL DEFAULT ''"""
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -760,6 +767,12 @@ DEFAULT_MIGRATIONS = (
         name="add persona approval post",
         checksum=_checksum("v019-add-persona-approval-post-20260802"),
         upgrade=_v019_add_persona_approval_post,
+    ),
+    Migration(
+        version=20,
+        name="add persona approval channel",
+        checksum=_checksum("v020-add-persona-approval-channel-20260803"),
+        upgrade=_v020_add_persona_approval_channel,
     ),
 )
 

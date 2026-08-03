@@ -117,9 +117,7 @@ class ManagedChatModelFactory:
         if not 0 <= temperature <= 1:
             raise ValueError("Anthropic temperature must be between 0 and 1")
 
-    def create(
-        self, *, model_class: str, max_tokens: int, temperature: float
-    ) -> BaseChatModel:
+    def create(self, *, model_class: str, max_tokens: int, temperature: float) -> BaseChatModel:
         self.validate(
             model_class=model_class,
             max_tokens=max_tokens,
@@ -215,7 +213,9 @@ class DeepAgentRuntime:
         except AgentRuntimeError:
             raise
         except TimeoutError as error:
-            raise RuntimeTimeoutError("runtime deadline exceeded", runtime=self.runtime_name) from error
+            raise RuntimeTimeoutError(
+                "runtime deadline exceeded", runtime=self.runtime_name
+            ) from error
         except Exception as error:
             translated = translate_runtime_error(error, runtime=self.runtime_name)
             raise translated from error
@@ -317,14 +317,12 @@ class DeepAgentRuntime:
         artifacts = artifacts or []
         deliveries = deliveries or []
         workspace_enabled = bool(
-            self.workspace_backend_factory
-            and self.workspace_backend_factory.is_enabled(request)
+            self.workspace_backend_factory and self.workspace_backend_factory.is_enabled(request)
         )
         tools = [
             self._tool(schema, calls, artifacts, deliveries, request)
             for schema in request.capabilities
-            if str(schema["name"])
-            not in {"workspace.read", "workspace.write", "workspace.execute"}
+            if str(schema["name"]) not in {"workspace.read", "workspace.write", "workspace.execute"}
             and (str(schema["name"]) != "workspace.commit" or workspace_enabled)
         ]
         interrupt_capabilities = tuple(
@@ -401,9 +399,7 @@ class DeepAgentRuntime:
                     "result": payload,
                     "status": result.status.value,
                     "duration_ms": result.duration_ms,
-                    "error_code": (
-                        result.status.value if result.status.value != "success" else ""
-                    ),
+                    "error_code": (result.status.value if result.status.value != "success" else ""),
                 }
             )
             if isinstance(payload, dict):
@@ -433,9 +429,7 @@ class DeepAgentRuntime:
 
             def requires_approval(tool_request, capability_name=name):
                 arguments = dict(tool_request.tool_call.get("args") or {})
-                authorization = self.capability_registry.authorization(
-                    capability_name, arguments
-                )
+                authorization = self.capability_registry.authorization(capability_name, arguments)
                 return bool(
                     authorization
                     and authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL
@@ -467,9 +461,7 @@ class DeepAgentRuntime:
                         await self._emit(request, RunEventKind.TEXT_DELTA, text=text)
         snapshot = await graph.aget_state(graph_config)
         interrupts = tuple(
-            interrupt
-            for task in snapshot.tasks
-            for interrupt in getattr(task, "interrupts", ())
+            interrupt for task in snapshot.tasks for interrupt in getattr(task, "interrupts", ())
         )
         if interrupts:
             final = {**final, "__interrupt__": interrupts}
@@ -487,8 +479,7 @@ class DeepAgentRuntime:
         if raw_interrupts:
             messages = list(state.get("messages") or ())
             interruptions = tuple(
-                _interrupt_payload(item, thread_id, request, session)
-                for item in raw_interrupts
+                _interrupt_payload(item, thread_id, request, session) for item in raw_interrupts
             )
             if sink is not None:
                 await sink(RunEvent(RunEventKind.APPROVAL_REQUIRED))
@@ -506,6 +497,16 @@ class DeepAgentRuntime:
         structured = dict(output) if isinstance(output, Mapping) else None
         repaired_fields = 0
         messages = list(state.get("messages") or ())
+        if structured is None and request.response_schema is not None:
+            fallback = _text_result_fallback(messages, request.response_schema)
+            if fallback is not None:
+                structured = fallback
+                log_event(
+                    log,
+                    "model.output_text_fallback",
+                    status="succeeded",
+                    field="text",
+                )
         if structured is not None and request.response_schema is not None:
             structured, repaired_fields = repair_structured_output(
                 structured,
@@ -612,9 +613,22 @@ def _result_text(output: Mapping[str, Any] | None, messages: list[Any]) -> str:
     return ""
 
 
-def _usage(
-    messages: list[Any], *, tool_calls: int = 0, repair_calls: int = 0
-) -> TokenUsage:
+def _text_result_fallback(messages: list[Any], schema: Mapping[str, Any]) -> dict[str, str] | None:
+    """Project plain model text only into the narrow `{text: string}` contract."""
+    properties = schema.get("properties")
+    required = schema.get("required")
+    if not isinstance(properties, Mapping) or set(properties) != {"text"}:
+        return None
+    text_schema = properties.get("text")
+    if not isinstance(text_schema, Mapping) or text_schema.get("type") != "string":
+        return None
+    if not isinstance(required, (list, tuple)) or set(required) != {"text"}:
+        return None
+    text = _result_text(None, messages)
+    return {"text": text} if text else None
+
+
+def _usage(messages: list[Any], *, tool_calls: int = 0, repair_calls: int = 0) -> TokenUsage:
     input_tokens = 0
     output_tokens = 0
     model_calls = 0

@@ -127,6 +127,26 @@ class MessagePipeline:
         await self.scheduler.submit(event)
         return True
 
+    def enqueue_delivery(self, message: OutboundMessage) -> str:
+        delivery_id = self.store.enqueue_delivery(message)
+        self._delivery_wake.set()
+        return delivery_id
+
+    def retry_delivery(self, idempotency_key: str) -> bool:
+        delivery_id = self.store.retry_delivery(idempotency_key)
+        if delivery_id:
+            self.lifecycle.transition(
+                EntityType.DELIVERY,
+                delivery_id,
+                "retrying",
+                command_id=f"delivery-manual-retry:{delivery_id}:{time.time_ns()}",
+                reason="manual retry requested",
+            )
+            delivery = self.store.get_delivery(delivery_id)
+            self._append_delivery_audit(delivery, "retrying", source="manual")
+            self._delivery_wake.set()
+        return bool(delivery_id)
+
     async def replay_dead_letter(
         self,
         event_id: str,
@@ -158,15 +178,11 @@ class MessagePipeline:
             "source_error": source.last_error,
         }
         try:
-            source_run = self.store.get_lifecycle_entity(
-                EntityType.AGENT_RUN, f"run:{event_id}"
-            )
+            source_run = self.store.get_lifecycle_entity(EntityType.AGENT_RUN, f"run:{event_id}")
         except KeyError:
             source_run = None
         if source_run is not None and isinstance(source_run.payload.get("snapshot"), dict):
-            payload["_mmag_replay"]["package_snapshot"] = dict(
-                source_run.payload["snapshot"]
-            )
+            payload["_mmag_replay"]["package_snapshot"] = dict(source_run.payload["snapshot"])
         replay = InboundEvent(
             event_id=replay_id,
             platform=source.event.platform,
@@ -292,11 +308,12 @@ class MessagePipeline:
             await self._deliver_one(delivery)
 
     async def _deliver_one(self, delivery: DeliveryRecord) -> None:
+        cycle = self.store.get_lifecycle_entity(EntityType.DELIVERY, delivery.id).version
         self.lifecycle.transition(
             EntityType.DELIVERY,
             delivery.id,
             "sending",
-            command_id=f"delivery-send:{delivery.id}:{delivery.attempts}",
+            command_id=f"delivery-send:{delivery.id}:{delivery.attempts}:v{cycle}",
         )
         try:
             remote_id = await self.deliverer(delivery.message)
@@ -310,10 +327,11 @@ class MessagePipeline:
             EntityType.DELIVERY,
             delivery.id,
             "delivered",
-            command_id=f"delivery-success:{delivery.id}",
+            command_id=f"delivery-success:{delivery.id}:{delivery.attempts}:v{cycle}",
         )
         self._settle_parent_task(delivery.message.agent_run_id)
         self._append_delivery_audit(delivery, "delivered", remote_id=remote_id)
+        self._settle_persona_reply(delivery, delivered=True, remote_id=remote_id)
 
     def _handle_delivery_failure(self, delivery: DeliveryRecord, error: Exception) -> None:
         if delivery.attempts >= self.max_delivery_attempts:
@@ -322,10 +340,14 @@ class MessagePipeline:
                 EntityType.DELIVERY,
                 delivery.id,
                 "failed",
-                command_id=f"delivery-failed:{delivery.id}",
+                command_id=(
+                    f"delivery-failed:{delivery.id}:{delivery.attempts}:"
+                    f"v{self.store.get_lifecycle_entity(EntityType.DELIVERY, delivery.id).version}"
+                ),
             )
             self._settle_parent_task(delivery.message.agent_run_id, failed=True)
             self._append_delivery_audit(delivery, "failed", error=str(error))
+            self._settle_persona_reply(delivery, delivered=False, error=error)
             return
         delay = self.delivery_retry_base_seconds * 2 ** (delivery.attempts - 1)
         self.store.mark_delivery_retry(delivery.id, str(error), time.time() + delay)
@@ -333,7 +355,10 @@ class MessagePipeline:
             EntityType.DELIVERY,
             delivery.id,
             "retrying",
-            command_id=f"delivery-retry:{delivery.id}:{delivery.attempts}",
+            command_id=(
+                f"delivery-retry:{delivery.id}:{delivery.attempts}:"
+                f"v{self.store.get_lifecycle_entity(EntityType.DELIVERY, delivery.id).version}"
+            ),
         )
 
     def _append_delivery_audit(
@@ -349,6 +374,38 @@ class MessagePipeline:
             )
         except Exception:
             log.exception("delivery %s audit write failed", delivery.id)
+
+    def _settle_persona_reply(
+        self,
+        delivery: DeliveryRecord,
+        *,
+        delivered: bool,
+        remote_id: str = "",
+        error: Exception | None = None,
+    ) -> None:
+        run_id = delivery.message.agent_run_id
+        if not run_id.startswith("persona-reply:"):
+            return
+        request_id = run_id.removeprefix("persona-reply:")
+        try:
+            if delivered and delivery.message.message_kind == "persona_approval":
+                self.store.persona_replies.set_approval_target(request_id, post_id=remote_id)
+            elif delivered and delivery.message.message_kind == "persona_decision":
+                self.store.persona_replies.mark_delivered(request_id)
+            elif not delivered and delivery.message.message_kind in {
+                "persona_approval",
+                "persona_decision",
+            }:
+                request = self.store.persona_replies.get(request_id)
+                if delivery.message.message_kind == "persona_approval" or (
+                    request.state.value == "approved"
+                ):
+                    self.store.persona_replies.mark_failed(
+                        request_id,
+                        type(error).__name__ if error is not None else "delivery_failed",
+                    )
+        except (KeyError, ValueError):
+            log.exception("persona reply delivery settlement failed")
 
     def _ensure_execution_entities(self, event: InboundEvent) -> None:
         for entity_type, prefix in (

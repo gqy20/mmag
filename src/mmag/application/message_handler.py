@@ -5,13 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import replace
-from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from ..agent_packages import AgentPackageError
-from ..agent_system import AgentOutput, AgentRequest
-from ..capabilities import CapabilityContext, bind_capability_context
+from ..agent_system import AgentOutput
 from ..config import config
 from ..control_plane import (
     InboundEvent,
@@ -20,38 +16,19 @@ from ..control_plane import (
     OutboundMessage,
     ScopeKind,
 )
-from ..governance import GovernanceContext, bind_governance_context
 from ..logger import get_logger, log_context, log_event
 from ..runtimes import (
-    AgentResult,
-    AgentRuntimeError,
-    RunContext,
-    RunEventSink,
-    RunRequest,
-    RuntimeRateLimitError,
-    RuntimeRejectedError,
     RuntimeStatus,
-    RuntimeTimeoutError,
-    RuntimeUnavailableError,
 )
-from ..skill_packages import SkillPackageError
+from .agent_requests import AgentRequestHandler
 from .delivery import OUTBOUND_COLLECTOR, MattermostDelivery
+from .persona_replies import PersonaReplyCoordinator
 from .persona_ui import PersonaWorkspaceUI
 from .personal_ui import PersonalWorkspaceUI
-from .views import (
-    ResponseAction,
-    ResponseKind,
-    ResponsePresenter,
-    ResponseSection,
-    ResponseView,
-    RunStatus,
-)
 
 if TYPE_CHECKING:
-    from ..agent_system import ManagedAgent
     from ..skill_packages import SkillResolver
     from .context import AttachmentProcessor, BotIdentity, ContextBuilder
-    from .stream import MattermostStream
 
 log = get_logger(__name__)
 
@@ -131,8 +108,34 @@ class MessageHandler:
             if personas is not None and memory_items is not None
             else None
         )
+        self.agent_requests = AgentRequestHandler(
+            capability_registry=capability_registry,
+            agent_router=agent_router,
+            skill_resolver=skill_resolver,
+            audit_store=audit_store,
+            approval_coordinator=approval_coordinator,
+            context_builder=context_builder,
+            delivery=delivery,
+            scope_resolver=self.scope_resolver,
+            personal_ui=self.personal_ui,
+            action_tokens=action_tokens,
+        )
+        self.persona_replies = (
+            PersonaReplyCoordinator(
+                mm_client=mm_client,
+                identity=identity,
+                scope_resolver=self.scope_resolver,
+                delivery=delivery,
+                workspace=self.persona_ui,
+                action_tokens=action_tokens,
+                audit_store=audit_store,
+                draft_generator=self.agent_requests.respond_draft,
+            )
+            if self.persona_ui is not None and persona_replies is not None
+            else None
+        )
         self._action_tasks: set[asyncio.Task] = set()
-        self.presenter = ResponsePresenter()
+        self.presenter = self.agent_requests.presenter
         self.pipeline: MessagePipeline | None = None
         self._ingress_status_posts: dict[str, str] = {}
 
@@ -167,9 +170,7 @@ class MessageHandler:
         channel_id = str(post.get("channel_id") or "")
         if channel_id in self.working_memory:
             self.working_memory[channel_id] = [
-                cached
-                for cached in self.working_memory[channel_id]
-                if cached.get("id") != post_id
+                cached for cached in self.working_memory[channel_id] if cached.get("id") != post_id
             ]
         log_event(log, "message.deleted", status="completed", message_id=post_id)
 
@@ -177,7 +178,8 @@ class MessageHandler:
         if not post_id or self.personal_ui is None or self.personal_ui.memories is None:
             return
         memory_ids = self.personal_ui.memories.ids_for_source(
-            "mattermost_post", post_id,
+            "mattermost_post",
+            post_id,
             installation_id=self.scope_resolver.installation_id,
             tenant_id=self.scope_resolver.tenant_id,
         )
@@ -192,8 +194,11 @@ class MessageHandler:
                 self.persona_ui.personas.archive_by_memory(memory_id)
         if revoked:
             log_event(
-                log, "memory.source_revoked", status="completed",
-                source_type="mattermost_post", revoked_count=revoked,
+                log,
+                "memory.source_revoked",
+                status="completed",
+                source_type="mattermost_post",
+                revoked_count=revoked,
             )
 
     async def _acknowledge_accepted(self, event: InboundEvent) -> None:
@@ -300,14 +305,14 @@ class MessageHandler:
                 post["_requested_personal_skill"] = personal_ref
             if handled:
                 if view is not None:
-                    await self.delivery.reply_view(
-                        post, view, update_post_id=status_post_id
-                    )
+                    await self.delivery.reply_view(post, view, update_post_id=status_post_id)
                 return
         if self.persona_ui is not None:
             reply_command = self.persona_ui.reply_command(message)
             if reply_command is not None and access_scope.kind is ScopeKind.PERSONAL:
-                await self._handle_persona_reply_command(
+                if self.persona_replies is None:
+                    raise RuntimeError("persona reply approval is not configured")
+                await self.persona_replies.handle_command(
                     post,
                     reply_command,
                     status_post_id=status_post_id,
@@ -325,10 +330,15 @@ class MessageHandler:
             )
             if rejected is not None:
                 self.audit_store.append_audit(
-                    "persona.query", actor_id=user_id, scope_id=access_scope.id,
-                    trace_id=f"mattermost:{post_id}", target="",
-                    decision="rejected", details={
-                        "schema_version": "1.0", "reason": rejected.title,
+                    "persona.query",
+                    actor_id=user_id,
+                    scope_id=access_scope.id,
+                    trace_id=f"mattermost:{post_id}",
+                    target="",
+                    decision="rejected",
+                    details={
+                        "schema_version": "1.0",
+                        "reason": rejected.title,
                     },
                 )
                 await self.delivery.reply_view(post, rejected, update_post_id=status_post_id)
@@ -340,9 +350,13 @@ class MessageHandler:
                 post["_represented_owner"] = invocation.represented_owner
                 post["_persona_hash"] = invocation.persona_hash
                 self.audit_store.append_audit(
-                    "persona.query", actor_id=user_id, scope_id=access_scope.id,
-                    trace_id=f"mattermost:{post_id}", target=invocation.persona_ref,
-                    decision="accepted", details={
+                    "persona.query",
+                    actor_id=user_id,
+                    scope_id=access_scope.id,
+                    trace_id=f"mattermost:{post_id}",
+                    target=invocation.persona_ref,
+                    decision="accepted",
+                    details={
                         "schema_version": "1.0",
                         "represented_owner": invocation.represented_owner,
                         "persona_hash": invocation.persona_hash,
@@ -351,11 +365,15 @@ class MessageHandler:
                 typing_task = asyncio.create_task(self.delivery.typing_loop(channel_id))
                 try:
                     if invocation.approval_required:
-                        await self._start_persona_reply_approval(
+                        if self.persona_replies is None:
+                            raise RuntimeError("persona reply approval is not configured")
+                        await self.persona_replies.request_approval(
                             post, invocation, status_post_id=status_post_id
                         )
                     else:
-                        await self.respond(post, tag="persona", status_post_id=status_post_id)
+                        await self.agent_requests.respond(
+                            post, tag="persona", status_post_id=status_post_id
+                        )
                 finally:
                     typing_task.cancel()
                 return
@@ -368,14 +386,16 @@ class MessageHandler:
         if self.is_explicit_invocation(post):
             typing_task = asyncio.create_task(self.delivery.typing_loop(channel_id))
             try:
-                await self.respond(post, tag="mention", status_post_id=status_post_id)
+                await self.agent_requests.respond(
+                    post, tag="mention", status_post_id=status_post_id
+                )
             finally:
                 typing_task.cancel()
             return
 
         with log_context.bind(operation="decide"):
-            response = await self.decide_and_respond(post)
-        if self.is_silent(response):
+            response = await self.agent_requests.decide_and_respond(post)
+        if self.agent_requests.is_silent(response):
             log_event(log, "agent.silent", status="completed")
             return
         await self.delivery.reply(post, response)
@@ -422,459 +442,11 @@ class MessageHandler:
         root_id = str(post.get("root_id") or "")
         return bool(root_id and self.memory.get_post_user(root_id) == self.identity.user_id)
 
-    async def decide_and_respond(self, post: dict) -> str:
-        await self.delivery.typing_indicator(post["channel_id"])
-        context = self.context_builder.build(post, mention=False)
-        try:
-            request = self.build_agent_request(
-                post,
-                "chat",
-                personal_preferences=context.get("personal_preferences"),
-            )
-            selection = self.agent_router.default(request)
-            runtime_request = self.build_run_request(
-                post, context, capabilities=(), max_rounds=config.max_tool_rounds
-            )
-            result = await self.run_request(
-                post,
-                replace(request, intent=selection.intent, runtime_request=runtime_request),
-                selection.agent,
-            )
-            return result.text or ""
-        except AgentRuntimeError as error:
-            log.error("LLM 决策异常: %s", error)
-            return "<SILENT>"
-
-    def build_run_request(
-        self,
-        post: dict,
-        prompt_context: dict,
-        *,
-        capabilities: tuple[dict, ...],
-        max_rounds: int,
-        event_sink: RunEventSink | None = None,
-    ) -> RunRequest:
-        channel_id = post["channel_id"]
-        access_scope = self.scope_resolver.resolve_post(post)
-        system_prompt = prompt_context["system"]
-        return RunRequest(
-            context=RunContext(
-                trace_id=log_context.get("trace_id", "----"),
-                actor_id=post.get("user_id", ""),
-                conversation_id=channel_id,
-                scope=access_scope.id,
-                deadline=datetime.now(UTC) + timedelta(seconds=config.runtime_deadline_seconds),
-                run_id=self._run_id(post),
-                installation_id=access_scope.installation_id,
-                tenant_id=access_scope.tenant_id,
-                scope_kind=access_scope.kind.value,
-                owner_id=access_scope.owner_id,
-                team_id=access_scope.team_id,
-                channel_type=access_scope.channel_type,
-            ),
-            messages=tuple(prompt_context["messages"]),
-            system_prompt=system_prompt,
-            capabilities=capabilities,
-            max_rounds=max_rounds,
-            event_sink=event_sink,
-        )
-
-    @staticmethod
-    def is_silent(text: str) -> bool:
-        if not text:
-            return True
-        return text.strip().split("\n", 1)[0].strip().startswith("<SILENT>")
-
-    async def respond(
-        self,
-        post: dict,
-        *,
-        tag: str,
-        max_rounds: int | None = None,
-        status_post_id: str = "",
-        deliver: bool = True,
-        stream_enabled: bool = True,
-    ) -> ResponseView:
-        started = time.monotonic()
-        await self.delivery.typing_indicator(post["channel_id"])
-        context = self.context_builder.build(post, mention=tag == "mention")
-        rounds = max_rounds if max_rounds is not None else config.max_tool_rounds
-        request = self.build_agent_request(
-            post,
-            tag,
-            personal_preferences=context.get("personal_preferences"),
-        )
-        stream: MattermostStream | None = None
-        try:
-            request = self.skill_resolver.prepare_personal_request(request)
-            if post.get("_persona_ref"):
-                request = replace(request, prompt=str(post.get("_persona_question") or ""))
-                selection = self.agent_router.default(request)
-            else:
-                selection = self.agent_router.route(request)
-            if stream_enabled and self._should_stream(selection.agent):
-                stream = self.delivery.stream(
-                    post,
-                    self._run_id(post),
-                    post_id=status_post_id,
-                )
-            request = replace(request, intent=selection.intent)
-            if not post.get("_persona_ref"):
-                request = self._resolve_skill(request, selection.agent)
-            capability_names = self._effective_capabilities(request, selection.agent)
-            if post.get("_persona_ref"):
-                capability_names = ()
-            if self.scope_resolver.resolve_post(post).kind is ScopeKind.CHANNEL:
-                capability_names = tuple(
-                    name for name in capability_names if name != "get_user_profile"
-                )
-            runtime_request = self.build_run_request(
-                post,
-                context,
-                capabilities=tuple(self.capability_registry.get_schema_list(capability_names)),
-                max_rounds=rounds,
-                event_sink=stream,
-            )
-            output = await self.run_request(
-                post,
-                replace(request, runtime_request=runtime_request),
-                selection.agent,
-            )
-            runtime_result = output.runtime_result or AgentResult(
-                text=output.text,
-                runtime=f"agent:{output.agent_name}",
-                artifacts=tuple(output.artifacts),
-            )
-            response_view = (
-                self._register_approval_interrupt(
-                    post,
-                    runtime_result,
-                    allowed_capabilities=capability_names,
-                    allowed_execution_profiles=self._effective_execution_profiles(selection.agent),
-                )
-                if runtime_result.status is RuntimeStatus.WAITING_APPROVAL
-                else self.presenter.present(
-                    output,
-                    run_id=self._run_id(post),
-                )
-            )
-            if post.get("_persona_ref"):
-                response_view = replace(
-                    response_view,
-                    title=f"{post.get('_persona_display_name')} · 数字人代理",
-                    sections=(
-                        *response_view.sections,
-                        ResponseSection(
-                            "代理声明",
-                            items=(
-                                "由 MMAG 根据所有者明确发布的资料快照生成，并非本人实时发言。",
-                                f"数字人版本：`{post.get('_persona_ref')}`",
-                            ),
-                        ),
-                    ),
-                )
-            elif self.personal_ui is not None and runtime_result.status is RuntimeStatus.COMPLETED:
-                response_view = self.personal_ui.attach_work_case(
-                    post,
-                    self.scope_resolver.resolve_post(post),
-                    request,
-                    selection.agent.descriptor.name,
-                    response_view,
-                    provenance=self._output_provenance(
-                        output,
-                        request,
-                        getattr(selection.agent, "package", None),
-                        selection.agent,
-                    ),
-                )
-        except (AgentPackageError, AgentRuntimeError, SkillPackageError) as error:
-            log_event(
-                log,
-                "request.failed",
-                level=40,
-                status="failed",
-                error_code=type(error).__name__,
-            )
-            response_view = self._error_view(
-                error,
-                run_id=self._run_id(post),
-            )
-        response_length = len(response_view.summary)
-        log_event(
-            log,
-            "agent.response_ready",
-            status="completed",
-            duration_ms=round((time.monotonic() - started) * 1000),
-            output_size=response_length,
-            invocation=tag,
-        )
-        update_post_id = status_post_id or (stream.post_id if stream is not None else "")
-        if deliver:
-            await self.delivery.reply_view(
-                post,
-                response_view,
-                update_post_id=update_post_id,
-            )
-        return response_view
-
-    async def _start_persona_reply_approval(
-        self,
-        post: dict,
-        invocation,
-        *,
-        status_post_id: str,
-    ) -> None:
-        if self.persona_ui is None:
-            raise RuntimeError("persona workspace is not configured")
-        draft = await self.respond(
-            post,
-            tag="persona",
-            status_post_id=status_post_id,
-            deliver=False,
-            stream_enabled=False,
-        )
-        if draft.status is not RunStatus.SUCCEEDED:
-            await self.delivery.reply_view(post, draft, update_post_id=status_post_id)
-            return
-        requester_username = await self.mm.get_username_async(str(post.get("user_id") or ""))
-        request = self.persona_ui.create_reply_request(
-            invocation,
-            post,
-            requester_username=requester_username,
-            draft_text=draft.summary,
-            status_post_id=status_post_id,
-        )
-        try:
-            channel = await self.mm.create_direct_channel_async(
-                self.identity.user_id, invocation.represented_owner
-            )
-            owner_channel_id = str(channel["id"])
-            owner_scope_id = self.scope_resolver.scope_id(
-                self.scope_resolver.installation_id,
-                self.scope_resolver.tenant_id,
-                ScopeKind.PERSONAL,
-                invocation.represented_owner,
-            )
-            owner_post = {
-                "id": "",
-                "channel_id": owner_channel_id,
-                "user_id": invocation.represented_owner,
-                "_scope_id": owner_scope_id,
-            }
-            approval_posts = await self.delivery.reply_view(
-                owner_post,
-                self.persona_ui.approval_view(request, owner_post),
-                delivery_key=f"persona-reply:{request.id}:approval",
-            )
-            if approval_posts and self.persona_ui.reply_requests is not None:
-                request = self.persona_ui.reply_requests.set_approval_post(
-                    request.id, approval_posts[0]
-                )
-        except Exception as error:
-            if self.persona_ui.reply_requests is not None:
-                self.persona_ui.reply_requests.mark_failed(request.id, type(error).__name__)
-            log_event(
-                log,
-                "persona.reply_approval_failed",
-                level=40,
-                status="failed",
-                error_code=type(error).__name__,
-            )
-            await self.delivery.reply_view(
-                post,
-                self.presenter.error(
-                    title="无法请求本人确认",
-                    summary="回答草稿未发送，请稍后重试。",
-                    run_id=f"persona-reply:{request.id}",
-                ),
-                update_post_id=status_post_id,
-            )
-            return
-        self.audit_store.append_audit(
-            "persona.reply_requested",
-            actor_id=str(post.get("user_id") or ""),
-            scope_id=str(post.get("_scope_id") or ""),
-            trace_id=self._run_id(post),
-            target=request.id,
-            decision="pending",
-            details={
-                "schema_version": "1.0",
-                "persona_ref": request.persona_ref,
-                "persona_hash": request.persona_hash,
-                "owner_id": request.owner_id,
-            },
-        )
-        await self.delivery.reply_view(
-            post,
-            self.persona_ui.waiting_view(request),
-            update_post_id=status_post_id,
-            delivery_key=f"persona-reply:{request.id}:waiting",
-        )
-
-    def _resolve_skill(self, request: AgentRequest, agent: ManagedAgent) -> AgentRequest:
-        package = getattr(agent, "package", None)
-        if package is None or not package.skills:
-            return request
-        invocation = self.skill_resolver.resolve(
-            package,
-            request,
-            agent.descriptor.capabilities,
-        )
-        return replace(request, skill=invocation)
-
-    @staticmethod
-    def _effective_capabilities(
-        request: AgentRequest,
-        agent: ManagedAgent,
-    ) -> tuple[str, ...]:
-        if request.skill is not None:
-            return request.skill.capabilities
-        return agent.descriptor.capabilities
-
-    @staticmethod
-    def _effective_execution_profiles(agent: ManagedAgent) -> tuple[str, ...]:
-        package = getattr(agent, "package", None)
-        return tuple(package.execution_profiles) if package is not None else ()
-
-    @staticmethod
-    def _should_stream(agent: ManagedAgent) -> bool:
-        if not config.mm_stream_enabled:
-            return False
-        package = getattr(agent, "package", None)
-        if package is None:
-            return True
-        return package.manifest.runtime.mode == "agent"
-
-    def build_agent_request(
-        self,
-        post: dict,
-        intent: str,
-        *,
-        personal_preferences: object = None,
-    ) -> AgentRequest:
-        preferences = personal_preferences if isinstance(personal_preferences, dict) else {}
-        return AgentRequest(
-            intent=intent,
-            prompt=str(post.get("message") or ""),
-            scope=self.post_scope(post),
-            permissions=frozenset({"web:read"}),
-            budget_usd=config.model_budget_usd,
-            actor_id=str(post.get("user_id") or ""),
-            task_id=f"task:{post.get('id') or ''}",
-            run_id=self._run_id(post),
-            preferred_agents=tuple(
-                str(item) for item in preferences.get("preferred_agents", ())
-            ),
-            preferred_skills=tuple(
-                str(item) for item in preferences.get("preferred_skills", ())
-            ),
-            requested_personal_skill=str(post.get("_requested_personal_skill") or ""),
-            parameters=(
-                {
-                    "persona_ref": str(post.get("_persona_ref") or ""),
-                    "persona_hash": str(post.get("_persona_hash") or ""),
-                    "represented_owner": str(post.get("_represented_owner") or ""),
-                }
-                if post.get("_persona_ref") else {}
-            ),
-            response_style=str(preferences.get("response_style") or ""),
-            language=str(preferences.get("language") or ""),
-        )
-
-    def _register_approval_interrupt(
-        self,
-        post: dict,
-        runtime_result: AgentResult,
-        *,
-        allowed_capabilities: tuple[str, ...] = (),
-        allowed_execution_profiles: tuple[str, ...] = (),
-    ) -> ResponseView:
-        if not allowed_execution_profiles and runtime_result.interruptions:
-            value = runtime_result.interruptions[0].get("value", {})
-            if isinstance(value, dict):
-                restored = value.get("execution_profiles", ())
-                if isinstance(restored, (list, tuple)):
-                    allowed_execution_profiles = tuple(
-                        str(ref) for ref in restored if isinstance(ref, str) and ref
-                    )
-        access_scope = self.scope_resolver.resolve_post(post)
-        scope = access_scope.id
-        approval = self.approval_coordinator.register(
-            runtime_result,
-            requested_by=post.get("user_id", ""),
-            scope_id=scope,
-            capability_context=CapabilityContext(
-                trace_id=log_context.get("trace_id", "----"),
-                actor_id=post.get("user_id", ""),
-                conversation_id=post.get("channel_id", ""),
-                message_id=post.get("id", ""),
-                message=post.get("message", ""),
-                scope=scope,
-                allowed_capabilities=frozenset(allowed_capabilities),
-                run_id=self._run_id(post),
-                allowed_execution_profiles=frozenset(allowed_execution_profiles),
-                installation_id=access_scope.installation_id,
-                tenant_id=access_scope.tenant_id,
-                scope_kind=access_scope.kind.value,
-                owner_id=access_scope.owner_id,
-                team_id=access_scope.team_id,
-                channel_type=access_scope.channel_type,
-            ),
-        )
-        actions = self._approval_actions(post, approval.id)
-        return self.presenter.approval(
-            capability=approval.capability_name,
-            approval_id=approval.id,
-            run_id=self._run_id(post),
-            actions=actions,
-        )
-
-    def _approval_actions(
-        self, post: dict, approval_id: str
-    ) -> tuple[ResponseAction, ...]:
-        if self.action_tokens is None:
-            return ()
-        run_id = self._run_id(post)
-        shared = {
-            "target": approval_id,
-            "scope_id": self.post_scope(post),
-            "run_id": run_id,
-            "conversation_id": str(post.get("channel_id") or ""),
-            "root_id": self.delivery.thread_root(post),
-            "requested_by": str(post.get("user_id") or ""),
-        }
-        try:
-            approve = self.action_tokens.issue(action="approve", **shared)
-            reject = self.action_tokens.issue(action="reject", **shared)
-        except (TypeError, ValueError) as error:
-            log.warning("Action token 创建失败，将使用文本降级: %s", error)
-            return ()
-        return (
-            ResponseAction(
-                id="approve",
-                label="批准",
-                action="approve",
-                target=approval_id,
-                style="success",
-                fallback=f"`批准 {approval_id}`",
-                token=approve,
-            ),
-            ResponseAction(
-                id="reject",
-                label="拒绝",
-                action="reject",
-                target=approval_id,
-                style="danger",
-                fallback=f"`拒绝 {approval_id}`",
-                token=reject,
-            ),
-        )
-
     async def handle_action_callback(self, payload: dict) -> dict:
         if self.action_tokens is None:
             raise PermissionError("interactive actions are not configured")
         if str(payload.get("type") or "") == "dialog_submission":
-            return await self._handle_persona_reply_dialog(payload)
+            return await self._handle_dialog_submission(payload)
         context = payload.get("context")
         token = context.get("token") if isinstance(context, dict) else ""
         actor_id = str(payload.get("user_id") or "")
@@ -893,7 +465,11 @@ class MessageHandler:
         if scope_id != claims.scope_id:
             raise PermissionError("action belongs to another scope")
         if claims.action.startswith("persona_reply_"):
-            return await self._handle_persona_reply_action(payload, claims, actor_id)
+            if self.persona_replies is None:
+                raise RuntimeError("persona reply approval is not configured")
+            return await self.persona_replies.handle_action(payload, claims, actor_id)
+        if claims.action == "persona_policy_edit":
+            return await self._open_persona_policy_dialog(payload, claims, actor_id)
         if claims.action.startswith("persona_"):
             if self.persona_ui is None:
                 raise RuntimeError("persona workspace is not configured")
@@ -902,17 +478,27 @@ class MessageHandler:
                 {"channel_id": channel_id, "user_id": actor_id}
             )
             message = self.persona_ui.handle_action(
-                claims, actor_id=actor_id,
-                post={"channel_id": channel_id, "user_id": actor_id}, scope=scope,
+                claims,
+                actor_id=actor_id,
+                post={"channel_id": channel_id, "user_id": actor_id},
+                scope=scope,
             )
             log_event(
-                log, "mattermost.action_completed", status="completed",
-                action=claims.action, action_jti=claims.jti,
+                log,
+                "mattermost.action_completed",
+                status="completed",
+                action=claims.action,
+                action_jti=claims.jti,
             )
             return {
-                "update": {"message": message, "props": {
-                    "from_bot": "true", "mmag_kind": "persona", "mmag_status": "completed",
-                }},
+                "update": {
+                    "message": message,
+                    "props": {
+                        "from_bot": "true",
+                        "mmag_kind": "persona",
+                        "mmag_status": "completed",
+                    },
+                },
                 "ephemeral_text": message,
             }
         if claims.action.startswith(("pskill_", "case_", "memory_")):
@@ -979,188 +565,79 @@ class MessageHandler:
             }
         }
 
-    async def _handle_persona_reply_action(
-        self, payload: dict, claims, actor_id: str
-    ) -> dict:
-        if self.persona_ui is None or self.persona_ui.reply_requests is None:
-            raise RuntimeError("persona reply approval is not configured")
+    async def _handle_dialog_submission(self, payload: dict) -> dict:
+        if self.action_tokens is None:
+            raise PermissionError("interactive actions are not configured")
+        claims = self.action_tokens.verify(str(payload.get("state") or ""))
+        if claims.action == "persona_reply_submit":
+            if self.persona_replies is None:
+                raise RuntimeError("persona reply approval is not configured")
+            return await self.persona_replies.handle_dialog(payload)
+        if claims.action != "persona_policy_submit":
+            raise ValueError("unsupported dialog submission")
+        return await self._submit_persona_policy(payload, claims)
+
+    async def _open_persona_policy_dialog(self, payload: dict, claims, actor_id: str) -> dict:
+        if self.persona_ui is None or self.action_tokens is None:
+            raise RuntimeError("persona workspace is not configured")
         if actor_id != claims.requested_by:
-            raise PermissionError("persona reply action belongs to another owner")
-        request = self.persona_ui.pending_reply(claims.target, actor_id=actor_id)
+            raise PermissionError("persona policy belongs to another owner")
         token = str((payload.get("context") or {}).get("token") or "")
-        if claims.action == "persona_reply_edit":
-            trigger_id = str(payload.get("trigger_id") or "")
-            self.action_tokens.consume(token, actor_id=actor_id)
-            submit_token = self.action_tokens.issue(
-                action="persona_reply_submit",
-                target=request.id,
-                scope_id=claims.scope_id,
-                run_id=claims.run_id,
-                conversation_id=claims.conversation_id,
-                root_id=claims.root_id,
-                requested_by=claims.requested_by,
-            )
-            await self.mm.open_dialog_async(
-                trigger_id=trigger_id,
-                callback_url=config.mm_action_callback_url,
-                dialog={
-                    "callback_id": "persona_reply_edit",
-                    "title": "修改数字人回答",
-                    "introduction_text": "修改后将以数字人代理身份回复原 Thread。",
-                    "elements": [
-                        {
-                            "display_name": "回答内容",
-                            "name": "draft",
-                            "type": "textarea",
-                            "default": request.draft_text,
-                            "optional": False,
-                            "max_length": 16000,
-                        }
-                    ],
-                    "submit_label": "确认发送",
-                    "state": submit_token,
-                },
-            )
-            return {"ephemeral_text": "已打开回答编辑框。"}
-        if claims.action not in {"persona_reply_approve", "persona_reply_reject"}:
-            raise ValueError("unsupported persona reply action")
+        self.persona_ui.personas.get(claims.target, owner_id=actor_id)
         self.action_tokens.consume(token, actor_id=actor_id)
-        request = self.persona_ui.decide_reply(
-            request.id,
-            actor_id=actor_id,
-            approved=claims.action == "persona_reply_approve",
+        submit = self.action_tokens.issue(
+            action="persona_policy_submit",
+            target=claims.target,
+            scope_id=claims.scope_id,
+            run_id=claims.run_id,
+            conversation_id=claims.conversation_id,
+            root_id=claims.root_id,
+            requested_by=claims.requested_by,
         )
-        await self._deliver_persona_reply(request)
-        message = "回答已发送。" if request.state.value == "approved" else "已拒绝发送。"
-        return {
-            "update": {
-                "message": message,
-                "props": {
-                    "from_bot": "true",
-                    "mmag_kind": "persona_approval",
-                    "mmag_status": "completed",
-                },
-            },
-            "ephemeral_text": message,
-        }
+        await self.mm.open_dialog_async(
+            trigger_id=str(payload.get("trigger_id") or ""),
+            callback_url=config.mm_action_callback_url,
+            dialog=self.persona_ui.policy_dialog(claims.target, actor_id=actor_id, state=submit),
+        )
+        return {"ephemeral_text": "已打开数字人策略编辑框。"}
 
-    async def _handle_persona_reply_dialog(self, payload: dict) -> dict:
-        if self.action_tokens is None or self.persona_ui is None:
-            raise RuntimeError("persona reply approval is not configured")
-        token = str(payload.get("state") or "")
+    async def _submit_persona_policy(self, payload: dict, claims) -> dict:
+        if self.persona_ui is None or self.action_tokens is None:
+            raise RuntimeError("persona workspace is not configured")
         actor_id = str(payload.get("user_id") or "")
-        claims = self.action_tokens.verify(token)
-        if claims.action != "persona_reply_submit" or actor_id != claims.requested_by:
-            raise PermissionError("invalid persona reply dialog")
         channel_id = str(payload.get("channel_id") or "")
-        if channel_id and channel_id != claims.conversation_id:
-            raise PermissionError("persona reply dialog belongs to another conversation")
+        if actor_id != claims.requested_by or channel_id != claims.conversation_id:
+            raise PermissionError("persona policy dialog belongs to another owner")
+        scope = self.scope_resolver.resolve_post({"channel_id": channel_id, "user_id": actor_id})
+        if scope.id != claims.scope_id:
+            raise PermissionError("persona policy dialog belongs to another scope")
         submission = payload.get("submission")
-        draft_text = str(submission.get("draft") or "").strip() if isinstance(
-            submission, dict
-        ) else ""
-        if not draft_text:
-            return {"errors": {"draft": "回答内容不能为空"}}
-        self.action_tokens.consume(token, actor_id=actor_id)
-        request = self.persona_ui.decide_reply(
-            claims.target,
-            actor_id=actor_id,
-            approved=True,
-            draft_text=draft_text,
-        )
-        await self._deliver_persona_reply(request)
-        if request.owner_approval_post_id:
-            await self.mm.update_post_async(
-                request.owner_approval_post_id,
-                "回答已修改并发送。",
-                props={
-                    "from_bot": "true",
-                    "mmag_kind": "persona_approval",
-                    "mmag_status": "completed",
-                },
-            )
-        return {}
-
-    async def _handle_persona_reply_command(
-        self,
-        post: dict,
-        command: tuple[str, str, str],
-        *,
-        status_post_id: str,
-    ) -> None:
-        if self.persona_ui is None:
-            raise RuntimeError("persona reply approval is not configured")
-        action, request_id, draft_text = command
+        if not isinstance(submission, dict):
+            return {"errors": {"mode": "策略内容不能为空"}}
         try:
-            request = self.persona_ui.decide_reply(
-                request_id,
-                actor_id=str(post.get("user_id") or ""),
-                approved=action == "approve",
-                draft_text=draft_text,
-            )
-            await self._deliver_persona_reply(request)
-            view = ResponseView(
-                kind=ResponseKind.STATUS,
-                title="代答处理完成",
-                summary="回答已发送。" if action == "approve" else "已拒绝发送。",
-                status=RunStatus.SUCCEEDED,
-            )
-        except (KeyError, PermissionError, ValueError) as error:
-            log_event(
-                log,
-                "persona.reply_decision_failed",
-                level=30,
-                status="failed",
-                error_code=type(error).__name__,
-            )
-            view = self.presenter.error(
-                title="代答处理失败",
-                summary="请求不存在、已处理、已过期，或不属于当前用户。",
-                run_id=f"persona-reply:{request_id}",
-            )
-        await self.delivery.reply_view(post, view, update_post_id=status_post_id)
-
-    async def _deliver_persona_reply(self, request) -> None:
-        if self.persona_ui is None or self.persona_ui.reply_requests is None:
-            raise RuntimeError("persona reply approval is not configured")
+            self.persona_ui.validate_policy(submission)
+        except ValueError as error:
+            return {"errors": {"mode": str(error)}}
+        self.action_tokens.consume(str(payload.get("state") or ""), actor_id=actor_id)
+        revised = self.persona_ui.revise_policy(claims.target, actor_id=actor_id, values=submission)
         post = {
-            "id": request.source_root_id,
-            "root_id": request.source_root_id,
-            "channel_id": request.source_channel_id,
-            "user_id": request.requester_id,
-            "_scope_id": request.source_scope_id,
+            "id": claims.root_id,
+            "root_id": claims.root_id,
+            "channel_id": channel_id,
+            "user_id": actor_id,
+            "_scope_id": scope.id,
         }
-        view = (
-            self.persona_ui.final_view(request)
-            if request.state.value == "approved"
-            else self.persona_ui.rejected_view(request)
-        )
-        try:
-            await self.delivery.reply_view(
-                post,
-                view,
-                update_post_id=request.source_status_post_id,
-                delivery_key=f"persona-reply:{request.id}:decision",
-            )
-            if request.state.value == "approved":
-                self.persona_ui.reply_requests.mark_delivered(request.id)
-        except Exception as error:
-            self.persona_ui.reply_requests.mark_failed(request.id, type(error).__name__)
-            raise
         self.audit_store.append_audit(
-            "persona.reply_decided",
-            actor_id=request.owner_id,
-            scope_id=request.source_scope_id,
-            trace_id=f"persona-reply:{request.id}",
-            target=request.id,
-            decision=request.state.value,
-            details={
-                "schema_version": "1.0",
-                "persona_ref": request.persona_ref,
-                "persona_hash": request.persona_hash,
-                "requester_id": request.requester_id,
-            },
+            "persona.revision",
+            actor_id=actor_id,
+            scope_id=scope.id,
+            trace_id=claims.run_id,
+            target=revised.ref,
+            decision="policy_revised",
+            details={"schema_version": "1.0", "previous_ref": claims.target},
         )
+        await self.delivery.reply_view(post, self.persona_ui.view(post, scope))
+        return {}
 
     async def close_actions(self) -> None:
         tasks = tuple(self._action_tasks)
@@ -1190,7 +667,7 @@ class MessageHandler:
                 reason="Mattermost interactive action",
             )
             view = (
-                self._register_approval_interrupt(post, result)
+                self.agent_requests.register_approval_interrupt(post, result)
                 if result.status is RuntimeStatus.WAITING_APPROVAL
                 else self.presenter.present(
                     AgentOutput(
@@ -1236,7 +713,7 @@ class MessageHandler:
                 reason="",
             )
             response_view = (
-                self._register_approval_interrupt(post, result)
+                self.agent_requests.register_approval_interrupt(post, result)
                 if result.status is RuntimeStatus.WAITING_APPROVAL
                 else self.presenter.present(
                     AgentOutput(
@@ -1268,262 +745,3 @@ class MessageHandler:
         if parts[0].lower() in {"拒绝", "reject"}:
             return False, parts[1]
         return None
-
-    async def run_request(
-        self,
-        post: dict,
-        request: AgentRequest,
-        agent: ManagedAgent,
-    ) -> AgentOutput:
-        runtime_request = request.runtime_request
-        if not isinstance(runtime_request, RunRequest):
-            raise TypeError("Mattermost execution requires a prepared RunRequest")
-        allowed_capabilities = tuple(
-            str(schema.get("name") or "")
-            for schema in runtime_request.capabilities
-            if str(schema.get("name") or "")
-        )
-        package = getattr(agent, "package", None)
-        started = time.monotonic()
-        capability_context = CapabilityContext(
-            trace_id=runtime_request.context.trace_id,
-            actor_id=runtime_request.context.actor_id,
-            conversation_id=runtime_request.context.conversation_id,
-            message_id=post.get("id", ""),
-            message=post.get("message", ""),
-            scope=runtime_request.context.scope,
-            allowed_capabilities=frozenset(allowed_capabilities),
-            run_id=runtime_request.context.run_id,
-            allowed_execution_profiles=frozenset(
-                package.execution_profiles if package is not None else ()
-            ),
-            installation_id=runtime_request.context.installation_id,
-            tenant_id=runtime_request.context.tenant_id,
-            scope_kind=runtime_request.context.scope_kind,
-            owner_id=runtime_request.context.owner_id,
-            team_id=runtime_request.context.team_id,
-            channel_type=runtime_request.context.channel_type,
-        )
-        with (
-            bind_capability_context(capability_context),
-            bind_governance_context(
-                GovernanceContext(
-                    capability_context.actor_id,
-                    capability_context.scope,
-                    resources={
-                        "actor_id": capability_context.actor_id,
-                        "conversation_id": capability_context.conversation_id,
-                        "installation_id": capability_context.installation_id,
-                        "tenant_id": capability_context.tenant_id,
-                        "scope_kind": capability_context.scope_kind,
-                        "owner_id": capability_context.owner_id,
-                        "team_id": capability_context.team_id,
-                        "channel_type": capability_context.channel_type,
-                    },
-                )
-            ),
-        ):
-            lifecycle_run_id = self._lifecycle_run_id(capability_context.run_id)
-            provenance = self._request_provenance(request, package, agent)
-            self.audit_store.runs.bind_snapshot(
-                lifecycle_run_id,
-                snapshot=provenance,
-                actor_id=capability_context.actor_id,
-                trace_id=capability_context.trace_id,
-                intent=request.intent,
-                capabilities=allowed_capabilities,
-            )
-            log_event(
-                log,
-                "agent.started",
-                status="running",
-                intent=request.intent,
-                agent_ref=agent.descriptor.name,
-                skill_ref=request.skill.ref if request.skill is not None else "",
-                package_hash=(package.snapshot.package_hash if package is not None else ""),
-            )
-            try:
-                output = await agent.run(request)
-            except Exception as error:
-                duration_ms = round((time.monotonic() - started) * 1000)
-                self.audit_store.runs.record_failure(
-                    lifecycle_run_id,
-                    error_code=type(error).__name__,
-                )
-                self.audit_store.append_audit(
-                    "agent.run",
-                    actor_id=capability_context.actor_id,
-                    scope_id=capability_context.scope,
-                    trace_id=capability_context.trace_id,
-                    target=agent.descriptor.name,
-                    decision="failed",
-                    details={
-                        "schema_version": "1.0",
-                        "run_id": capability_context.run_id,
-                        "intent": request.intent,
-                        "skill_ref": request.skill.ref if request.skill is not None else "",
-                        "duration_ms": duration_ms,
-                        "error_code": type(error).__name__,
-                        "route": (
-                            package.manifest.runtime.route if package is not None else ""
-                        ),
-                        "model_policy_ref": (
-                            package.manifest.model_policy_ref if package is not None else ""
-                        ),
-                        "provenance": self._request_provenance(request, package, agent),
-                    },
-                )
-                log_event(
-                    log,
-                    "agent.failed",
-                    level=40,
-                    status="failed",
-                    duration_ms=duration_ms,
-                    error_code=type(error).__name__,
-                    agent_ref=agent.descriptor.name,
-                )
-                raise
-            provenance = self._output_provenance(output, request, package, agent)
-            runtime_status = getattr(
-                output.runtime_result,
-                "status",
-                RuntimeStatus.COMPLETED,
-            )
-            self.audit_store.append_audit(
-                "agent.run",
-                actor_id=capability_context.actor_id,
-                scope_id=capability_context.scope,
-                trace_id=capability_context.trace_id,
-                target=agent.descriptor.name,
-                decision=runtime_status.value,
-                details={
-                    "schema_version": "1.0",
-                    "run_id": capability_context.run_id,
-                    "message_id": capability_context.message_id,
-                    "intent": request.intent,
-                    "skill_ref": request.skill.ref if request.skill is not None else "",
-                    "capabilities": list(allowed_capabilities),
-                    "route": package.manifest.runtime.route if package is not None else "",
-                    "model_policy_ref": (
-                        package.manifest.model_policy_ref if package is not None else ""
-                    ),
-                    "provenance": dict(provenance),
-                    "skill_context": self._interrupted_skill_context(output),
-                    "duration_ms": round((time.monotonic() - started) * 1000),
-                    "usage": self._safe_usage(output),
-                },
-            )
-            runtime_result = output.runtime_result
-            self.audit_store.runs.record_result(
-                lifecycle_run_id,
-                status=runtime_status.value,
-                usage=self._safe_usage(output),
-                capability_calls=(
-                    len(runtime_result.capability_calls) if runtime_result is not None else 1
-                ),
-                artifact_count=len(output.artifacts),
-            )
-            log_event(
-                log,
-                "agent.completed",
-                status=runtime_status.value,
-                agent_ref=output.agent_name,
-                skill_ref=request.skill.ref if request.skill is not None else "",
-                artifact_count=len(output.artifacts),
-                runtime=getattr(output.runtime_result, "runtime", "deterministic"),
-            )
-        return output
-
-    @staticmethod
-    def _safe_usage(output: AgentOutput) -> dict[str, int | float]:
-        runtime_result = output.runtime_result
-        if runtime_result is None:
-            return {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cost_usd": 0.0,
-                "model_calls": 0,
-                "tool_calls": 0,
-                "repair_calls": 0,
-            }
-        usage = runtime_result.usage
-        return {
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "cost_usd": usage.cost_usd,
-            "model_calls": usage.model_calls,
-            "tool_calls": usage.tool_calls,
-            "repair_calls": usage.repair_calls,
-        }
-
-    @staticmethod
-    def _lifecycle_run_id(runtime_run_id: str) -> str:
-        if runtime_run_id.startswith("mattermost:"):
-            return f"run:{runtime_run_id.removeprefix('mattermost:')}"
-        return runtime_run_id
-
-    def _error_view(self, error: Exception, *, run_id: str) -> ResponseView:
-        if isinstance(error, RuntimeTimeoutError):
-            return self.presenter.error(
-                title="执行超时",
-                summary="任务未能在运行时限内完成，请缩小范围后重试。",
-                run_id=run_id,
-            )
-        if isinstance(error, RuntimeRateLimitError):
-            return self.presenter.error(
-                title="服务繁忙",
-                summary="模型服务当前限流，请稍后重试。",
-                run_id=run_id,
-            )
-        if isinstance(error, RuntimeRejectedError):
-            return self.presenter.error(
-                title="请求未执行",
-                summary="该请求不符合当前执行策略或权限边界。",
-                run_id=run_id,
-            )
-        if isinstance(error, RuntimeUnavailableError):
-            return self.presenter.error(
-                title="外部服务不可用",
-                summary="依赖服务暂时不可用，请稍后重试。",
-                run_id=run_id,
-            )
-        if isinstance(error, (AgentPackageError, SkillPackageError)):
-            return self.presenter.error(
-                title="输入或结果不符合契约",
-                summary="任务未通过 Agent/Skill 契约校验，请调整输入后重试。",
-                run_id=run_id,
-            )
-        return self.presenter.error(
-            title="系统故障",
-            summary="任务未完成，详情已记录供运维查询。",
-            run_id=run_id,
-        )
-
-    @staticmethod
-    def _output_provenance(output, request: AgentRequest, package, agent) -> dict:
-        if output.envelope:
-            return dict(output.envelope.get("provenance", {}))
-        return MessageHandler._request_provenance(request, package, agent)
-
-    @staticmethod
-    def _request_provenance(request: AgentRequest, package, agent) -> dict:
-        provenance = package.snapshot.to_dict() if package is not None else {}
-        provenance.update(dict(getattr(agent, "platform_provenance", {})))
-        if request.skill is not None:
-            provenance.update(request.skill.provenance)
-        for key in ("persona_ref", "persona_hash", "represented_owner"):
-            value = request.parameters.get(key)
-            if value:
-                provenance[key] = str(value)
-        return provenance
-
-    @staticmethod
-    def _interrupted_skill_context(output) -> dict:
-        runtime_result = output.runtime_result
-        if runtime_result is None or not runtime_result.interruptions:
-            return {}
-        value = runtime_result.interruptions[0].get("value", {})
-        if not isinstance(value, dict):
-            return {}
-        state = value.get("skill_context", {})
-        return dict(state) if isinstance(state, dict) else {}

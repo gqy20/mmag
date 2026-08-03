@@ -18,7 +18,13 @@ from .views import ResponseAction, ResponseKind, ResponseSection, ResponseView, 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from ..control_plane import DigitalPersonaStore, MemoryItemStore, PersonaReplyStore, Scope
+    from ..control_plane import (
+        DigitalPersona,
+        DigitalPersonaStore,
+        MemoryItemStore,
+        PersonaReplyStore,
+        Scope,
+    )
     from .actions import ActionClaims, ActionTokenService
 
 
@@ -34,8 +40,20 @@ class PersonaInvocation:
 
 
 _DEFAULT_APPROVAL_TOPICS = (
-    "报价", "价格", "承诺", "合同", "签约", "付款", "薪酬", "绩效", "招聘",
-    "解雇", "法务", "投资", "采购", "对外发布",
+    "报价",
+    "价格",
+    "承诺",
+    "合同",
+    "签约",
+    "付款",
+    "薪酬",
+    "绩效",
+    "招聘",
+    "解雇",
+    "法务",
+    "投资",
+    "采购",
+    "对外发布",
 )
 
 
@@ -86,6 +104,16 @@ class PersonaWorkspaceUI:
             )
             self._audit("persona.revision", post, scope, persona.ref, "created")
             return True, self.view(post, scope)
+        try:
+            policy = self.policy_command(message)
+        except ValueError as error:
+            return True, self._error("策略更新失败", str(error))
+        if policy is not None:
+            try:
+                self.revise_policy(policy[0], actor_id=scope.owner_id, values=policy[1])
+            except (KeyError, PermissionError, ValueError) as error:
+                return True, self._error("策略更新失败", str(error))
+            return True, self.view(post, scope)
         parts = message.strip().split(maxsplit=1)
         commands = {
             "授权资料": "persona_add",
@@ -95,8 +123,11 @@ class PersonaWorkspaceUI:
         if len(parts) == 2 and parts[0] in commands:
             try:
                 result = self._execute(
-                    commands[parts[0]], parts[1].strip(),
-                    actor_id=scope.owner_id, post=post, scope=scope,
+                    commands[parts[0]],
+                    parts[1].strip(),
+                    actor_id=scope.owner_id,
+                    post=post,
+                    scope=scope,
                 )
             except (KeyError, PermissionError, ValueError) as error:
                 return True, self._error("操作未完成", str(error))
@@ -124,9 +155,7 @@ class PersonaWorkspaceUI:
             names = "、".join(persona.display_name for persona in matches[:5])
             return None, self._status("需要明确目标", f"找到多个数字人：{names}。")
         persona = matches[0]
-        denied = next(
-            (topic for topic in persona.denied_topics if topic and topic in question), ""
-        )
+        denied = next((topic for topic in persona.denied_topics if topic and topic in question), "")
         if denied:
             return None, ResponseView(
                 kind=ResponseKind.ERROR,
@@ -180,9 +209,7 @@ class PersonaWorkspaceUI:
         if not personas:
             return self._status("我的数字人", "还没有数字人，发送“创建我的数字人”开始。")
         persona = personas[0]
-        published = tuple(
-            str(item.get("content") or "") for item in persona.published_snapshots
-        )
+        published = tuple(str(item.get("content") or "") for item in persona.published_snapshots)
         sections = [
             ResponseSection(
                 persona.display_name,
@@ -190,15 +217,14 @@ class PersonaWorkspaceUI:
                     f"状态：{persona.status.value}",
                     f"版本：r{persona.revision}",
                     f"已授权资料：{len(published)} 条",
-                    "代答策略：" + {
+                    "代答策略："
+                    + {
                         "auto": "自动回答",
                         "risk_approval": "高风险问题需本人确认",
                         "owner_approval": "所有问题均需本人确认",
                     }.get(persona.response_mode, persona.response_mode),
                     "允许主题：" + ("、".join(persona.allowed_topics) or "仅按授权资料回答"),
-                    "确认主题：" + (
-                        "、".join(persona.approval_topics) or "使用企业高风险默认规则"
-                    ),
+                    "确认主题：" + ("、".join(persona.approval_topics) or "使用企业高风险默认规则"),
                     "禁止主题：" + ("、".join(persona.denied_topics) or "未设置"),
                 ),
             )
@@ -207,6 +233,9 @@ class PersonaWorkspaceUI:
             sections.append(ResponseSection("已发布资料", items=published[:5]))
         actions: list[ResponseAction] = []
         if persona.status is DigitalPersonaStatus.ACTIVE:
+            actions.append(
+                self._action(post, "persona_policy_edit", persona.ref, "编辑策略", "primary")
+            )
             actions.append(self._action(post, "persona_archive", persona.ref, "暂停", "danger"))
         else:
             included = set(persona.source_memory_ids)
@@ -217,16 +246,24 @@ class PersonaWorkspaceUI:
                 limit=20,
             )
             for item in (item for item in available if item.id not in included):
-                actions.append(self._action(
-                    post, "persona_add", f"{persona.ref}|{item.ref}",
-                    f"授权：{item.content[:12]}", "default",
-                ))
+                actions.append(
+                    self._action(
+                        post,
+                        "persona_add",
+                        f"{persona.ref}|{item.ref}",
+                        f"授权：{item.content[:12]}",
+                        "default",
+                    )
+                )
                 if len(actions) >= 3:
                     break
+            actions.append(
+                self._action(post, "persona_policy_edit", persona.ref, "编辑策略", "primary")
+            )
             if persona.published_snapshots:
-                actions.append(self._action(
-                    post, "persona_publish", persona.ref, "发布数字人", "success"
-                ))
+                actions.append(
+                    self._action(post, "persona_publish", persona.ref, "发布数字人", "success")
+                )
         return ResponseView(
             kind=ResponseKind.STATUS,
             title="我的数字人",
@@ -245,9 +282,7 @@ class PersonaWorkspaceUI:
             claims.action, claims.target, actor_id=actor_id, post=post, scope=scope
         )
 
-    def _execute(
-        self, action: str, target: str, *, actor_id: str, post: dict, scope: Scope
-    ) -> str:
+    def _execute(self, action: str, target: str, *, actor_id: str, post: dict, scope: Scope) -> str:
         if action == "persona_add":
             persona_ref, memory_ref = target.split("|", 1)
             current = self.personas.get(persona_ref, owner_id=actor_id)
@@ -373,6 +408,8 @@ class PersonaWorkspaceUI:
             return ("approve" if parts[0] == "同意代答" else "reject", parts[1], "")
         if len(parts) == 3 and parts[0] == "修改代答":
             return "approve", parts[1], parts[2].strip()
+        if len(parts) == 2 and parts[0] == "重试代答":
+            return "retry", parts[1], ""
         return None
 
     def final_view(self, request: PersonaReplyRequest) -> ResponseView:
@@ -403,6 +440,125 @@ class PersonaWorkspaceUI:
             status=RunStatus.FAILED,
             run_id=f"persona-reply:{request.id}",
         )
+
+    @staticmethod
+    def expired_view(request: PersonaReplyRequest) -> ResponseView:
+        return ResponseView(
+            kind=ResponseKind.ERROR,
+            title="数字人确认已超时",
+            summary="所有者未在有效期内确认，本次回答不会发送。",
+            status=RunStatus.FAILED,
+            run_id=f"persona-reply:{request.id}",
+        )
+
+    @staticmethod
+    def reply_dialog(request: PersonaReplyRequest, submit_token: str) -> dict[str, Any]:
+        return {
+            "callback_id": "persona_reply_edit",
+            "title": "修改数字人回答",
+            "introduction_text": "修改后将以数字人代理身份回复原 Thread。",
+            "elements": [
+                {
+                    "display_name": "回答内容",
+                    "name": "draft",
+                    "type": "textarea",
+                    "default": request.draft_text,
+                    "optional": False,
+                    "max_length": 16000,
+                }
+            ],
+            "submit_label": "确认发送",
+            "state": submit_token,
+        }
+
+    def policy_dialog(self, persona_ref: str, *, actor_id: str, state: str) -> dict[str, Any]:
+        persona = self.personas.get(persona_ref, owner_id=actor_id)
+        return {
+            "callback_id": "persona_policy_edit",
+            "title": "编辑数字人策略",
+            "introduction_text": "保存后生成新草稿版本，需要重新发布才会生效。",
+            "elements": [
+                self._dialog_text("回答模式", "mode", persona.response_mode),
+                self._dialog_text("允许主题", "allowed", "、".join(persona.allowed_topics)),
+                self._dialog_text("确认主题", "approval", "、".join(persona.approval_topics)),
+                self._dialog_text("禁止主题", "denied", "、".join(persona.denied_topics)),
+            ],
+            "submit_label": "保存草稿",
+            "state": state,
+        }
+
+    def revise_policy(
+        self, persona_ref: str, *, actor_id: str, values: Mapping[str, Any]
+    ) -> DigitalPersona:
+        current = self.personas.get(persona_ref, owner_id=actor_id)
+        mode, allowed, approval, denied = self.validate_policy(values)
+        return self.personas.create_revision(
+            installation_id=current.installation_id,
+            tenant_id=current.tenant_id,
+            owner_id=current.owner_id,
+            owner_username=current.owner_username,
+            scope_id=current.scope_id,
+            display_name=current.display_name,
+            allowed_topics=allowed,
+            approval_topics=approval,
+            denied_topics=denied,
+            response_mode=mode,
+            source_memory_ids=current.source_memory_ids,
+            persona_id=current.id,
+        )
+
+    @staticmethod
+    def validate_policy(
+        values: Mapping[str, Any],
+    ) -> tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+        aliases = {
+            "auto": "auto",
+            "自动": "auto",
+            "自动回答": "auto",
+            "risk_approval": "risk_approval",
+            "风险确认": "risk_approval",
+            "高风险确认": "risk_approval",
+            "owner_approval": "owner_approval",
+            "全部确认": "owner_approval",
+            "所有回答确认": "owner_approval",
+        }
+        mode = aliases.get(str(values.get("mode") or "").strip().lower())
+        if mode is None:
+            raise ValueError("回答模式应为：自动、风险确认或全部确认")
+
+        def split(key: str) -> tuple[str, ...]:
+            return tuple(
+                item.strip()
+                for item in re.split(r"[、,，/；;]", str(values.get(key) or ""))
+                if item.strip()
+            )
+
+        return mode, split("allowed"), split("approval"), split("denied")
+
+    @staticmethod
+    def policy_command(message: str) -> tuple[str, dict[str, str]] | None:
+        if not message.startswith("更新数字人策略 "):
+            return None
+        parts = message.removeprefix("更新数字人策略 ").split("|", 4)
+        if len(parts) != 5:
+            raise ValueError("格式：更新数字人策略 <ref>|<模式>|<允许>|<确认>|<禁止>")
+        return parts[0].strip(), {
+            "mode": parts[1],
+            "allowed": parts[2],
+            "approval": parts[3],
+            "denied": parts[4],
+        }
+
+    @staticmethod
+    def _dialog_text(label: str, name: str, default: str) -> dict[str, Any]:
+        return {
+            "display_name": label,
+            "name": name,
+            "type": "text",
+            "default": default,
+            "optional": name != "mode",
+            "max_length": 500,
+        }
 
     def _reply_actions(
         self, request: PersonaReplyRequest, post: dict
@@ -445,8 +601,10 @@ class PersonaWorkspaceUI:
         self, post: dict, action: str, target: str, label: str, style: str
     ) -> ResponseAction:
         command = {
-            "persona_add": "授权资料", "persona_publish": "发布数字人",
+            "persona_add": "授权资料",
+            "persona_publish": "发布数字人",
             "persona_archive": "暂停数字人",
+            "persona_policy_edit": "更新数字人策略",
         }[action]
         token = ""
         if self.action_tokens is not None:
@@ -460,20 +618,34 @@ class PersonaWorkspaceUI:
                 requested_by=str(post["user_id"]),
             )
         return ResponseAction(
-            action, label, action, target, style=style,
-            fallback=f"`{command} {target}`", token=token,
+            action,
+            label,
+            action,
+            target,
+            style=style,
+            fallback=f"`{command} {target}`",
+            token=token,
         )
 
     def _audit(
-        self, event_type: str, post: dict, scope: Scope, target: str, decision: str,
+        self,
+        event_type: str,
+        post: dict,
+        scope: Scope,
+        target: str,
+        decision: str,
         details: Mapping[str, Any] | None = None,
     ) -> None:
         if self.audit_store is None:
             return
         self.audit_store.append_audit(
-            event_type, actor_id=scope.owner_id, scope_id=scope.id,
-            trace_id=f"mattermost:{post.get('id', '')}", target=target,
-            decision=decision, details={"schema_version": "1.0", **(details or {})},
+            event_type,
+            actor_id=scope.owner_id,
+            scope_id=scope.id,
+            trace_id=f"mattermost:{post.get('id', '')}",
+            target=target,
+            decision=decision,
+            details={"schema_version": "1.0", **(details or {})},
         )
 
     @staticmethod
@@ -485,9 +657,7 @@ class PersonaWorkspaceUI:
             if match is None:
                 return ()
             return tuple(
-                item.strip()[:80]
-                for item in re.split(r"[、/]|和", match.group(1))
-                if item.strip()
+                item.strip()[:80] for item in re.split(r"[、/]|和", match.group(1)) if item.strip()
             )[:20]
 
         return (
@@ -499,13 +669,17 @@ class PersonaWorkspaceUI:
     @staticmethod
     def _status(title: str, summary: str) -> ResponseView:
         return ResponseView(
-            kind=ResponseKind.STATUS, title=title, summary=summary,
+            kind=ResponseKind.STATUS,
+            title=title,
+            summary=summary,
             status=RunStatus.SUCCEEDED,
         )
 
     @staticmethod
     def _error(title: str, summary: str) -> ResponseView:
         return ResponseView(
-            kind=ResponseKind.ERROR, title=title, summary=summary,
+            kind=ResponseKind.ERROR,
+            title=title,
+            summary=summary,
             status=RunStatus.FAILED,
         )

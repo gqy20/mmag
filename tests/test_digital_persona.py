@@ -21,15 +21,23 @@ SCOPE = "mattermost:install-1:tenant-1:usr:user-1"
 
 def _scope() -> Scope:
     return Scope(
-        SCOPE, installation_id="install-1", tenant_id="tenant-1", owner_id="user-1",
-        conversation_id="dm-1", kind=ScopeKind.PERSONAL, channel_type="D",
+        SCOPE,
+        installation_id="install-1",
+        tenant_id="tenant-1",
+        owner_id="user-1",
+        conversation_id="dm-1",
+        kind=ScopeKind.PERSONAL,
+        channel_type="D",
     )
 
 
 def _memory(store: SQLiteControlPlane):
     return store.memory_items.remember(
-        installation_id="install-1", tenant_id="tenant-1", owner_id="user-1",
-        scope_id=SCOPE, kind=MemoryItemKind.FACT,
+        installation_id="install-1",
+        tenant_id="tenant-1",
+        owner_id="user-1",
+        scope_id=SCOPE,
+        kind=MemoryItemKind.FACT,
         content="MMAG 项目选择 LangGraph 是为了使用持久状态与人工审批恢复。",
     )
 
@@ -38,9 +46,14 @@ def test_persona_publishes_an_immutable_memory_snapshot(tmp_path):
     store = SQLiteControlPlane(str(tmp_path / "persona.db"))
     memory = _memory(store)
     draft = store.personas.create_revision(
-        installation_id="install-1", tenant_id="tenant-1", owner_id="user-1",
-        owner_username="alice", scope_id=SCOPE, display_name="Alice的数字人",
-        allowed_topics=("MMAG",), denied_topics=("薪酬",),
+        installation_id="install-1",
+        tenant_id="tenant-1",
+        owner_id="user-1",
+        owner_username="alice",
+        scope_id=SCOPE,
+        display_name="Alice的数字人",
+        allowed_topics=("MMAG",),
+        denied_topics=("薪酬",),
         source_memory_ids=(memory.ref,),
     )
     active = store.personas.activate(draft.ref, owner_id="user-1")
@@ -51,12 +64,12 @@ def test_persona_publishes_an_immutable_memory_snapshot(tmp_path):
     assert active.published_snapshots[0]["content"] == memory.content
     assert store.personas.get(active.ref).published_snapshots == active.published_snapshots
     assert store.personas.get(active.ref).status is DigitalPersonaStatus.ARCHIVED
-    assert store.personas.find_active(
-        "alice", installation_id="install-1", tenant_id="tenant-1"
-    ) == ()
-    assert store.personas.find_active(
-        "alice", installation_id="install-1", tenant_id="tenant-2"
-    ) == ()
+    assert (
+        store.personas.find_active("alice", installation_id="install-1", tenant_id="tenant-1") == ()
+    )
+    assert (
+        store.personas.find_active("alice", installation_id="install-1", tenant_id="tenant-2") == ()
+    )
     store.close()
 
 
@@ -65,13 +78,18 @@ def test_persona_owner_can_create_select_publish_and_route_questions(tmp_path):
     memory = _memory(store)
     tokens = ActionTokenService("s" * 32, store, ttl_seconds=60)
     ui = PersonaWorkspaceUI(
-        personas=store.personas, memories=store.memory_items,
-        action_tokens=tokens, audit_store=None,
+        personas=store.personas,
+        memories=store.memory_items,
+        action_tokens=tokens,
+        audit_store=None,
     )
     scope = _scope()
     post = {
-        "id": "post-1", "channel_id": "dm-1", "user_id": "user-1",
-        "username": "alice", "_scope_id": SCOPE,
+        "id": "post-1",
+        "channel_id": "dm-1",
+        "user_id": "user-1",
+        "username": "alice",
+        "_scope_id": SCOPE,
     }
 
     handled, created = ui.consume_owner(
@@ -82,22 +100,28 @@ def test_persona_owner_can_create_select_publish_and_route_questions(tmp_path):
     add = created.actions[0]
     ui.handle_action(
         tokens.consume(add.token, actor_id="user-1"),
-        actor_id="user-1", post=post, scope=scope,
+        actor_id="user-1",
+        post=post,
+        scope=scope,
     )
     _, managed = ui.consume_owner(post, "管理我的数字人", scope)
     publish = next(action for action in managed.actions if action.action == "persona_publish")
     ui.handle_action(
         tokens.consume(publish.token, actor_id="user-1"),
-        actor_id="user-1", post=post, scope=scope,
+        actor_id="user-1",
+        post=post,
+        scope=scope,
     )
 
     invocation, rejected = ui.resolve_question(
         "@hrzx_bot 问一下 alice 的数字人：MMAG 为什么选择 LangGraph？",
-        installation_id="install-1", tenant_id="tenant-1",
+        installation_id="install-1",
+        tenant_id="tenant-1",
     )
     denied, denial = ui.resolve_question(
         "问一下 Alice 的数字人：薪酬是多少？",
-        installation_id="install-1", tenant_id="tenant-1",
+        installation_id="install-1",
+        tenant_id="tenant-1",
     )
 
     assert handled and created is not None and add.action == "persona_add"
@@ -114,14 +138,21 @@ def test_persona_context_uses_only_published_snapshot(tmp_path):
     store = SQLiteControlPlane(path)
     published = _memory(store)
     private = store.memory_items.remember(
-        installation_id="install-1", tenant_id="tenant-1", owner_id="user-2",
+        installation_id="install-1",
+        tenant_id="tenant-1",
+        owner_id="user-2",
         scope_id="mattermost:install-1:tenant-1:usr:user-2",
-        kind=MemoryItemKind.FACT, content="请求者自己的私人秘密",
+        kind=MemoryItemKind.FACT,
+        content="请求者自己的私人秘密",
     )
     persona = store.personas.activate(
         store.personas.create_revision(
-            installation_id="install-1", tenant_id="tenant-1", owner_id="user-1",
-            owner_username="alice", scope_id=SCOPE, display_name="Alice的数字人",
+            installation_id="install-1",
+            tenant_id="tenant-1",
+            owner_id="user-1",
+            owner_username="alice",
+            scope_id=SCOPE,
+            display_name="Alice的数字人",
             source_memory_ids=(published.ref,),
         ).ref,
         owner_id="user-1",
@@ -141,16 +172,23 @@ def test_persona_context_uses_only_published_snapshot(tmp_path):
             return {"id": user_id, "is_bot": False}
 
     post = {
-        "id": "question-1", "channel_id": "dm-user-2", "user_id": "user-2",
-        "username": "bob", "message": "问一下 Alice 的数字人：为什么选择 LangGraph？",
-        "create_at": 2, "_persona_ref": persona.ref,
+        "id": "question-1",
+        "channel_id": "dm-user-2",
+        "user_id": "user-2",
+        "username": "bob",
+        "message": "问一下 Alice 的数字人：为什么选择 LangGraph？",
+        "create_at": 2,
+        "_persona_ref": persona.ref,
         "_persona_question": "为什么选择 LangGraph？",
     }
     builder = ContextBuilder(
-        MM(), memory,
+        MM(),
+        memory,
         {"dm-user-2": [{**post, "message": "不应进入数字人上下文的历史内容"}]},
-        BotIdentity("bot-1", "bot"), PromptAsset("test", "system", "hash", frozenset()),
-        memory_items=store.memory_items, personas=store.personas,
+        BotIdentity("bot-1", "bot"),
+        PromptAsset("test", "system", "hash", frozenset()),
+        memory_items=store.memory_items,
+        personas=store.personas,
         scope_resolver=MattermostScopeResolver(
             MM(), installation_id="install-1", tenant_id="tenant-1"
         ),
@@ -223,4 +261,74 @@ def test_high_risk_reply_requires_owner_and_can_be_edited_once(tmp_path):
     assert approved.persona_ref == persona.ref
     with pytest.raises(ValueError):
         ui.decide_reply(request.id, actor_id="user-1", approved=False)
+    store.close()
+
+
+def test_persona_policy_change_creates_a_new_draft_revision(tmp_path):
+    store = SQLiteControlPlane(str(tmp_path / "persona-policy.db"))
+    memory = _memory(store)
+    active = store.personas.activate(
+        store.personas.create_revision(
+            installation_id="install-1",
+            tenant_id="tenant-1",
+            owner_id="user-1",
+            owner_username="alice",
+            scope_id=SCOPE,
+            display_name="Alice的数字人",
+            allowed_topics=("MMAG",),
+            source_memory_ids=(memory.ref,),
+        ).ref,
+        owner_id="user-1",
+    )
+    ui = PersonaWorkspaceUI(
+        personas=store.personas,
+        memories=store.memory_items,
+        action_tokens=None,
+    )
+
+    revised = ui.revise_policy(
+        active.ref,
+        actor_id="user-1",
+        values={
+            "mode": "全部确认",
+            "allowed": "MMAG、LangGraph",
+            "approval": "交付承诺",
+            "denied": "薪酬",
+        },
+    )
+
+    assert revised.revision == active.revision + 1
+    assert revised.status is DigitalPersonaStatus.DRAFT
+    assert revised.response_mode == "owner_approval"
+    assert revised.allowed_topics == ("MMAG", "LangGraph")
+    assert revised.source_memory_ids == active.source_memory_ids
+    assert store.personas.get(active.ref).status is DigitalPersonaStatus.ACTIVE
+    store.close()
+
+
+def test_pending_persona_reply_expires_durably(tmp_path):
+    store = SQLiteControlPlane(str(tmp_path / "persona-expiry.db"))
+    request = store.persona_replies.create(
+        installation_id="install-1",
+        tenant_id="tenant-1",
+        persona_ref="persona-1@1",
+        persona_hash="hash",
+        owner_id="user-1",
+        requester_id="user-2",
+        requester_username="bob",
+        source_scope_id="scope-1",
+        source_channel_id="channel-1",
+        source_root_id="root-1",
+        source_status_post_id="status-1",
+        question="问题",
+        draft_text="草稿",
+        approval_reason="需要确认",
+        ttl_seconds=30,
+    )
+
+    expired = store.persona_replies.expire_pending(now=request.expires_at + 1)
+
+    assert tuple(item.id for item in expired) == (request.id,)
+    assert store.persona_replies.get(request.id).state is PersonaReplyState.EXPIRED
+    assert store.persona_replies.expire_pending(now=request.expires_at + 2) == ()
     store.close()

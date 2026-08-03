@@ -159,9 +159,7 @@ class SQLiteControlPlane:
                 self._connection.execute("BEGIN IMMEDIATE")
                 for index, message in enumerate(messages):
                     stable_key = message.idempotency_key or f"{event_id}:{index}"
-                    delivery_id = uuid.uuid5(
-                        uuid.NAMESPACE_URL, f"mmag:delivery:{stable_key}"
-                    ).hex
+                    delivery_id = uuid.uuid5(uuid.NAMESPACE_URL, f"mmag:delivery:{stable_key}").hex
                     channel_id = message.channel_id or message.conversation_id
                     agent_run_id = message.agent_run_id or f"run:{event_id}"
                     self._connection.execute(
@@ -227,6 +225,70 @@ class SQLiteControlPlane:
             )
             self._connection.commit()
         return self.get_delivery(str(row["id"]))
+
+    def enqueue_delivery(self, message: OutboundMessage) -> str:
+        """Persist one application-owned delivery without an Inbox parent."""
+        stable_key = message.idempotency_key
+        if not stable_key or not message.actor_id or not message.scope_id:
+            raise ValueError("standalone delivery requires idempotency, actor, and scope")
+        delivery_id = uuid.uuid5(uuid.NAMESPACE_URL, f"mmag:delivery:{stable_key}").hex
+        channel_id = message.channel_id or message.conversation_id
+        now = time.time()
+        with self._lock:
+            self._connection.execute(
+                """INSERT OR IGNORE INTO outbox_deliveries
+                (id, conversation_id, channel_id, message, props, status,
+                 agent_run_id, root_id, message_kind, scope_id, artifact_refs,
+                 file_ids, actions, update_post_id, idempotency_key,
+                 actor_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    delivery_id,
+                    message.conversation_id,
+                    channel_id,
+                    message.text,
+                    _json(dict(message.props)),
+                    message.agent_run_id,
+                    message.root_id,
+                    message.message_kind,
+                    message.scope_id,
+                    _json(list(message.artifact_refs)),
+                    _json(list(message.file_ids)),
+                    _json([dict(action) for action in message.actions]),
+                    message.update_post_id,
+                    stable_key,
+                    message.actor_id,
+                    now,
+                    now,
+                ),
+            )
+            self._connection.execute(
+                """INSERT OR IGNORE INTO lifecycle_entities
+                (entity_type, entity_id, scope_id, state, payload, created_at, updated_at)
+                VALUES ('delivery', ?, ?, 'pending', '{}', ?, ?)""",
+                (delivery_id, message.scope_id, now, now),
+            )
+            self._connection.commit()
+        return delivery_id
+
+    def retry_delivery(self, idempotency_key: str) -> str:
+        with self._lock:
+            cursor = self._connection.execute(
+                """UPDATE outbox_deliveries SET status='retrying', attempts=0,
+                next_attempt_at=0, last_error='', updated_at=?
+                WHERE idempotency_key=? AND status='failed'""",
+                (time.time(), idempotency_key),
+            )
+            delivery_id = ""
+            if cursor.rowcount:
+                delivery_id = str(
+                    self._connection.execute(
+                        "SELECT id FROM outbox_deliveries WHERE idempotency_key=?",
+                        (idempotency_key,),
+                    ).fetchone()["id"]
+                )
+            self._connection.commit()
+        return delivery_id
 
     def get_delivery(self, delivery_id: str) -> DeliveryRecord:
         row = self._connection.execute(

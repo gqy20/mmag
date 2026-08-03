@@ -125,6 +125,46 @@ async def test_delivery_terminal_state_settles_parent_task(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_standalone_delivery_can_be_replayed_without_rerunning_an_agent(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    attempts = 0
+
+    async def process(event: InboundEvent) -> tuple[OutboundMessage, ...]:
+        raise AssertionError("standalone delivery must not run an Inbox processor")
+
+    async def deliver(message: OutboundMessage) -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary platform failure")
+        return "post-1"
+
+    pipeline = MessagePipeline(store, process, deliver, max_delivery_attempts=1)
+    await pipeline.start()
+    delivery_id = pipeline.enqueue_delivery(
+        OutboundMessage(
+            conversation_id="channel-1",
+            channel_id="channel-1",
+            text="durable response",
+            idempotency_key="standalone:one",
+            actor_id="user-1",
+            scope_id="scope-1",
+        )
+    )
+    await pipeline.join()
+
+    assert store.get_delivery(delivery_id).status == "failed"
+    assert pipeline.retry_delivery("standalone:one")
+    await pipeline.join()
+    await pipeline.close()
+
+    assert attempts == 2
+    assert store.get_delivery(delivery_id).status == "delivered"
+    assert store.get_lifecycle_entity(EntityType.DELIVERY, delivery_id).state == "delivered"
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_delivered_error_response_keeps_agent_run_and_task_failed(tmp_path):
     store = SQLiteControlPlane(tmp_path / "control.db")
 

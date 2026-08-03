@@ -54,6 +54,7 @@ _TRANSITIONS: dict[EntityType, dict[str, frozenset[str]]] = {
         "pending": frozenset({"sending", "cancelled"}),
         "sending": frozenset({"delivered", "retrying", "failed"}),
         "retrying": frozenset({"sending", "failed", "cancelled"}),
+        "failed": frozenset({"retrying"}),
     },
 }
 

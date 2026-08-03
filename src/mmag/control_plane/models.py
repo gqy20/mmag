@@ -124,6 +124,7 @@ class PersonaReplyState(StrEnum):
     REJECTED = "rejected"
     DELIVERED = "delivered"
     FAILED = "failed"
+    EXPIRED = "expired"
 
 
 class TaskState(StrEnum):
@@ -389,6 +390,7 @@ class PersonaReplyRequest:
     source_root_id: str
     source_status_post_id: str
     owner_approval_post_id: str
+    owner_channel_id: str
     question: str
     draft_text: str
     approval_reason: str
