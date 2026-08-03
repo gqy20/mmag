@@ -3,8 +3,8 @@ kind: Skill
 
 metadata:
   name: slides
-  version: 3.1.0
-  description: Compose governed Markdown into editable PPTX, source, and direct image preview Artifacts.
+  version: 3.1.1
+  description: 将受治理的 Markdown 编排为可编辑 PPTX、源文件和图片预览产物。
 
 spec:
   instruction_ref: SKILL.md

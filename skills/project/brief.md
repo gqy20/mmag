@@ -1,17 +1,17 @@
-# Project status brief
+# 项目状态简报
 
-## Summary
+## 摘要
 
-State the outcome, current phase, and overall health.
+说明目标结果、当前阶段和整体健康状态。
 
-## Milestones and tasks
+## 里程碑与任务
 
-Show status, confirmed owner, due date, exit criteria, and dependencies.
+展示状态、已确认负责人、截止日期、退出标准和依赖关系。
 
-## Risks and decisions
+## 风险与决定
 
-Expose impact, mitigation, unresolved questions, and the next decision needed.
+说明影响、缓解措施、未解决问题和下一项待做决定。
 
-## Next actions
+## 下一步行动
 
-List the smallest useful actions in execution order.
+按照执行顺序列出粒度最小且有效的行动。

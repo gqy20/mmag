@@ -3,8 +3,8 @@ kind: Skill
 
 metadata:
   name: report
-  version: 1.3.0
-  description: Build a structured research report with an explicit evidence ledger.
+  version: 1.3.1
+  description: 生成带有明确证据账本的结构化研究报告。
 
 spec:
   instruction_ref: SKILL.md

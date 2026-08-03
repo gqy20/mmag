@@ -3,8 +3,8 @@ kind: Skill
 
 metadata:
   name: meeting
-  version: 1.0.0
-  description: Summarize a bounded Mattermost discussion into traceable decisions and actions.
+  version: 1.0.1
+  description: 将限定范围内的 Mattermost 讨论整理为可追溯的决定和行动项。
 
 spec:
   instruction_ref: SKILL.md

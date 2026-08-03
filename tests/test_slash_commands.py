@@ -180,14 +180,14 @@ class FakePipeline:
 def package_fixtures():
     skill_metadata = SimpleNamespace(
         name="web-research",
-        version="1.2.0",
-        ref="web-research@1.2.0",
+        version="1.2.1",
+        ref="web-research@1.2.1",
         description="Research with source-aware evidence.",
     )
     skill = SimpleNamespace(manifest=SimpleNamespace(metadata=skill_metadata))
     agent_metadata = SimpleNamespace(
         name="mmchat",
-        version="2.2.0",
+        version="2.2.1",
         description="Mattermost conversation Agent.",
     )
     agent = SimpleNamespace(
@@ -221,8 +221,8 @@ async def test_agents_and_skills_are_read_from_activated_registries(tmp_path):
     finally:
         store.close()
 
-    assert "`mmchat@2.2.0` · 默认" in agents["text"]
-    assert "`web-research@1.2.0`" in skills["text"]
+    assert "`mmchat@2.2.1` · 默认" in agents["text"]
+    assert "`web-research@1.2.1`" in skills["text"]
     assert "`mmchat` 可用 Skills" in agent_skills["text"]
     assert len(guard.calls) == 3
 

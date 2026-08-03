@@ -3,8 +3,8 @@ kind: ManagedAgent
 
 metadata:
   name: project
-  version: 2.0.1
-  description: Turn scoped team context into actionable project plans and status briefs.
+  version: 2.0.2
+  description: 将限定范围内的团队上下文整理为可执行的项目计划和状态简报。
 
 spec:
   routing:
@@ -44,7 +44,7 @@ spec:
 
   skills:
     allow:
-      - project@1.2.0
+      - project@1.2.1
     deny: []
 
   context:

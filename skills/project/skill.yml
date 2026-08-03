@@ -3,8 +3,8 @@ kind: Skill
 
 metadata:
   name: project
-  version: 1.2.0
-  description: Convert scoped team evidence into a project plan or status brief.
+  version: 1.2.1
+  description: 将限定范围内的团队证据整理为项目计划或状态简报。
 
 spec:
   instruction_ref: SKILL.md

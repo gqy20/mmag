@@ -48,7 +48,7 @@
 - [x] Prompt/Schema/eval/Policy/Model Policy 进入 Package Hash 和 provenance；
 - [x] Agent Manifest 绑定 Skill 精确版本，Skill Set Hash 进入 Agent 快照；
 - [x] 运行时能力收窄为 Agent、Skill 与 Policy 的交集；
-- [x] `web-research@1.2.0` 作为可复用 Skill，由 `mmchat@2.2.0` 激活；
+- [x] `web-research@1.2.1` 作为可复用 Skill，由 `mmchat@2.2.1` 激活；
 - [x] 选中 Skill 投影到 StateBackend，由 Deep Agents SkillsMiddleware 原生渐进披露并随 checkpoint 恢复；
 - [x] strict Prompt render、输入/输出/Artifact Schema 和预算强制；
 - [x] Model Policy Registry 严格加载并校验 route。
@@ -183,7 +183,7 @@
 优先级：P1。
 
 - [x] 定义 `report` Manifest、只读 Policy、Prompt 和输入/输出 Schema；
-- [x] `report@1.3.0` Skill 将结果升级为证据账本式结构化输出，并按需使用受治理 MCP；
+- [x] `report@1.3.1` Skill 将结果升级为证据账本式结构化输出，并按需使用受治理 MCP；
 - [x] 定义 `research_report` Artifact Schema；
 - [ ] 接入来源去重、时效性和证据覆盖 eval；
 - [ ] 将报告持久化到 Artifact Repository；
@@ -218,7 +218,7 @@
 - [ ] 输入 Artifact 在执行前校验版本和 scope；
 - [x] 定义 `slides@2.2.0` Skill、受控 Markdown、注册主题、PptxGenJS 原生对象渲染、严格 Presentation Bundle 契约与默认 PPTX 审批交付；
 - [x] 定义 `ppt@2.2.0` Agent Manifest 和默认拒绝 Policy，PPTX 默认进入审批交付；
-- [x] Presentation Package `ppt@3.1.1` 绑定 `ppt@2.2.0` Execution Profile、锁定的 PptxGenJS bundle、高层 `ppt.build` 与受治理 Workspace；
+- [x] Presentation Package `ppt@3.1.2` 绑定 `ppt@2.2.0` Execution Profile、锁定的 PptxGenJS bundle、高层 `ppt.build` 与受治理 Workspace；
 - [x] 通过执行平面输出规范化 Markdown、可编辑 PPTX 与直接 PNG 预览 Artifact；
 - [x] 同一份 Markdown/Theme 生成 PPTX 与首页 PNG，不再以 LibreOffice/PDF 作为预览前置；
 - [x] PPTX 默认经过 LangGraph 审批和 Outbox 交付；

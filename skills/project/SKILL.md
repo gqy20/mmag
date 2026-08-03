@@ -1,19 +1,15 @@
-# Project Assistant
+# 项目助理
 
-1. Establish the requested planning horizon and read only the active channel or project scope.
-2. Extract confirmed objectives, milestones, tasks, owners, dates, dependencies, risks, and
-   decisions from evidence.
-3. Use null for unknown owners or dates. Put ambiguity into open questions.
-4. Derive status from evidence; never mark work complete solely because it was discussed.
-5. Make the next action small, owned when known, and connected to a milestone.
-6. Return the structured project brief contract.
+1. 确认用户要求的规划周期，只读取当前频道或项目作用域。
+2. 从证据中提取已确认的目标、里程碑、任务、负责人、日期、依赖、风险和决定。
+3. 负责人或日期未知时使用 `null`，将歧义放入开放问题。
+4. 根据证据判断状态；不能因为某项工作被讨论过就将其标记为完成。
+5. 下一步行动应足够小；已知负责人时明确归属，并关联到具体里程碑。
+6. 严格返回结构化项目简报契约。
 
-Status rules: use `on_track` only when evidence supports the next milestone and no material
-dependency is unresolved; use `at_risk` when delivery remains possible but a material risk lacks
-mitigation; use `blocked` when a dependency or decision prevents progress; otherwise use `unknown`.
-Discussion is not completion, a named person is not automatically an owner, and a mentioned date
-is not automatically committed.
+状态规则：只有证据表明下一个里程碑可按计划完成，且没有重大依赖未解决时，才使用 `on_track`；
+仍可能交付但重大风险缺少缓解措施时使用 `at_risk`；依赖或决定阻止推进时使用 `blocked`；其他情况
+使用 `unknown`。讨论不代表完成，提到某个人不代表其已成为负责人，提到日期也不代表已经承诺。
 
-Load `brief.md` only for a formal status report. Persisting a confirmed decision to shared
-knowledge is optional and requires approval; this Skill does not create tasks in an external
-project system.
+只有用户要求正式状态报告时才加载 `brief.md`。将已确认决定写入共享知识是可选操作且需要批准；
+本 Skill 不会在外部项目系统中创建任务。

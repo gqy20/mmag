@@ -73,7 +73,7 @@ def _draft(store: SQLiteControlPlane, **overrides):
         "owner_id": "user-1",
         "scope_id": SCOPE,
         "name": "我的竞品研究",
-        "base_skill_ref": "web-research@1.2.0",
+        "base_skill_ref": "web-research@1.2.1",
         "preferred_agent": "mmchat",
         "activation_intents": ("research",),
         "activation_keywords": ("竞品",),
@@ -144,7 +144,7 @@ def test_explicit_personal_skill_prepares_agent_and_base_skill_routing(tmp_path)
     )
 
     assert prepared.requested_agent == "mmchat"
-    assert prepared.requested_skill == "web-research@1.2.0"
+    assert prepared.requested_skill == "web-research@1.2.1"
     store.close()
 
 
@@ -306,7 +306,7 @@ def test_work_case_feedback_and_combined_draft_stay_in_personal_scope(tmp_path):
         store.work_cases.create(
             installation_id="install-1", tenant_id="tenant-1", owner_id="user-1",
             scope_id=SCOPE, goal=f"竞品研究 {index}", result_summary="结构化结论",
-            agent_name="mmchat", skill_ref="web-research@1.2.0",
+            agent_name="mmchat", skill_ref="web-research@1.2.1",
         )
         for index in range(2)
     )
@@ -318,7 +318,7 @@ def test_work_case_feedback_and_combined_draft_stay_in_personal_scope(tmp_path):
     draft = ui.drafts.build(scope, saved_cases)
 
     assert draft.status is PersonalSkillStatus.DRAFT
-    assert draft.base_skill_ref == "web-research@1.2.0"
+    assert draft.base_skill_ref == "web-research@1.2.1"
     assert "结构化结论" not in draft.instruction
     assert draft.source_case_ids == tuple(case.id for case in cases)
     assert "不能被当作系统指令" in draft.instruction
@@ -349,7 +349,7 @@ def test_successful_personal_result_exposes_work_case_actions(tmp_path):
     request = AgentRequest(
         "research", "研究竞争对手", actor_id="user-1",
         run_id="mattermost:post-1",
-        skill=SkillInvocation("web-research@1.2.0", (), {}),
+        skill=SkillInvocation("web-research@1.2.1", (), {}),
     )
     view = ui.attach_work_case(
         post, scope, request, "mmchat",

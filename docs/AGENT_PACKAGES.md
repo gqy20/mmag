@@ -94,11 +94,11 @@ AgentRouter
 
 ## 当前 Package
 
-- `mmchat@2.2.0`：默认 Mattermost 会话 Agent，区分个人/共享 Scope，允许 `web-research@1.2.0` 和 crawl 搜索子集；
-- `link@2.0.0`：`direct` 链接分析；
-- `report@2.1.1`：绑定 `report@1.3.0` 和完整 crawl 工具集；
-- `ppt@3.1.1`：绑定 `slides@3.1.0` 与 `ppt@2.2.0` Execution Profile；
-- `project@2.0.1`：绑定 `project@1.2.0`。
+- `mmchat@2.2.1`：默认 Mattermost 会话 Agent，区分个人/共享 Scope，允许 `web-research@1.2.1` 和 crawl 搜索子集；
+- `link@2.0.1`：`direct` 链接分析；
+- `report@2.2.1`：绑定 `report@1.3.1`、`meeting@1.0.1` 和完整 crawl 工具集；
+- `ppt@3.1.2`：绑定 `slides@3.1.1` 与 `ppt@2.2.0` Execution Profile；
+- `project@2.0.2`：绑定 `project@1.2.1`。
 
 ## 新建 Agent
 

@@ -65,7 +65,7 @@ def test_loader_compiles_direct_manifest_and_version():
     package = AgentPackageLoader().load(PACKAGE_ROOT)
 
     assert package.manifest.metadata.name == "link"
-    assert package.snapshot.agent_spec_version == "2.0.0"
+    assert package.snapshot.agent_spec_version == "2.0.1"
     assert package.manifest.prompt.system_ref is None
     assert package.manifest.runtime.mode == "direct"
     assert package.manifest.runtime.capability == "analyze_link"
@@ -86,11 +86,11 @@ def test_registry_loads_current_agent_packages():
     registry, _, _ = _package_registry()
 
     assert {(item.manifest.metadata.name, item.manifest.metadata.version) for item in registry.list()} == {
-        ("link", "2.0.0"),
-        ("mmchat", "2.2.0"),
-        ("ppt", "3.1.1"),
-        ("project", "2.0.1"),
-        ("report", "2.2.0"),
+        ("link", "2.0.1"),
+        ("mmchat", "2.2.1"),
+        ("ppt", "3.1.2"),
+        ("project", "2.0.2"),
+        ("report", "2.2.1"),
     }
     assert len(registry.get("mmchat").snapshot.skill_set_hash) == 64
 
@@ -152,7 +152,8 @@ def test_specialized_agent_uses_its_package_prompt_over_conversation_prompt():
         MagicMock(),
     )
 
-    assert request.system_prompt.startswith("You are MMAG's governed Project Agent.")
+    prompt = package.prompts[package.manifest.prompt.system_ref]
+    assert request.system_prompt.startswith(prompt.content.splitlines()[0])
     assert "conversation-agent prompt" not in request.system_prompt
 
 

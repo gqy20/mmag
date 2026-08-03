@@ -3,8 +3,8 @@ kind: Skill
 
 metadata:
   name: web-research
-  version: 1.2.0
-  description: Plan, verify, and synthesize web research with source-aware evidence.
+  version: 1.2.1
+  description: 规划、核验并综合网络研究，保留可追溯的来源证据。
 
 spec:
   instruction_ref: SKILL.md

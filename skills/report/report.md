@@ -1,18 +1,17 @@
-# Decision report template
+# 决策报告模板
 
-## Executive summary
+## 执行摘要
 
-State the decision, the strongest evidence, and the most material uncertainty.
+说明待做决定、最有力的证据和最重要的不确定性。
 
-## Findings
+## 研究发现
 
-For each finding include the claim, supporting source identifiers, contradictory evidence, and
-confidence.
+每项发现都要包含主张、支持它的来源标识、矛盾证据和置信度。
 
-## Recommendations
+## 建议
 
-Tie every recommendation to a finding and make assumptions explicit.
+每项建议都要关联到研究发现，并明确说明假设。
 
-## Limitations
+## 局限
 
-List unavailable, stale, single-source, or scope-restricted evidence.
+列出不可访问、已经过期、仅有单一来源或受作用域限制的证据。

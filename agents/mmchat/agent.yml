@@ -3,8 +3,8 @@ kind: ManagedAgent
 
 metadata:
   name: mmchat
-  version: 2.2.0
-  description: Participate in Mattermost conversations with bounded enterprise capabilities.
+  version: 2.2.1
+  description: 在受限的企业能力范围内参与 Mattermost 对话。
 
 spec:
   routing:
@@ -47,7 +47,7 @@ spec:
     deny: []
   skills:
     allow:
-      - web-research@1.2.0
+      - web-research@1.2.1
     deny: []
   context:
     read_scopes: [conversation, project]

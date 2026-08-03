@@ -111,7 +111,7 @@ def test_personal_preferences_are_normalized_and_tenant_isolated(tmp_path):
             "language": "zh-CN",
             "response_style": "concise",
             "preferred_agents": ["ppt", "PPT", "invalid prompt!"],
-            "preferred_skills": ["slides@3.1.0"],
+            "preferred_skills": ["slides@3.1.1"],
             "capabilities": ["shell.exec"],
         },
     )
@@ -120,7 +120,7 @@ def test_personal_preferences_are_normalized_and_tenant_isolated(tmp_path):
         "language": "zh-CN",
         "response_style": "concise",
         "preferred_agents": ("ppt",),
-        "preferred_skills": ("slides@3.1.0",),
+        "preferred_skills": ("slides@3.1.1",),
     }
     assert first.get_personal_preferences("user-1") == stored
     assert second.get_personal_preferences("user-1") == {}

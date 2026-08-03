@@ -1,18 +1,17 @@
-# Research Report
+# 研究报告
 
-Use this workflow only inside the active Agent scope.
+只能在当前 Agent 作用域内使用以下流程。
 
-1. Convert the goal into a small set of answerable research questions and decision criteria.
-2. Search scoped enterprise knowledge before fetching supplied public links.
-3. Build an evidence ledger: each consequential claim must point to one or more source identifiers.
-4. Classify evidence as direct support, indirect support, contradiction, or unresolved.
-5. Separate findings from recommendations and attach a high, medium, or low confidence level.
-6. Record missing coverage, stale evidence, conflicts, and inaccessible references as limitations.
-7. Return exactly the structured result contract; never manufacture outer-envelope provenance.
+1. 将目标拆解为少量可回答的研究问题和决策标准。
+2. 获取给定的公开链接之前，先检索当前作用域内的企业知识。
+3. 建立证据账本：每个重要主张必须指向一个或多个来源标识。
+4. 将证据分类为直接支持、间接支持、矛盾或尚未解决。
+5. 区分发现和建议，并标记 `high`、`medium` 或 `low` 置信度。
+6. 将覆盖缺口、过期证据、冲突和不可访问的引用记录为局限。
+7. 严格返回结构化结果契约，不得伪造外层 Envelope 的 provenance。
 
-Prefer primary sources, direct observations, and dated enterprise records. For public sources,
-consider authority, publication date, method transparency, incentives, and independent
-confirmation. Search snippets, syndication, model memory, and unverified summaries are not
-independent evidence. Keep contradictions visible and lower confidence when sources are missing.
+优先使用一手来源、直接观察和带日期的企业记录。处理公开来源时，需要考虑权威性、发布日期、方法
+透明度、利益动机和独立验证。搜索摘要、转载内容、模型记忆和未经核验的总结不属于独立证据。
+缺少来源时保留矛盾并降低置信度。
 
-Load `report.md` only when the user requests a full decision memo.
+只有用户要求完整决策备忘录时才加载 `report.md`。

@@ -3,8 +3,8 @@ kind: ManagedAgent
 
 metadata:
   name: report
-  version: 2.2.0
-  description: Produce evidence-aware, structured research reports within the active scope.
+  version: 2.2.1
+  description: 在当前作用域内生成重视证据的结构化研究报告。
 
 spec:
   routing:
@@ -39,8 +39,8 @@ spec:
 
   skills:
     allow:
-      - report@1.3.0
-      - meeting@1.0.0
+      - report@1.3.1
+      - meeting@1.0.1
     deny: []
 
   context:

@@ -3,8 +3,8 @@ kind: ManagedAgent
 
 metadata:
   name: link
-  version: 2.0.0
-  description: Analyze one URL and return a source-preserving structured artifact.
+  version: 2.0.1
+  description: 分析单个 URL，并返回保留来源信息的结构化产物。
 
 spec:
   routing:

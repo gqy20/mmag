@@ -3,8 +3,8 @@ kind: ManagedAgent
 
 metadata:
   name: ppt
-  version: 3.1.1
-  description: Build governed Markdown into editable presentation bundles and deliver on approval.
+  version: 3.1.2
+  description: 将受治理的 Markdown 构建为可编辑演示文稿包，并在批准后交付。
 
 spec:
   routing:
@@ -46,7 +46,7 @@ spec:
 
   skills:
     allow:
-      - slides@3.1.0
+      - slides@3.1.1
     deny: []
 
   execution_profiles:
