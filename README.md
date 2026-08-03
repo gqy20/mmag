@@ -56,6 +56,8 @@ Agent 与 Skill 是多对多关系，但 Skill 必须依附于本次已选择的
 
 ## 运行架构
 
+![MMAG 企业智能体平台架构](docs/assets/mmag-architecture.png)
+
 ```text
 Mattermost WebSocket / Slash Command / Action Callback
   → 身份与 Scope 解析

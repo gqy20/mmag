@@ -2,9 +2,9 @@
 
 > 状态：Active
 >
-> 更新时间：2026-08-02
+> 更新时间：2026-08-03
 >
-> 当前阶段：Deep Agents 原生主链完成，进入身份隔离、Workspace/Sandbox 与企业闭环阶段
+> 当前阶段：Deep Agents 原生主链完成，进入企业知识连接、可选 Bot 身份、Workspace/Sandbox 与业务闭环阶段
 
 本文档只维护当前基线、未完成步骤和验收标准。设计理由见 [AI_NATIVE_REFACTORING.md](AI_NATIVE_REFACTORING.md)，具体风险见 [TECH_DEBT.md](TECH_DEBT.md)。
 
@@ -15,6 +15,8 @@
 - [x] 锁定依赖、Ruff、mypy、coverage、wheel smoke 和 CI 统一门禁；
 - [x] 默认测试完全离线，外部测试显式标记；
 - [x] SQLite forward-only migration、FTS、事务回滚、备份恢复原语；
+- [x] 明确 SQLite 只承担 MMAG 本地控制面、Checkpoint、消息缓存、轻量团队知识、个人记忆和 Persona
+  元数据，不作为企业外部知识系统的替代品或唯一事实源；
 - [x] Mattermost posted 去重、幂等 Outbox、重试、DLQ 和 replay；
 - [x] 同会话串行、跨会话并发、入口/执行/投递解耦。
 
@@ -93,6 +95,10 @@
 6. 文件超过 800 行才按稳定职责拆分，避免碎片化；
 7. Agent 只输出平台无关的语义结果，展示层负责映射 Mattermost Markdown、Thread、附件和交互组件；
 8. 富交互必须基于 Server 版本/配置做能力协商，并始终保留纯 Markdown 和文本命令降级路径。
+9. 外部知识库保留自己的数据、索引和 ACL；MMAG 优先通过受治理 Capability/MCP Tool 按需查询，不默认
+   全量复制到本地 SQLite，也不让模型绕过工具直接访问外部连接；
+10. Bot Account 是 Mattermost 展示与连接身份，不是数据隔离边界；用户、Persona 和 Agent 的授权继续由
+    Principal、Scope、Policy 和存储查询共同强制。
 
 ## 下一步 1：持久化运行 provenance 与预算
 
@@ -393,6 +399,77 @@ Sandbox；切换远程 Sandbox 只替换 Execution Backend。
 Checkpoint、审批或执行目录越界读取彼此数据；权限撤销和源消息删除可传播；群聊只使用共享上下文，个人
 上下文只在受控个人模式中使用。
 
+## 下一步 13：外部知识库工具接入
+
+优先级：P1。SQLite 继续作为单实例本地状态与轻量记忆，不演进成承载所有企业文档的通用知识平台。
+
+### 边界与接入方式
+
+```text
+Agent / Skill
+  → CapabilityRegistry
+  → Agent allowlist ∩ Skill capability ∩ Package Policy
+  → Knowledge Tool / MCP Tool
+  → 外部知识库在源端执行身份、ACL、检索和版本过滤
+  → KnowledgeResult + SourceRef + Provenance
+```
+
+- [x] MCP Server、启停状态和平台工具清单统一由根目录 `.mcp.json` 管理；Agent YAML 只分配已注册的
+  `mcp_<server>_<tool>` Capability，Skill 只能进一步缩小；
+- [x] 内置知识与消息 Capability 已经过统一 `CapabilityExecutor` 和当前 conversation 资源约束；
+- [ ] 定义平台无关的 `KnowledgeQuery` / `KnowledgeResult` / `SourceRef` 契约，至少包含来源系统、资源 ID、
+  版本、标题、片段、更新时间、可见 Scope 和内容 Hash；模型只消费有界结果，不接触 Provider Token；
+- [ ] 先接入一个真实企业知识源验证完整链路，可通过 MCP 或窄口 REST Capability 适配；候选包括
+  Confluence、SharePoint、Notion、Google Drive、企业 Wiki 或已有向量检索服务；
+- [ ] 每次外部查询携带可信 actor、tenant、conversation 和目标资源，优先使用用户委托身份或服务端
+  ACL 过滤；禁止先跨库召回全部内容，再仅靠 Prompt 或结果后过滤实现权限；
+- [ ] 将外部知识 Tool 纳入 Agent/Skill allowlist、动态资源级 Policy、超时、配额、审批和结构化审计；
+  读写 Capability 分离，外部写入必须定义幂等键、审批和失败恢复；
+- [ ] 统一记录 Provider、Tool、查询摘要、源文档版本、结果 Hash、引用和耗时；普通日志不记录查询正文、
+  文档正文、Secret 或未经脱敏的 Provider 错误；
+- [ ] 外部来源不可用时返回结构化部分失败和明确来源缺口，不静默改用越权缓存、其他知识库或模型常识；
+- [ ] 本地只允许保存有界缓存、SourceRef、索引元数据和显式沉淀的 Memory；缓存必须保留原 ACL/Scope、
+  TTL、来源版本和撤销传播，不能因为进入 SQLite 就放宽权限；
+- [ ] 向量检索可以由外部知识服务提供，也可以后续增加受 Scope 分区的索引 Backend；MMAG 不把本地向量库
+  设为所有知识源的强制前置条件。
+
+退出标准：Agent 能在不复制整个外部知识库的前提下，按当前用户和会话权限查询真实企业资料；每条结果
+具备可验证来源与版本；权限撤销、源文档更新和 Provider 故障不会导致越权缓存或无来源回答。
+
+## 下一步 14：共享入口与可选多 Bot 身份
+
+优先级：P2。默认继续使用一个企业入口 Bot；不按用户数量自动创建 Bot Account。
+
+### 目标身份模型
+
+```text
+Actor                当前真人与审批责任主体
+Surface Bot          Mattermost 中接收和发送消息的服务身份
+Represented Persona  可选的个人数字人或部门数字员工身份
+Agent Package        内部任务执行者，不必拥有 Mattermost Bot Account
+Scope / Policy       实际的数据与动作边界
+```
+
+- [x] 当前单 Bot 已将 `post.user_id` 作为真实 actor，并用 Installation、Tenant、Owner、Conversation Scope
+  隔离用户与频道；Agent Router/Skill Resolver 的内部数字员工分工不依赖 Bot 数量；
+- [x] Personal Workspace、Personal Skill、Memory、WorkCase 和 Digital Persona 已使用逻辑 owner 身份；
+  代理回答展示 Persona 版本与来源，但仍由统一 Surface Bot 交付；
+- [ ] 定义 `BotIdentity` 持久模型，记录 Mattermost bot user ID、稳定用户名、显示名、owner/Persona ref、
+  状态、允许频道和 Secret ref；Token 只能由 Secret Provider 解析，不能进入 Persona、Agent YAML 或 SQLite；
+- [ ] 增加由管理员或受信 Plugin 驱动的 Bot provision/deactivate/rotate 流程，并处理唯一用户名、频道成员关系、
+  所有者停用、Token 轮换和审计；不允许模型自行创建 Bot；
+- [ ] Outbox 显式记录 `surface_bot_id`、actor 和 `represented_persona_ref`，发送前重新校验 Bot 成员关系、
+  Persona 发布状态、原请求 Scope 和当前 Policy；按钮回调继续按真人 actor 授权；
+- [ ] 小规模部署可由多 Token 连接管理器承接各 Bot 的 DM/@ 事件；规模化部署优先评估 Mattermost Server
+  Plugin 统一消费事件并选择发送身份，避免按用户线性增加常驻 WebSocket；
+- [ ] 只为用户主动发布且确实需要独立头像、@mention、消息历史或频道权限的 Persona 创建实体 Bot；普通用户、
+  未发布 Persona 和内部 report/ppt/project/link Agent 继续使用统一入口，不制造账号噪声；
+- [ ] 实体 Bot 必须显式标识 AI 身份，禁止用头像或显示名伪装真人；停用 Persona 时同步阻止新请求和交付，
+  但保留历史 Run、版本与审计。
+
+退出标准：一个 MMAG 部署既能保留统一 `@mmag` 入口，也能按需为正式发布的 Persona/部门数字员工提供独立
+Mattermost 身份；增加 Bot 不改变数据隔离语义，停用、轮换、成员变化和审批仍可追溯且默认拒绝。
+
 ## 目标业务场景
 
 以下场景先作为产品与架构对接目标，具体交互、数据来源和验收用例后续分别细化。
@@ -449,4 +526,6 @@ Agent 在公开/私有频道或 GM 中按触发规则主动接入，使用当前
 - 不把富卡片/按钮作为唯一交互路径，不支持时必须降级为 Markdown/文本命令；
 - 不在明文 HTTP 连接上传输 Bot Token 做管理级配置探测；
 - 不在 Artifact/Scope/恢复语义未完成前拆微服务；
+- 不把本地 SQLite 包装成企业唯一知识库，也不默认全量镜像外部文档；外部知识必须通过受治理 Tool 访问；
+- 不按用户数量自动创建 `name_bot`，不把 Bot Account 当作 Personal Scope、知识 ACL 或审批主体；
 - 不把真实公网或 LLM 测试放进默认 CI。
