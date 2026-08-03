@@ -87,6 +87,8 @@ class ResponsePresenter:
         warnings = self._strings(envelope.get("warnings"))
         if output.agent_name == "link":
             return self._link(result, run_id, status, artifacts, warnings)
+        if output.agent_name == "report" and "message_range" in result:
+            return self._meeting(result, run_id, status, artifacts, warnings)
         if output.agent_name == "report":
             return self._report(result, run_id, status, artifacts, warnings)
         if output.agent_name == "ppt":
@@ -231,6 +233,49 @@ class ResponsePresenter:
             run_id=run_id,
             sections=tuple(section for section in sections if section.items or section.body),
             sources=sources,
+            warnings=warnings,
+            artifacts=artifacts,
+        )
+
+    def _meeting(
+        self,
+        result: Mapping[str, Any],
+        run_id: str,
+        status: RunStatus,
+        artifacts: tuple[ResponseArtifact, ...],
+        warnings: tuple[str, ...],
+    ) -> ResponseView:
+        def sourced(items: object) -> tuple[str, ...]:
+            values: list[str] = []
+            for item in self._mappings(items):
+                content = self._text(item.get("content"))
+                refs = self._strings(item.get("source_post_ids"))
+                if content:
+                    values.append(f"{content}（来源：{', '.join(refs)}）" if refs else content)
+            return tuple(values)
+
+        actions: list[str] = []
+        for item in self._mappings(result.get("action_items")):
+            content = self._text(item.get("content"))
+            owner = self._text(item.get("owner_username")) or "未指定"
+            due = self._text(item.get("due_date")) or "未指定"
+            refs = self._strings(item.get("source_post_ids"))
+            if content:
+                source = f"；来源：{', '.join(refs)}" if refs else ""
+                actions.append(f"{content}（负责人：{owner}；截止：{due}{source}）")
+        sections = (
+            ResponseSection("已确认决定", items=sourced(result.get("decisions"))),
+            ResponseSection("行动项", items=tuple(actions)),
+            ResponseSection("开放问题", items=sourced(result.get("open_questions"))),
+            ResponseSection("覆盖说明", items=self._strings(result.get("coverage_notes"))),
+        )
+        return ResponseView(
+            kind=ResponseKind.RESULT,
+            title=self._text(result.get("title")) or "会议纪要",
+            summary=self._text(result.get("summary")) or "讨论总结已完成。",
+            status=status,
+            run_id=run_id,
+            sections=tuple(section for section in sections if section.items),
             warnings=warnings,
             artifacts=artifacts,
         )

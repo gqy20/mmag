@@ -43,14 +43,36 @@ if TYPE_CHECKING:
 
 
 def _validate(asset: SchemaAsset, value: Any, *, direction: str) -> None:
+    _validate_schema(asset.schema, value, direction=direction)
+
+
+def _validate_schema(schema: Mapping[str, Any], value: Any, *, direction: str) -> None:
     try:
-        Draft202012Validator(asset.schema).validate(value)
+        Draft202012Validator(schema).validate(value)
     except ValidationError as error:
         location = ".".join(str(part) for part in error.absolute_path) or "$"
         raise SchemaContractError(
             f"{direction} contract failed at {location}: {error.message}",
             direction=direction,
         ) from error
+
+
+def _validate_agent_output(
+    package: AgentPackage,
+    request: AgentRequest,
+    envelope: Mapping[str, Any],
+) -> None:
+    asset = package.schemas[package.manifest.result_schema_ref]
+    if request.skill is None:
+        _validate(asset, envelope, direction="output")
+        return
+    # A selected Skill owns and already validates the exact result contract. The Agent
+    # contract still validates the governed envelope without duplicating every Skill schema.
+    schema = dict(asset.schema)
+    properties = dict(schema.get("properties", {}))
+    properties["result"] = {"type": "object"}
+    schema["properties"] = properties
+    _validate_schema(schema, envelope, direction="output")
 
 
 def _render(asset: PromptAsset, variables: Mapping[str, Any]) -> str:
@@ -472,9 +494,5 @@ class ContractAgentDecorator:
             cost_usd=cost_usd,
             platform_provenance=self.platform_provenance,
         )
-        _validate(
-            self.package.schemas[self.package.manifest.result_schema_ref],
-            envelope,
-            direction="output",
-        )
+        _validate_agent_output(self.package, request, envelope)
         return replace(result, agent_name=self.descriptor.name, envelope=envelope)

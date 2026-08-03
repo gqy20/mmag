@@ -6,10 +6,13 @@ import asyncio
 import base64
 import hmac
 import json
+import math
+import shlex
 import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
@@ -23,6 +26,7 @@ if TYPE_CHECKING:
     from ..agent_packages import AgentPackageRegistry
     from ..control_plane import SQLiteControlPlane
     from ..control_plane.context import MattermostAccessGuard, MattermostScopeResolver
+    from ..control_plane.pipeline import MessagePipeline
     from ..skill_packages import SkillPackageRegistry
 
 _ALLOWED_ACTIONS = frozenset(
@@ -63,6 +67,9 @@ _SLASH_COMMAND_HELP = """### MMAG 子命令
 - `/mmag agents`：列出已激活 Agent（可用）
 - `/mmag skills [agent]`：列出已激活或 Agent 可用的 Skill（可用）
 - `/mmag status [run-id]`：查看本人在当前频道的运行状态（可用）
+- `/mmag summary today [--tasks]`：总结今天的频道讨论（可用）
+- `/mmag summary --since HH:MM [--tasks]`：总结指定时间后的讨论（可用）
+- `/mmag summary thread --root <post-id> [--tasks]`：总结指定 Thread（可用）
 - `/mmag ask <goal>`：让默认 Agent 处理目标（待开放）
 - `/mmag run <agent> <goal>`：指定 Agent 运行（待开放）
 
@@ -87,7 +94,7 @@ class ActionTokenError(ValueError):
 
 
 class SlashCommandService:
-    """Fast, authorized read-only commands backed by registered platform state."""
+    """Authorized commands backed by Registry state and the durable execution pipeline."""
 
     def __init__(
         self,
@@ -102,6 +109,10 @@ class SlashCommandService:
         self.store = store
         self.scope_resolver = scope_resolver
         self.access_guard = access_guard
+        self.pipeline: MessagePipeline | None = None
+
+    def attach_pipeline(self, pipeline: MessagePipeline) -> None:
+        self.pipeline = pipeline
 
     async def handle(self, payload: dict[str, Any]) -> str:
         text = str(payload.get("text") or "").strip()
@@ -122,7 +133,138 @@ class SlashCommandService:
             return self._skills(argument)
         if subcommand == "status":
             return self._status(argument, actor_id=actor_id, channel_id=channel_id)
+        if subcommand == "summary":
+            return await self._summary(argument, payload, actor_id=actor_id, channel_id=channel_id)
         return f"`{subcommand}` 子命令尚未开放。\n\n{_SLASH_COMMAND_HELP}"
+
+    async def _summary(
+        self,
+        argument: str,
+        payload: dict[str, Any],
+        *,
+        actor_id: str,
+        channel_id: str,
+    ) -> str:
+        if self.pipeline is None:
+            return "总结服务尚未就绪，请稍后重试。"
+        parsed = self._parse_summary(argument, payload, channel_id=channel_id)
+        if isinstance(parsed, str):
+            return parsed
+        if parsed.get("root_post_id"):
+            client = getattr(self.scope_resolver, "client", None)
+            if client is None or not hasattr(client, "get_post_async"):
+                raise PermissionError("Thread ownership cannot be verified")
+            root_post = await client.get_post_async(str(parsed["root_post_id"]))
+            if str(root_post.get("channel_id") or "") != channel_id:
+                raise PermissionError("Thread belongs to another channel")
+            parsed["root_post_id"] = str(
+                root_post.get("root_id") or root_post.get("id") or ""
+            )
+        trigger_id = str(payload.get("trigger_id") or "")
+        event_id = f"slash:{trigger_id or uuid.uuid4().hex}"
+        root_id = str(parsed.get("root_post_id") or "")
+        prompt = (
+            "总结这个线程，提取结论和待办"
+            if parsed["range"] == "thread"
+            else "总结今天的讨论" if parsed.get("summary_period") == "today" else "总结最近的讨论"
+        )
+        if parsed["tasks_only"]:
+            prompt += "，只保留行动项"
+        post = {
+            "id": event_id,
+            "channel_id": channel_id,
+            "user_id": actor_id,
+            "message": prompt,
+            "root_id": root_id,
+            "create_at": int(time.time() * 1000),
+            "_mmag_entry": "slash",
+            "_mmag_summary": parsed,
+        }
+        from ..control_plane import InboundEvent
+
+        accepted = await self.pipeline.accept(
+            InboundEvent(
+                event_id=event_id,
+                platform="mattermost",
+                event_type="slash.summary",
+                conversation_id=channel_id,
+                actor_id=actor_id,
+                occurred_at=time.time(),
+                payload={"event": "posted", "data": {"post": post}},
+            )
+        )
+        if not accepted:
+            return "该总结命令已经进入队列，无需重复提交。"
+        destination = "指定 Thread" if root_id else "当前频道"
+        return f"总结任务已排队，完成后会发送到{destination}。"
+
+    @staticmethod
+    def _parse_summary(
+        argument: str,
+        payload: dict[str, Any],
+        *,
+        channel_id: str,
+    ) -> dict[str, Any] | str:
+        usage = (
+            "用法：`/mmag summary today [--tasks]`、"
+            "`/mmag summary --since HH:MM [--tasks]`，或 "
+            "`/mmag summary thread --root <post-id> [--tasks]`"
+        )
+        try:
+            tokens = shlex.split(argument)
+        except ValueError:
+            return usage
+        tasks_only = "--tasks" in tokens
+        tokens = [token for token in tokens if token != "--tasks"]
+        now = datetime.now().astimezone()
+        root_id = str(payload.get("root_id") or "")
+        summary_period = ""
+        since_time = ""
+        if tokens == ["today"]:
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            summary_period = "today"
+            range_name = "recent"
+        elif len(tokens) == 2 and tokens[0] == "--since":
+            try:
+                hour, minute = (int(value) for value in tokens[1].split(":"))
+                start = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            except (TypeError, ValueError):
+                return "`--since` 必须是今天的 `HH:MM`。\n\n" + usage
+            if start > now:
+                return "`--since` 不能晚于当前时间。"
+            range_name = "recent"
+        elif tokens and tokens[0] == "thread":
+            if len(tokens) == 3 and tokens[1] == "--root":
+                root_id = tokens[2]
+            elif len(tokens) != 1:
+                return usage
+            if not root_id:
+                return (
+                    "Mattermost Slash Command 不提供当前 Thread ID，请使用 "
+                    "`/mmag summary thread --root <post-id>`。"
+                )
+            if len(root_id) > 64 or not root_id.isalnum():
+                return "Thread Post ID 格式无效。"
+            start = now
+            range_name = "thread"
+        else:
+            return usage
+        hours = 2 if range_name == "thread" else min(
+            24, max(1, math.ceil((now - start).total_seconds() / 3600))
+        )
+        if range_name == "recent":
+            since_time = start.isoformat(timespec="minutes")
+        return {
+            "channel_id": channel_id,
+            "range": range_name,
+            "root_post_id": root_id,
+            "anchor_post_id": "",
+            "hours": hours,
+            "limit": 100,
+            "since_time": since_time,
+            "tasks_only": tasks_only,
+            "summary_period": summary_period,
+        }
 
     def _agents(self, argument: str) -> str:
         if argument:

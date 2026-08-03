@@ -205,6 +205,8 @@ class MessageHandler:
         post = self._parse_post(dict(event.payload))
         if post is None or not self._accept(post):
             return
+        if post.get("_mmag_entry") == "slash":
+            return
         message = str(post.get("message") or "").strip()
         file_metas = (post.get("metadata") or {}).get("files") or []
         if not message and not file_metas:
@@ -273,8 +275,9 @@ class MessageHandler:
     ) -> None:
         channel_id = str(post["channel_id"])
 
+        is_slash = post.get("_mmag_entry") == "slash"
         status_post_id = self._ingress_status_posts.pop(post_id, "")
-        if not status_post_id:
+        if not status_post_id and not is_slash:
             status_post_id = await self.delivery.send_ack(post) or ""
         self.stats["messages"] += 1
         user_id = str(post.get("user_id") or "")
@@ -288,14 +291,15 @@ class MessageHandler:
             max_bytes=config.max_image_bytes,
             max_text_chars=config.max_text_attachment_chars,
         )
-        if not self.memory.log_message(post):
-            self.stats["dropped_messages"] += 1
-        await self.compactor.maybe_compact(channel_id)
-        window = self.working_memory.setdefault(channel_id, [])
-        window.append(post)
-        del window[: -config.max_context_messages]
-        if access_scope.kind is ScopeKind.PERSONAL:
-            self.memory.update_profile_from_message(user_id, post["username"], post)
+        if not is_slash:
+            if not self.memory.log_message(post):
+                self.stats["dropped_messages"] += 1
+            await self.compactor.maybe_compact(channel_id)
+            window = self.working_memory.setdefault(channel_id, [])
+            window.append(post)
+            del window[: -config.max_context_messages]
+            if access_scope.kind is ScopeKind.PERSONAL:
+                self.memory.update_profile_from_message(user_id, post["username"], post)
         log_event(log, "message.accepted", status="accepted", attachment_count=len(file_metas))
         if self.personal_ui is not None:
             handled, view, personal_ref = await self.personal_ui.consume_message(
@@ -434,6 +438,8 @@ class MessageHandler:
         return True
 
     def is_explicit_invocation(self, post: dict) -> bool:
+        if post.get("_mmag_entry") == "slash":
+            return True
         message = str(post.get("message") or "").lower()
         if f"@{self.identity.username.lower()}" in message:
             return True

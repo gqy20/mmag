@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/skills/meeting/output/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "title", "summary", "decisions", "action_items", "open_questions",
+    "participants", "message_range", "coverage_notes"
+  ],
+  "properties": {
+    "title": {"type": "string", "minLength": 1},
+    "summary": {"type": "string", "minLength": 1},
+    "decisions": {"type": "array", "items": {"$ref": "#/$defs/sourced_item"}},
+    "action_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["content", "owner_username", "due_date", "source_post_ids"],
+        "properties": {
+          "content": {"type": "string", "minLength": 1},
+          "owner_username": {"type": ["string", "null"]},
+          "due_date": {"type": ["string", "null"]},
+          "source_post_ids": {"$ref": "#/$defs/source_post_ids"}
+        }
+      }
+    },
+    "open_questions": {"type": "array", "items": {"$ref": "#/$defs/sourced_item"}},
+    "participants": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "message_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "message_count", "source_post_ids"],
+      "properties": {
+        "type": {"enum": ["thread", "recent", "since"]},
+        "message_count": {"type": "integer", "minimum": 0},
+        "source_post_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "coverage_notes": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "source_post_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "sourced_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content", "source_post_ids"],
+      "properties": {
+        "content": {"type": "string", "minLength": 1},
+        "source_post_ids": {"$ref": "#/$defs/source_post_ids"}
+      }
+    }
+  }
+}

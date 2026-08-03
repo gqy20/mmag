@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -244,8 +245,9 @@ class AgentRequestHandler:
         self, post: dict, intent: str, *, personal_preferences: object = None
     ) -> AgentRequest:
         preferences = personal_preferences if isinstance(personal_preferences, dict) else {}
+        meeting_parameters = self._meeting_parameters(post) if intent == "mention" else None
         return AgentRequest(
-            intent=intent,
+            intent="meeting" if meeting_parameters is not None else intent,
             prompt=str(post.get("message") or ""),
             scope=self.post_scope(post),
             permissions=frozenset({"web:read"}),
@@ -256,6 +258,8 @@ class AgentRequestHandler:
             preferred_agents=tuple(str(x) for x in preferences.get("preferred_agents", ())),
             preferred_skills=tuple(str(x) for x in preferences.get("preferred_skills", ())),
             requested_personal_skill=str(post.get("_requested_personal_skill") or ""),
+            requested_agent="report" if meeting_parameters is not None else "",
+            requested_skill="meeting" if meeting_parameters is not None else "",
             parameters=(
                 {
                     "persona_ref": str(post.get("_persona_ref") or ""),
@@ -263,11 +267,51 @@ class AgentRequestHandler:
                     "represented_owner": str(post.get("_represented_owner") or ""),
                 }
                 if post.get("_persona_ref")
-                else {}
+                else meeting_parameters or {}
             ),
             response_style=str(preferences.get("response_style") or ""),
             language=str(preferences.get("language") or ""),
         )
+
+    @staticmethod
+    def _meeting_parameters(post: dict) -> dict[str, object] | None:
+        supplied = post.get("_mmag_summary")
+        if post.get("_mmag_entry") == "slash" and isinstance(supplied, dict):
+            return dict(supplied)
+        message = str(post.get("message") or "").lower()
+        triggers = (
+            "总结这个线程",
+            "总结此线程",
+            "总结一下这个讨论",
+            "会议纪要",
+            "总结最近",
+            "总结今天的讨论",
+            "提取结论和待办",
+            "从这里开始总结",
+            "summarize this thread",
+            "meeting summary",
+        )
+        if not any(trigger in message for trigger in triggers):
+            return None
+        root_id = str(post.get("root_id") or "")
+        if "从这里" in message:
+            range_name = "since"
+        elif "最近" in message or "今天" in message:
+            range_name = "recent"
+        else:
+            range_name = "thread" if root_id else "recent"
+        match = re.search(r"最近\s*(\d{1,2})\s*小时", message)
+        hours = min(max(int(match.group(1)), 1), 24) if match else 2
+        if "今天" in message:
+            hours = 24
+        return {
+            "channel_id": str(post.get("channel_id") or ""),
+            "range": range_name,
+            "root_post_id": root_id,
+            "anchor_post_id": str(post.get("id") or "") if range_name == "since" else "",
+            "hours": hours,
+            "limit": 100,
+        }
 
     def register_approval_interrupt(
         self,

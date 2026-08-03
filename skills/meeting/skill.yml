@@ -1,0 +1,40 @@
+api_version: mmag.ai/v1
+kind: Skill
+
+metadata:
+  name: meeting
+  version: 1.0.0
+  description: Summarize a bounded Mattermost discussion into traceable decisions and actions.
+
+spec:
+  instruction_ref: SKILL.md
+  input_schema_ref: input.schema.json
+  output_schema_ref: output.schema.json
+
+  activation:
+    intents: [meeting, summary, 会议总结]
+    keywords:
+      - 总结这个线程
+      - 总结此线程
+      - 会议纪要
+      - 总结最近
+      - 总结今天的讨论
+      - 提取结论和待办
+      - 从这里开始总结
+      - summarize this thread
+      - meeting summary
+    priority: 90
+
+  required_capabilities:
+    - get_posts
+  optional_capabilities: []
+
+  resources:
+    templates: []
+    references: []
+
+  disclosure:
+    max_resources: 1
+    max_resource_bytes: 16384
+    max_total_bytes: 16384
+    max_estimated_tokens: 5000

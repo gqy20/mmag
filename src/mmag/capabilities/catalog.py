@@ -369,6 +369,10 @@ def _format_posts(posts: list[dict]) -> dict:
         return {"count": 0, "messages": []}
     messages = [
         {
+            "id": post.get("id", ""),
+            "root_id": post.get("root_id", ""),
+            "channel_id": post.get("channel_id", ""),
+            "user_id": post.get("user_id", ""),
             "user": post.get("username", "?"),
             "message": (post.get("message") or "")[:500],
             "time": post.get("create_at", ""),

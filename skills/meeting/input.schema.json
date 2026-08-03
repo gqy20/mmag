@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmag.ai/skills/meeting/input/1.0.0",
+  "x-version": "1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["intent", "goal", "parameters"],
+  "properties": {
+    "intent": {"enum": ["meeting", "summary", "会议总结"]},
+    "goal": {"type": "string", "minLength": 1},
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel_id", "range", "hours", "limit"],
+      "properties": {
+        "channel_id": {"type": "string", "minLength": 1},
+        "range": {"enum": ["thread", "recent", "since"]},
+        "root_post_id": {"type": "string"},
+        "anchor_post_id": {"type": "string"},
+        "hours": {"type": "integer", "minimum": 1, "maximum": 24},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "since_time": {"type": "string"},
+        "tasks_only": {"type": "boolean"},
+        "summary_period": {"enum": ["", "today"]}
+      }
+    }
+  }
+}

@@ -295,6 +295,8 @@ class MattermostDelivery:
 
     @staticmethod
     def thread_root(post: dict) -> str:
+        if post.get("_mmag_entry") == "slash" and not post.get("root_id"):
+            return ""
         return str(post.get("root_id") or post.get("id") or "")
 
     def scope(self, post: dict) -> str:

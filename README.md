@@ -106,6 +106,8 @@ Bot 的触发方式：
 2. 普通频道消息：由模型根据 Package Prompt 决定响应或输出 `<SILENT>`；
 3. “分析链接/Analyze link + URL”：路由到 Link Agent。
 4. `/mmag`、`/mmag help`、`agents`、`skills [agent]` 和 `status [run-id]`：私有显示命令目录及当前 Scope 内的只读信息。
+5. `/mmag summary today [--tasks]`、`summary --since HH:MM [--tasks]`：通过现有 Inbox/Pipeline
+   提交频道总结，完成后由 Outbox 发送结果；Thread 总结需显式提供 `--root <post-id>`。
 
 ## 开发与验证
 

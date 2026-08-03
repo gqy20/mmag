@@ -154,7 +154,7 @@ Mattermost 需要启用 Custom Integrations / Slash Commands，然后创建：
 | Method | `POST` |
 | Request URL | `https://<mmag-domain>/integrations/commands` |
 | Autocomplete | 开启 |
-| Hint | `[ask|agents|skills|run|status|cancel|retry] [args]` |
+| Hint | `[summary|agents|skills|status] [args]` |
 
 Mattermost 会为命令生成 Token。Token 必须以 Secret 注入 MMAG，不写入代码、普通配置、日志或文档实例。
 
@@ -201,7 +201,8 @@ EphemeralDelivery     私有响应投影
 
 ### 命令建议
 
-当前已实现空命令、`help`、`agents`、`skills` 和 `status`；其他业务子命令仍是规划，不得当作已实现能力：
+当前已实现空命令、`help`、`agents`、`skills`、`status` 和 `summary`；其余业务子命令仍是规划，
+不得当作已实现能力：
 
 ```text
 /mmag help
@@ -210,6 +211,9 @@ EphemeralDelivery     私有响应投影
 /mmag skills [agent]
 /mmag run <agent> <goal>
 /mmag status [run-id]
+/mmag summary today [--tasks]
+/mmag summary --since HH:MM [--tasks]
+/mmag summary thread --root <post-id> [--tasks]
 /mmag cancel <run-id>
 /mmag retry <run-id>
 /mmag approve <approval-id>
@@ -245,6 +249,10 @@ Command → Outbox 创建 running Post → 回写真实 post_id → 启动 Run �
 ```
 
 不使用 `trigger_id`、伪 Post ID 或未持久的直接发帖来模拟 Thread。
+
+当前 `summary today/--since` 已按上述方式进入持久 Inbox/Pipeline，并由 Outbox 在频道创建结果 Post。
+标准 Slash payload 不包含当前 Thread ID，所以 `summary thread` 必须使用 `--root <post-id>`；不能根据
+最近消息猜测 Thread。若希望省略 `--root`，需要 Mattermost Web App/Plugin 显式传递客户端 Thread 上下文。
 
 ### Slash 安全
 

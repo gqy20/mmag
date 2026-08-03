@@ -90,7 +90,7 @@ def test_registry_loads_current_agent_packages():
         ("mmchat", "2.2.0"),
         ("ppt", "3.1.1"),
         ("project", "2.0.1"),
-        ("report", "2.1.1"),
+        ("report", "2.2.0"),
     }
     assert len(registry.get("mmchat").snapshot.skill_set_hash) == 64
 

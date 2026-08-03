@@ -94,6 +94,32 @@ def test_resolver_projects_agent_and_skill_capability_intersection():
     assert invocation.capabilities == ("analyze_link", "search_knowledge")
 
 
+def test_report_agent_resolves_bounded_meeting_summary_skill():
+    skills, agents = _packages()
+    package = agents.get("report")
+    invocation = SkillResolver(skills, _capabilities()).resolve(
+        package,
+        AgentRequest(
+            "meeting",
+            "总结这个线程",
+            requested_skill="meeting",
+            parameters={
+                "channel_id": "channel-1",
+                "range": "thread",
+                "root_post_id": "root-1",
+                "anchor_post_id": "",
+                "hours": 2,
+                "limit": 100,
+            },
+        ),
+        package.manifest.capabilities.allow,
+    )
+
+    assert invocation is not None
+    assert invocation.ref == "meeting@1.0.0"
+    assert invocation.capabilities == ("get_posts",)
+
+
 def test_skill_score_prefers_a_matching_personal_default():
     skills, _ = _packages()
     report = skills.get("report@1.3.0")
@@ -142,6 +168,38 @@ class StubRuntime:
         return AgentResult("done", "stub")
 
 
+class MeetingRuntime:
+    async def run(self, request):
+        del request
+        return AgentResult(
+            "meeting summary",
+            "stub",
+            output={
+                "title": "讨论纪要",
+                "summary": "团队确认发布节奏。",
+                "decisions": [
+                    {"content": "周五发布", "source_post_ids": ["post-1"]}
+                ],
+                "action_items": [
+                    {
+                        "content": "整理发布说明",
+                        "owner_username": "alice",
+                        "due_date": None,
+                        "source_post_ids": ["post-2"],
+                    }
+                ],
+                "open_questions": [],
+                "participants": ["alice"],
+                "message_range": {
+                    "type": "thread",
+                    "message_count": 2,
+                    "source_post_ids": ["post-1", "post-2"],
+                },
+                "coverage_notes": [],
+            },
+        )
+
+
 @pytest.mark.asyncio
 async def test_runtime_rejects_forged_skill_capability_expansion():
     _, agents = _packages()
@@ -178,3 +236,61 @@ async def test_runtime_rejects_forged_skill_capability_expansion():
                 skill=forged,
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_agent_envelope_accepts_the_selected_skills_valid_result_contract():
+    skills, agents = _packages()
+    package = agents.get("report")
+    parameters = {
+        "channel_id": "channel-1",
+        "range": "thread",
+        "root_post_id": "post-1",
+        "anchor_post_id": "",
+        "hours": 2,
+        "limit": 100,
+    }
+    invocation = SkillResolver(skills, _capabilities()).resolve(
+        package,
+        AgentRequest(
+            "meeting",
+            "总结这个线程",
+            requested_skill="meeting",
+            parameters=parameters,
+        ),
+        package.manifest.capabilities.allow,
+    )
+    agent = ContractAgentDecorator(
+        package,
+        RuntimeAgent(
+            AgentDescriptor(
+                "report",
+                "report",
+                capabilities=package.manifest.capabilities.allow,
+                scopes=("mattermost:*",),
+            ),
+            MeetingRuntime(),
+            request_factory=lambda request, descriptor: request.runtime_request,
+        ),
+    )
+    runtime_request = RunRequest(
+        RunContext("trace", "actor", "channel-1", "mattermost:team/channel", run_id="run-1"),
+        ({"role": "user", "content": "总结这个线程"},),
+    )
+
+    output = await agent.run(
+        AgentRequest(
+            "meeting",
+            "总结这个线程",
+            scope="mattermost:team/channel",
+            actor_id="actor",
+            task_id="task-1",
+            run_id="run-1",
+            parameters=parameters,
+            runtime_request=runtime_request,
+            skill=invocation,
+        )
+    )
+
+    assert output.envelope["result"]["decisions"][0]["source_post_ids"] == ["post-1"]
+    assert output.envelope["provenance"]["skill_name"] == "meeting"

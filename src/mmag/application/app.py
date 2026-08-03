@@ -257,18 +257,20 @@ class Agent:
         self.action_server: ActionCallbackServer | None = None
         if config.mm_action_callback_url or config.mm_action_signing_secret:
             self.action_tokens = self._build_action_tokens()
-        self.slash_commands = (
-            SlashCommandAdapter(
-                config.mm_slash_command_token,
-                SlashCommandService(
-                    self.agent_package_registry,
-                    self.skill_package_registry,
-                    self.control_store,
-                    self.scope_resolver,
-                    self.access_guard,
-                ),
+        self.slash_command_service = (
+            SlashCommandService(
+                self.agent_package_registry,
+                self.skill_package_registry,
+                self.control_store,
+                self.scope_resolver,
+                self.access_guard,
             )
             if config.mm_slash_command_token
+            else None
+        )
+        self.slash_commands = (
+            SlashCommandAdapter(config.mm_slash_command_token, self.slash_command_service)
+            if self.slash_command_service is not None
             else None
         )
         self.delivery = MattermostDelivery(
@@ -374,6 +376,8 @@ class Agent:
             max_pending=config.pipeline_max_pending,
         )
         await self.pipeline.start()
+        if self.slash_command_service is not None:
+            self.slash_command_service.attach_pipeline(self.pipeline)
         if self.message_handler.persona_replies is not None:
             await self.message_handler.persona_replies.start(self.pipeline)
         if self.action_server is not None:

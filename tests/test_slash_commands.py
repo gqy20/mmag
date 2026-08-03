@@ -140,6 +140,15 @@ class FakeRegistry:
 
 
 class FakeScopeResolver:
+    def __init__(self):
+        self.client = SimpleNamespace(
+            get_post_async=self._get_post_async,
+        )
+
+    @staticmethod
+    async def _get_post_async(post_id: str):
+        return {"id": post_id, "channel_id": "channel-1", "root_id": ""}
+
     def resolve_post(self, post: dict) -> Scope:
         channel_id = str(post["channel_id"])
         return Scope(
@@ -157,6 +166,15 @@ class FakeAccessGuard:
         self.calls.append((actor_id, scope_id, channel_id))
         if self.denied:
             raise PermissionError("membership denied")
+
+
+class FakePipeline:
+    def __init__(self):
+        self.events = []
+
+    async def accept(self, event):
+        self.events.append(event)
+        return True
 
 
 def package_fixtures():
@@ -207,6 +225,71 @@ async def test_agents_and_skills_are_read_from_activated_registries(tmp_path):
     assert "`web-research@1.2.0`" in skills["text"]
     assert "`mmchat` 可用 Skills" in agent_skills["text"]
     assert len(guard.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_summary_command_enters_the_existing_pipeline_with_trusted_scope(tmp_path):
+    agent, skill = package_fixtures()
+    store = SQLiteControlPlane(str(tmp_path / "control.db"))
+    service = SlashCommandService(
+        FakeRegistry(agent),
+        FakeRegistry(skill),
+        store,
+        FakeScopeResolver(),
+        FakeAccessGuard(),
+    )
+    pipeline = FakePipeline()
+    service.attach_pipeline(pipeline)
+    adapter = SlashCommandAdapter("mattermost-command-token", service)
+
+    try:
+        response = await adapter.handle(
+            command_payload(text="summary today --tasks", trigger_id="trigger-1")
+        )
+    finally:
+        store.close()
+
+    assert "总结任务已排队" in response["text"]
+    assert len(pipeline.events) == 1
+    event = pipeline.events[0]
+    post = event.payload["data"]["post"]
+    assert event.event_id == "slash:trigger-1"
+    assert event.event_type == "slash.summary"
+    assert post["_mmag_entry"] == "slash"
+    assert post["_mmag_summary"]["channel_id"] == "channel-1"
+    assert post["_mmag_summary"]["tasks_only"] is True
+    assert post["_mmag_summary"]["summary_period"] == "today"
+
+
+@pytest.mark.asyncio
+async def test_summary_thread_requires_an_explicit_root_post_id(tmp_path):
+    agent, skill = package_fixtures()
+    store = SQLiteControlPlane(str(tmp_path / "control.db"))
+    service = SlashCommandService(
+        FakeRegistry(agent),
+        FakeRegistry(skill),
+        store,
+        FakeScopeResolver(),
+        FakeAccessGuard(),
+    )
+    pipeline = FakePipeline()
+    service.attach_pipeline(pipeline)
+    adapter = SlashCommandAdapter("mattermost-command-token", service)
+
+    try:
+        missing = await adapter.handle(command_payload(text="summary thread"))
+        accepted = await adapter.handle(
+            command_payload(text="summary thread --root abc123 --tasks")
+        )
+    finally:
+        store.close()
+
+    assert "不提供当前 Thread ID" in missing["text"]
+    assert "指定 Thread" in accepted["text"]
+    assert len(pipeline.events) == 1
+    post = pipeline.events[0].payload["data"]["post"]
+    assert post["root_id"] == "abc123"
+    assert post["_mmag_summary"]["range"] == "thread"
 
 
 @pytest.mark.asyncio

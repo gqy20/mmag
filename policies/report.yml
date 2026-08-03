@@ -1,8 +1,16 @@
 id: report
-version: 1.1.0
+version: 1.2.0
 default_effect: deny
 
 rules:
+  - id: read-current-channel-posts
+    effect: allow
+    actions: [get_posts]
+    permissions: [mattermost:post:read]
+    resource_arguments:
+      channel_id: conversation_id
+    reason: Meeting summaries may read only the originating Mattermost conversation.
+
   - id: read-current-knowledge
     effect: allow
     actions: [search_knowledge]
