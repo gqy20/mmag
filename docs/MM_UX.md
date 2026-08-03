@@ -25,6 +25,7 @@
 - `ResponseView` 到 Mattermost Markdown/attachment/action 的确定性渲染；
 - LangGraph 文本增量到单一 Post 的流式更新；
 - 带 HMAC、时效和一次性消费的批准/拒绝回调；
+- `/mmag` 与 `/mmag help` 的 Token 认证和 Ephemeral 命令发现；
 - Inbox 去重与 DLQ，以及最终响应、Artifact 和 action 的持久 Outbox。
 
 项目文档记录的当前 Mattermost Server 为 `11.7.0` Entry。这是当前规划的版本基线，实施前应
@@ -38,7 +39,7 @@
 | Ephemeral Post | action 失败已部分使用 | 私有错误、权限提示、操作确认 | P0 |
 | `post_edited/deleted` | 未消费 | 取消、过期标记和上下文一致性 | P0 |
 | Interactive Dialog | 未接入 | 修改参数、拒绝原因、返工表单 | P1 |
-| Slash Command | 未接入 | `/mmag` 稳定入口和命令发现 | P1 |
+| Slash Command | 已接入命令发现；业务子命令未接入 | `/mmag` 稳定入口和命令发现 | P1 |
 | Thread/Search REST | 仅有频道分页 | 完整 Thread、编辑/删除后同步、受权检索 | P1 |
 | Priority/Acknowledgement | 未接入 | 高风险审批和 SLA 升级 | P1 |
 | Mattermost MCP | MCP Bridge 已有雏形 | 读取消息、搜索、用户/成员查询 | P2 |
@@ -199,6 +200,8 @@ EphemeralDelivery     私有响应投影
 `MessageHandler` 不解析 HTTP form，`CallbackGateway` 不直接调用 LangGraph。
 
 ### 命令建议
+
+当前只实现空命令和 `help` 的命令发现；其他业务子命令仍是规划，不得当作已实现能力：
 
 ```text
 /mmag help

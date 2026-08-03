@@ -52,6 +52,7 @@ MM_INSTALLATION_ID=corp-mm-prod
 MM_TENANT_ID=corp
 MM_TEAM_ID=
 MM_CHANNEL_ID=
+MM_SLASH_COMMAND_TOKEN=replace-with-regenerated-command-token
 
 ANTHROPIC_API_KEY=sk-xxx
 ANTHROPIC_BASE_URL=
@@ -104,6 +105,7 @@ Bot 的触发方式：
 1. `@bot`、DM、回复 Bot thread：确定性响应；
 2. 普通频道消息：由模型根据 Package Prompt 决定响应或输出 `<SILENT>`；
 3. “分析链接/Analyze link + URL”：路由到 Link Agent。
+4. `/mmag` 或 `/mmag help`：私有显示 Slash 子命令目录。
 
 ## 开发与验证
 

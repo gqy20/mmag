@@ -63,6 +63,7 @@ _FIELD_TO_ENV: dict[str, str] = {
     "mm_action_listen_host": "MM_ACTION_LISTEN_HOST",
     "mm_action_listen_port": "MM_ACTION_LISTEN_PORT",
     "mm_action_token_ttl_seconds": "MM_ACTION_TOKEN_TTL_SECONDS",
+    "mm_slash_command_token": "MM_SLASH_COMMAND_TOKEN",
     "mm_stream_enabled": "MM_STREAM_ENABLED",
     "mm_stream_update_interval_ms": "MM_STREAM_UPDATE_INTERVAL_MS",
     "mm_stream_min_chars": "MM_STREAM_MIN_CHARS",
@@ -122,7 +123,7 @@ def _log_config_loading() -> None:
     )
 
 
-@dataclass
+@dataclass(repr=False)
 class Config:
     """从 .env 加载配置"""
 
@@ -142,6 +143,7 @@ class Config:
     mm_action_token_ttl_seconds: int = int(
         os.getenv("MM_ACTION_TOKEN_TTL_SECONDS", "600")
     )
+    mm_slash_command_token: str = os.getenv("MM_SLASH_COMMAND_TOKEN", "")
     mm_stream_enabled: bool = os.getenv("MM_STREAM_ENABLED", "true").lower() in (
         "true",
         "1",

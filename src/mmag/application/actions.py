@@ -12,6 +12,7 @@ import uuid
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qs, urlsplit
 
 from ..logger import get_logger, log_event
 
@@ -38,6 +39,17 @@ _MAX_TOKEN_BYTES = 8_192
 _MAX_REQUEST_BYTES = 65_536
 log = get_logger(__name__)
 
+_SLASH_COMMAND_HELP = """### MMAG 子命令
+
+- `/mmag help`：显示本帮助
+- `/mmag ask <goal>`：让默认 Agent 处理目标
+- `/mmag agents`：列出 Agent
+- `/mmag skills [agent]`：列出 Skill
+- `/mmag run <agent> <goal>`：指定 Agent 运行
+- `/mmag status [run-id]`：查看运行状态
+
+当前已开放命令发现；业务子命令接入现有权限、Inbox/Outbox 和审批链后再逐项开放。"""
+
 
 @dataclass(frozen=True, slots=True)
 class ActionClaims:
@@ -54,6 +66,57 @@ class ActionClaims:
 
 class ActionTokenError(ValueError):
     pass
+
+
+class SlashCommandAdapter:
+    """Authenticate Mattermost slash requests and return private command discovery."""
+
+    def __init__(self, token: str) -> None:
+        if not token.strip():
+            raise ValueError("MM_SLASH_COMMAND_TOKEN must not be empty")
+        self._token = token
+
+    async def handle(self, payload: dict[str, Any]) -> dict[str, Any]:
+        supplied_token = str(payload.get("token") or "")
+        if len(supplied_token.encode()) > _MAX_TOKEN_BYTES or not hmac.compare_digest(
+            supplied_token, self._token
+        ):
+            raise PermissionError("invalid Mattermost slash command token")
+        if str(payload.get("command") or "") != "/mmag":
+            raise ValueError("unexpected Mattermost slash command")
+        if not str(payload.get("user_id") or "") or not str(
+            payload.get("channel_id") or ""
+        ):
+            raise ValueError("Mattermost slash command actor and channel are required")
+
+        text = str(payload.get("text") or "").strip()
+        subcommand = text.split(maxsplit=1)[0].lower() if text else "help"
+        prefix = "" if subcommand == "help" else f"`{subcommand}` 子命令尚未开放。\n\n"
+        log_event(
+            log,
+            "mattermost.slash_command",
+            status="completed",
+            help_requested=subcommand == "help",
+        )
+        return {
+            "response_type": "ephemeral",
+            "text": f"{prefix}{_SLASH_COMMAND_HELP}",
+        }
+
+
+def _parse_form_payload(raw: bytes) -> dict[str, Any]:
+    try:
+        values = parse_qs(
+            raw.decode("utf-8"),
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=32,
+        )
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ValueError("malformed form payload") from error
+    if any(len(items) != 1 for items in values.values()):
+        raise ValueError("duplicate form field")
+    return {key: items[0] for key, items in values.items()}
 
 
 class ActionTokenService:
@@ -183,7 +246,7 @@ class ActionTokenService:
 
 
 class ActionCallbackServer:
-    """Local HTTP adapter intended to sit behind the configured HTTPS proxy."""
+    """Local action/slash callback gateway for a configured HTTPS proxy."""
 
     def __init__(
         self,
@@ -191,14 +254,26 @@ class ActionCallbackServer:
         port: int,
         callback: Callable[
             [dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]
-        ],
+        ]
+        | None = None,
         *,
         path: str = "/actions",
+        command_callback: Callable[
+            [dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]
+        ]
+        | None = None,
+        command_path: str = "/integrations/commands",
     ) -> None:
+        if callback is None and command_callback is None:
+            raise ValueError("at least one callback route is required")
         self.host = host
         self.port = port
         self.path = path or "/actions"
         self.callback = callback
+        self.command_path = command_path
+        self.command_callback = command_callback
+        if callback is not None and command_callback is not None and self.path == command_path:
+            raise ValueError("action and slash command callback paths must differ")
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -206,14 +281,22 @@ class ActionCallbackServer:
         if self._server is not None:
             return
         loop = asyncio.get_running_loop()
-        callback = self.callback
-        expected_path = self.path
+        routes = {
+            route_path: (route_callback, is_form)
+            for route_path, route_callback, is_form in (
+                (self.path, self.callback, False),
+                (self.command_path, self.command_callback, True),
+            )
+            if route_callback is not None
+        }
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
-                if self.path != expected_path:
+                route = routes.get(urlsplit(self.path).path)
+                if route is None:
                     self.send_error(404)
                     return
+                route_callback, is_form = route
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
                 except ValueError:
@@ -223,11 +306,18 @@ class ActionCallbackServer:
                     self.send_error(413)
                     return
                 try:
-                    payload = json.loads(self.rfile.read(length))
-                    if not isinstance(payload, dict):
-                        raise ValueError("payload is not an object")
+                    raw = self.rfile.read(length)
+                    if is_form:
+                        content_type = self.headers.get("Content-Type", "")
+                        if not content_type.startswith("application/x-www-form-urlencoded"):
+                            raise ValueError("slash command requires a form payload")
+                        payload = _parse_form_payload(raw)
+                    else:
+                        payload = json.loads(raw)
+                        if not isinstance(payload, dict):
+                            raise ValueError("payload is not an object")
                     future: Future[dict[str, Any]] = asyncio.run_coroutine_threadsafe(
-                        callback(payload), loop
+                        route_callback(payload), loop
                     )
                     result = future.result(timeout=20)
                     body = json.dumps(result, ensure_ascii=False).encode()
@@ -235,16 +325,21 @@ class ActionCallbackServer:
                 except Exception as error:
                     log_event(
                         log,
-                        "mattermost.action_callback",
+                        "mattermost.callback",
                         level=40,
                         status="failed",
                         error_code=type(error).__name__,
                     )
-                    body = json.dumps(
-                        {"ephemeral_text": "操作未完成，请使用文本命令重试。"},
-                        ensure_ascii=False,
-                    ).encode()
-                    self.send_response(400)
+                    response = (
+                        {
+                            "response_type": "ephemeral",
+                            "text": "命令未完成，请检查配置后重试。",
+                        }
+                        if is_form
+                        else {"ephemeral_text": "操作未完成，请使用文本命令重试。"}
+                    )
+                    body = json.dumps(response, ensure_ascii=False).encode()
+                    self.send_response(403 if isinstance(error, PermissionError) else 400)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
@@ -256,7 +351,7 @@ class ActionCallbackServer:
         self._server = ThreadingHTTPServer((self.host, self.port), Handler)
         self._thread = threading.Thread(
             target=self._server.serve_forever,
-            name="mmag-actions",
+            name="mmag-callbacks",
             daemon=True,
         )
         self._thread.start()

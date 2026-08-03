@@ -58,7 +58,7 @@ from ..memory_compactor import MemoryCompactor
 from ..runtimes import DeepAgentRuntime
 from ..skill_packages import SkillPackageRegistry, SkillResolver
 from ..ws_client import WebSocketClient
-from .actions import ActionCallbackServer, ActionTokenService
+from .actions import ActionCallbackServer, ActionTokenService, SlashCommandAdapter
 from .context import AttachmentProcessor, BotIdentity, ContextBuilder
 from .delivery import MattermostDelivery
 from .message_handler import MessageHandler
@@ -254,6 +254,11 @@ class Agent:
         self.action_server: ActionCallbackServer | None = None
         if config.mm_action_callback_url or config.mm_action_signing_secret:
             self.action_tokens = self._build_action_tokens()
+        self.slash_commands = (
+            SlashCommandAdapter(config.mm_slash_command_token)
+            if config.mm_slash_command_token
+            else None
+        )
         self.delivery = MattermostDelivery(
             self.mm,
             self.memory,
@@ -303,13 +308,24 @@ class Agent:
             persona_replies=self.control_store.persona_replies,
         )
         self.capability_probe = MattermostCapabilityProbe(self.mm)
-        if self.action_tokens is not None:
-            callback_path = urlsplit(config.mm_action_callback_url).path or "/actions"
+        if self.action_tokens is not None or self.slash_commands is not None:
+            callback_path = (
+                urlsplit(config.mm_action_callback_url).path or "/actions"
+                if self.action_tokens is not None
+                else "/actions"
+            )
             self.action_server = ActionCallbackServer(
                 config.mm_action_listen_host,
                 config.mm_action_listen_port,
-                self.message_handler.handle_action_callback,
+                (
+                    self.message_handler.handle_action_callback
+                    if self.action_tokens is not None
+                    else None
+                ),
                 path=callback_path,
+                command_callback=(
+                    self.slash_commands.handle if self.slash_commands is not None else None
+                ),
             )
         self.ws: WebSocketClient | None = None
         self.pipeline: MessagePipeline | None = None
@@ -351,7 +367,7 @@ class Agent:
         if self.action_server is not None:
             await self.action_server.start()
             log.info(
-                "Mattermost Action callback 监听 %s:%d",
+                "Mattermost callback gateway 监听 %s:%d",
                 config.mm_action_listen_host,
                 config.mm_action_listen_port,
             )
