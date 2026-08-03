@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from ..config import config
 from ..control_plane import PersonaReplyState, ScopeKind
 from ..logger import get_logger, log_event
+from .action_responses import load_action_post, preserve_action_post
 from .views import ResponseKind, ResponseView, RunStatus
 
 if TYPE_CHECKING:
@@ -128,6 +129,12 @@ class PersonaReplyCoordinator:
     async def handle_action(self, payload: dict, claims: ActionClaims, actor_id: str) -> dict:
         if self.action_tokens is None or actor_id != claims.requested_by:
             raise PermissionError("persona reply action belongs to another owner")
+        action_post = await load_action_post(
+            self.mm,
+            payload,
+            channel_id=claims.conversation_id,
+            bot_user_id=self.identity.user_id,
+        )
         request = self.workspace.pending_reply(claims.target, actor_id=actor_id)
         token = str((payload.get("context") or {}).get("token") or "")
         if claims.action == "persona_reply_edit":
@@ -146,7 +153,11 @@ class PersonaReplyCoordinator:
                 callback_url=config.mm_action_callback_url,
                 dialog=self.workspace.reply_dialog(request, submit_token),
             )
-            return {"ephemeral_text": "已打开回答编辑框。"}
+            return preserve_action_post(
+                action_post,
+                payload,
+                "已打开回答编辑框。",
+            )
         if claims.action not in {"persona_reply_approve", "persona_reply_reject"}:
             raise ValueError("unsupported persona reply action")
         self.action_tokens.consume(token, actor_id=actor_id)
@@ -159,10 +170,13 @@ class PersonaReplyCoordinator:
         message = (
             "已批准，正在发送。" if request.state is PersonaReplyState.APPROVED else "已拒绝发送。"
         )
-        return {
-            "update": {"message": message, "props": self._completed_props()},
-            "ephemeral_text": message,
-        }
+        return preserve_action_post(
+            action_post,
+            payload,
+            message,
+            terminal=True,
+            status="completed" if request.state is PersonaReplyState.APPROVED else "failed",
+        )
 
     async def handle_dialog(self, payload: dict) -> dict:
         if self.action_tokens is None:

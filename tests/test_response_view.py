@@ -15,6 +15,7 @@ from mmag.application import (
     RunStatus,
     split_markdown,
 )
+from mmag.application.action_responses import preserve_action_post
 from mmag.application.views import ResponseKind, ResponseSection
 from mmag.control_plane import InboundEvent, OutboundMessage, SQLiteControlPlane
 
@@ -158,6 +159,50 @@ def test_action_token_is_signed_short_lived_and_one_time(tmp_path):
     with pytest.raises(ActionTokenError, match="signature"):
         service.verify(token[:-1] + ("A" if token[-1] != "A" else "B"))
     store.close()
+
+
+def test_action_feedback_preserves_original_post_and_only_retires_clicked_button():
+    post = {
+        "message": "完整研究结论",
+        "props": {
+            "mmag_kind": "result",
+            "attachments": [{
+                "text": "请选择操作",
+                "actions": [
+                    {"integration": {"context": {"token": "save"}}},
+                    {"integration": {"context": {"token": "draft"}}},
+                ],
+            }],
+        },
+    }
+
+    response = preserve_action_post(
+        post, {"context": {"token": "save"}}, "案例已保存。"
+    )
+
+    assert response["update"]["message"] == "完整研究结论"
+    actions = response["update"]["props"]["attachments"][0]["actions"]
+    assert actions == [{"integration": {"context": {"token": "draft"}}}]
+    assert response["ephemeral_text"] == "案例已保存。"
+    assert post["props"]["attachments"][0]["actions"][0]["integration"] == {
+        "context": {"token": "save"}
+    }
+
+
+def test_terminal_action_preserves_body_and_replaces_buttons_with_status():
+    post = {
+        "message": "审批对象、风险和来源",
+        "props": {"attachments": [{"text": "请选择", "actions": [{"id": "approve"}]}]},
+    }
+
+    response = preserve_action_post(
+        post, {"context": {"token": "approve"}}, "已批准。", terminal=True
+    )
+
+    assert response["update"]["message"] == "审批对象、风险和来源"
+    attachment = response["update"]["props"]["attachments"][0]
+    assert "actions" not in attachment
+    assert attachment["text"] == "已批准。"
 
 
 def test_outbox_round_trips_thread_artifact_and_update_contract(tmp_path):

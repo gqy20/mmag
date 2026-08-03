@@ -25,6 +25,7 @@
 - `ResponseView` 到 Mattermost Markdown/attachment/action 的确定性渲染；
 - LangGraph 文本增量到单一 Post 的流式更新；
 - 带 HMAC、时效和一次性消费的批准/拒绝回调；
+- 保留原 Post 正文的交互回调：普通操作只移除已使用按钮，终态操作只更新交互区状态；
 - `/mmag` 的 Token 认证、Ephemeral 命令发现及 `agents/skills/status` 只读命令；
 - Inbox 去重与 DLQ，以及最终响应、Artifact 和 action 的持久 Outbox。
 
@@ -36,7 +37,7 @@
 | 原生能力 | 当前状态 | 建议用途 | 优先级 |
 |---|---|---|---|
 | Reaction REST + WebSocket | 未接入 | 接收、成功、失败和用户反馈 | P0 |
-| Ephemeral Post | action 失败已部分使用 | 私有错误、权限提示、操作确认 | P0 |
+| Ephemeral Post | 已用于 action 反馈和失败提示 | 私有错误、权限提示、操作确认 | P0 |
 | `post_edited/deleted` | 未消费 | 取消、过期标记和上下文一致性 | P0 |
 | Interactive Dialog | 未接入 | 修改参数、拒绝原因、返工表单 | P1 |
 | Slash Command | 已接入 help/agents/skills/status；长任务未接入 | `/mmag` 稳定入口和命令发现 | P1 |
@@ -66,6 +67,7 @@ Mattermost MCP
 ```
 
 - WebSocket、Slash 和 Dialog 回调不直接执行长任务。
+- Interactive Action 不得用短状态文字替换原 Post 正文；反馈使用 Ephemeral，状态变化保留正文并只更新 attachment/actions。
 - Agent Prompt 不生成 Mattermost `props`、Dialog Schema、Priority 或回调 URL。
 - Reaction 只表达状态和反馈，不作为正式审批。
 - 最终响应、文件和可重试的外部副作用仍经过 Outbox。

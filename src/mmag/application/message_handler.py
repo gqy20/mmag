@@ -20,6 +20,7 @@ from ..logger import get_logger, log_context, log_event
 from ..runtimes import (
     RuntimeStatus,
 )
+from .action_responses import load_action_post, preserve_action_post
 from .agent_requests import AgentRequestHandler
 from .delivery import OUTBOUND_COLLECTOR, MattermostDelivery
 from .persona_replies import PersonaReplyCoordinator
@@ -479,6 +480,12 @@ class MessageHandler:
         if claims.action.startswith("persona_"):
             if self.persona_ui is None:
                 raise RuntimeError("persona workspace is not configured")
+            action_post = await load_action_post(
+                self.mm,
+                payload,
+                channel_id=channel_id,
+                bot_user_id=self.identity.user_id,
+            )
             claims = self.action_tokens.consume(str(token), actor_id=actor_id)
             scope = self.scope_resolver.resolve_post(
                 {"channel_id": channel_id, "user_id": actor_id}
@@ -496,20 +503,16 @@ class MessageHandler:
                 action=claims.action,
                 action_jti=claims.jti,
             )
-            return {
-                "update": {
-                    "message": message,
-                    "props": {
-                        "from_bot": "true",
-                        "mmag_kind": "persona",
-                        "mmag_status": "completed",
-                    },
-                },
-                "ephemeral_text": message,
-            }
+            return preserve_action_post(action_post, payload, message, terminal=True)
         if claims.action.startswith(("pskill_", "case_", "memory_")):
             if self.personal_ui is None:
                 raise RuntimeError("personal workspace is not configured")
+            action_post = await load_action_post(
+                self.mm,
+                payload,
+                channel_id=channel_id,
+                bot_user_id=self.identity.user_id,
+            )
             claims = self.action_tokens.consume(str(token), actor_id=actor_id)
             scope = self.scope_resolver.resolve_post(
                 {"channel_id": channel_id, "user_id": actor_id}
@@ -527,24 +530,24 @@ class MessageHandler:
                 action=claims.action,
                 action_jti=claims.jti,
             )
-            if claims.action.startswith(("pskill_", "memory_")):
-                return {
-                    "update": {
-                        "message": message,
-                        "props": {
-                            "from_bot": "true",
-                            "mmag_kind": "personal_workspace",
-                            "mmag_status": "completed",
-                        },
-                    },
-                    "ephemeral_text": message,
-                }
-            return {"ephemeral_text": message}
+            terminal = claims.action in {"pskill_activate", "pskill_archive", "memory_forget"}
+            return preserve_action_post(
+                action_post,
+                payload,
+                message,
+                terminal=terminal,
+            )
         if claims.action not in {"approve", "reject"}:
             raise ValueError("action is not supported by this callback")
         approval = self.approval_coordinator.store.get_approval_request(claims.target)
         if not await self.approval_coordinator.authorizer.can_decide(approval, actor_id):
             raise PermissionError("actor is not authorized to decide this approval")
+        action_post = await load_action_post(
+            self.mm,
+            payload,
+            channel_id=channel_id,
+            bot_user_id=self.identity.user_id,
+        )
         claims = self.action_tokens.consume(str(token), actor_id=actor_id)
         task = asyncio.create_task(
             self._complete_action(claims, actor_id),
@@ -560,16 +563,13 @@ class MessageHandler:
             action=claims.action,
             action_jti=claims.jti,
         )
-        return {
-            "update": {
-                "message": decision,
-                "props": {
-                    "from_bot": "true",
-                    "mmag_kind": "approval",
-                    "mmag_status": "running" if claims.action == "approve" else "failed",
-                },
-            }
-        }
+        return preserve_action_post(
+            action_post,
+            payload,
+            decision,
+            terminal=True,
+            status="running" if claims.action == "approve" else "failed",
+        )
 
     async def _handle_dialog_submission(self, payload: dict) -> dict:
         if self.action_tokens is None:
