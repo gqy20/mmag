@@ -36,7 +36,8 @@ def preserve_action_post(
     """Keep the original body while retiring used interactive controls."""
     context = payload.get("context")
     clicked_token = str(context.get("token") or "") if isinstance(context, dict) else ""
-    props = deepcopy(post.get("props")) if isinstance(post.get("props"), dict) else {}
+    raw_props = post.get("props")
+    props: dict[str, Any] = deepcopy(raw_props) if isinstance(raw_props, dict) else {}
     attachments = props.get("attachments")
     if isinstance(attachments, list):
         for attachment in attachments:

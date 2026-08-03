@@ -414,7 +414,8 @@ class MMClient:
 
     async def get_post_async(self, post_id: str) -> dict:
         """Read one Post for trusted Thread/channel boundary verification."""
-        return await self._request_async("GET", f"/posts/{post_id}")
+        response = await self._request_async("GET", f"/posts/{post_id}")
+        return response.json()
 
     def get_posts_page(self, channel_id: str, page: int = 0, per_page: int = 200) -> list[dict]:
         """分页获取频道消息 — Mattermost 原生 page/per_page, 用于 backfill 历史
