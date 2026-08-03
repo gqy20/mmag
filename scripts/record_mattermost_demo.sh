@@ -2,7 +2,6 @@
 set -euo pipefail
 
 # Record the real Mattermost user → Bot → Agent → approval → Artifact flow.
-# Credentials stay in environment variables; generated media and logs stay under .eval-runs/.
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$PROJECT_ROOT/.env"
@@ -10,16 +9,19 @@ OUTPUT_ROOT="$PROJECT_ROOT/.eval-runs/recordings"
 START_BOT=1
 DRY_RUN=0
 SKIP_PPT=0
+START_SCENE=1
+RESUME_DIR=""
 SESSION="mmag-recording-$$"
 VIEWPORT_WIDTH=1600
 VIEWPORT_HEIGHT=900
 VIDEO_WIDTH=2560
 VIDEO_HEIGHT=1440
 PROCESS_SPEED=8
+RESULT_SPEED=3
 TITLE_DURATION=2.5
-CHAPTER_DURATION=1.5
+CHAPTER_DURATION=1.8
 NARRATION_MODEL="${MMAG_RECORD_SPEECH_MODEL:-speech-2.8-hd}"
-NARRATION_VOICE="${MMAG_RECORD_VOICE:-Chinese (Mandarin)_Reliable_Executive}"
+NARRATION_VOICE="${MMAG_RECORD_VOICE:-Chinese (Mandarin)_Warm_Bestie}"
 NARRATION_SPEED="${MMAG_RECORD_SPEECH_SPEED:-1.08}"
 NARRATION_PITCH="${MMAG_RECORD_SPEECH_PITCH:--1}"
 
@@ -32,6 +34,8 @@ usage() {
     "  --output-dir PATH     Recording root (default: .eval-runs/recordings)" \
     "  --bot-already-running Do not start and stop uv run mmag" \
     "  --skip-ppt            Record all real Agent scenes except PPT" \
+    "  --from-scene N        Start at scene 1-4 (use with --resume-dir)" \
+    "  --resume-dir PATH     Append clips to an existing recording run" \
     "  --dry-run             Validate configuration and print the shot list" \
     "  -h, --help            Show this help"
 }
@@ -54,6 +58,14 @@ while (($#)); do
       SKIP_PPT=1
       shift
       ;;
+    --from-scene)
+      START_SCENE="$2"
+      shift 2
+      ;;
+    --resume-dir)
+      RESUME_DIR="$2"
+      shift 2
+      ;;
     --dry-run)
       DRY_RUN=1
       shift
@@ -69,6 +81,14 @@ while (($#)); do
       ;;
   esac
 done
+if [[ ! "$START_SCENE" =~ ^[1-4]$ ]]; then
+  printf 'Scene must be an integer from 1 to 4.\n' >&2
+  exit 2
+fi
+if ((START_SCENE > 1)) && [[ -z "$RESUME_DIR" ]]; then
+  printf '%s\n' '--from-scene requires --resume-dir so earlier evidence is preserved.' >&2
+  exit 2
+fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
   printf 'Environment file not found: %s\n' "$ENV_FILE" >&2
@@ -87,11 +107,14 @@ fi
 
 MM_RECORD_USERNAME="${MM_USERNAME:-${EMAIL:-}}"
 MM_RECORD_PASSWORD="${MM_PASSWORD:-${PASSWORD:-}}"
+MM_PERSONA_USERNAME="${MM_APPROVER_USERNAME:-}"
+MM_PERSONA_PASSWORD="${MM_APPROVER_PASSWORD:-}"
 MM_RECORD_BOT="${MM_E2E_BOT_USERNAME:-}"
 MM_RECORD_ACK="${MM_ACK_MESSAGE:-get}"
-export MM_RECORD_USERNAME MM_RECORD_PASSWORD MM_RECORD_BOT MM_RECORD_ACK
+export MM_RECORD_USERNAME MM_RECORD_PASSWORD MM_PERSONA_USERNAME MM_PERSONA_PASSWORD
+export MM_RECORD_BOT MM_RECORD_ACK
 
-required=(MM_URL MM_RECORD_USERNAME MM_RECORD_PASSWORD MM_RECORD_BOT)
+required=(MM_URL MM_RECORD_USERNAME MM_RECORD_PASSWORD MM_PERSONA_USERNAME MM_PERSONA_PASSWORD MM_RECORD_BOT)
 for name in "${required[@]}"; do
   if [[ -z "${!name:-}" ]]; then
     printf 'Required recording value is missing: %s\n' "$name" >&2
@@ -104,20 +127,21 @@ if [[ ! "${MMAG_E2E_ENABLED:-}" =~ ^(1|true|yes)$ ]]; then
 fi
 
 SHOT_LIST=(
-  "01 default-get: one accepted MMChat request immediately receives get"
-  "02 mmchat: the same request continues to a real LLM answer and routing marker"
-  "03 project: approved knowledge write"
-  "04 evidence: the real approval remains visible"
+  "01 capability discovery: inspect native /mmag commands, Agents and Skills"
+  "02 personal workspace: inspect Personal Skills, cases and memory with native actions"
+  "03 personal skill: run the owner's method and save the result as a WorkCase"
+  "04 digital persona: a second user asks the owner's published Persona"
+  "05 group collaboration: summarize seeded multi-user discussion with source evidence"
 )
 if ((SKIP_PPT == 0)); then
-  SHOT_LIST+=("05 ppt: real Agent, approvals, exact preview.png/deck.pptx delivery and native preview")
+  SHOT_LIST+=("06-07 governed delivery: PPT generation, native approval, preview and editable file")
 fi
 
 if ((DRY_RUN)); then
   printf 'Recording configuration is valid.\n'
   printf 'Mattermost: %s\n' "$MM_URL"
   printf 'Bot: @%s\n' "${MM_RECORD_BOT#@}"
-  printf 'Process playback: %sx\n' "$PROCESS_SPEED"
+  printf 'Playback: commands/assets 2x | process %sx | results %sx\n' "$PROCESS_SPEED" "$RESULT_SPEED"
   printf 'Chapter cards: %ss\n' "$CHAPTER_DURATION"
   printf 'Narration: %s | %s | speed=%s | pitch=%s\n' \
     "$NARRATION_MODEL" "$NARRATION_VOICE" "$NARRATION_SPEED" "$NARRATION_PITCH"
@@ -126,7 +150,7 @@ if ((DRY_RUN)); then
   exit 0
 fi
 
-for command in playwright-cli ffmpeg ffprobe fc-match mmx node rg uv; do
+for command in curl jq playwright-cli ffmpeg ffprobe fc-match mmx node rg uv; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'Required command is unavailable: %s\n' "$command" >&2
     exit 2
@@ -135,24 +159,39 @@ done
 
 RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DEMO_RUN_ID="$RUN_STAMP-$$"
-RUN_DIR="$OUTPUT_ROOT/$RUN_STAMP"
+RUN_DIR="${RESUME_DIR:-$OUTPUT_ROOT/$RUN_STAMP}"
 RAW_DIR="$RUN_DIR/raw"
 EDIT_DIR="$RUN_DIR/edit"
 LOG_DIR="$RUN_DIR/logs"
 mkdir -p "$RAW_DIR" "$EDIT_DIR" "$LOG_DIR"
 CLIP_MANIFEST="$RUN_DIR/clips.tsv"
-: >"$CLIP_MANIFEST"
+if [[ -z "$RESUME_DIR" ]]; then
+  : >"$CLIP_MANIFEST"
+elif [[ ! -f "$CLIP_MANIFEST" ]]; then
+  printf 'Resume manifest is missing: %s\n' "$CLIP_MANIFEST" >&2
+  exit 2
+fi
+MANIFEST_BASE_LINES="$(wc -l <"$CLIP_MANIFEST")"
+RECORDING_COMPLETE=0
 AUTH_STATE_DIR="$(mktemp -d)"
 AUTH_STATE_FILE="$AUTH_STATE_DIR/mattermost-auth.json"
+# shellcheck source=scripts/record_mattermost_demo_lib.sh
+source "$PROJECT_ROOT/scripts/record_mattermost_demo_lib.sh"
+if ((START_SCENE <= 3)); then
+  prepare_demo_group
+fi
 
 BOT_PID=""
 cleanup() {
+  local status=$?
   playwright-cli -s="$SESSION" close >/dev/null 2>&1 || true
   if [[ -n "$BOT_PID" ]] && kill -0 "$BOT_PID" >/dev/null 2>&1; then
     kill -INT "$BOT_PID" >/dev/null 2>&1 || true
     wait "$BOT_PID" 2>/dev/null || true
   fi
+  rollback_demo_manifest "$CLIP_MANIFEST" "$MANIFEST_BASE_LINES" "$RECORDING_COMPLETE"
   rm -rf -- "$AUTH_STATE_DIR"
+  return "$status"
 }
 trap cleanup EXIT INT TERM
 
@@ -162,6 +201,8 @@ if ((START_BOT)); then
     LOG_DIR="$LOG_DIR" \
       MAX_CONTEXT_MESSAGES="${MMAG_DEMO_MAX_CONTEXT_MESSAGES:-6}" \
       MAX_CONTEXT_CHARS="${MMAG_DEMO_MAX_CONTEXT_CHARS:-8000}" \
+      RUNTIME_DEADLINE_SECONDS="${MMAG_DEMO_RUNTIME_DEADLINE_SECONDS:-300}" \
+      MMAG_ALLOW_UNSAFE_LOCAL_EXEC=true \
       PYTHONUNBUFFERED=1 \
       uv run mmag
   ) >"$LOG_DIR/bot-console.log" 2>&1 &
@@ -191,9 +232,10 @@ pw() {
 MM_URL_JSON="$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$MM_URL")"
 MM_USERNAME_JSON="$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$MM_RECORD_USERNAME")"
 MM_PASSWORD_JSON="$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$MM_RECORD_PASSWORD")"
+MM_PERSONA_USERNAME_JSON="$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$MM_PERSONA_USERNAME")"
+MM_PERSONA_PASSWORD_JSON="$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$MM_PERSONA_PASSWORD")"
 
-# Test credentials are JSON-escaped into this one suppressed Playwright command.
-# They are not written to generated media, Bot logs, or recording metadata.
+# Credentials are JSON-escaped into suppressed Playwright commands and never enter media.
 LOGIN_JS="async page => {
   const base = $MM_URL_JSON.replace(/\/$/, \"\");
   const current = await page.context().request.get(base + \"/api/v4/users/me\");
@@ -211,6 +253,21 @@ LOGIN_JS="async page => {
   ]);
   const verified = await page.context().request.get(base + \"/api/v4/users/me\");
   if (!verified.ok()) throw new Error(\"Mattermost session verification failed: \" + verified.status());
+}"
+LOGIN_PERSONA_JS="async page => {
+  const base = $MM_URL_JSON.replace(/\/$/, \"\");
+  await page.context().clearCookies();
+  const login = await page.context().request.post(base + \"/api/v4/users/login\", {
+    data: {login_id: $MM_PERSONA_USERNAME_JSON, password: $MM_PERSONA_PASSWORD_JSON}
+  });
+  if (!login.ok()) throw new Error(\"Mattermost persona requester login failed: \" + login.status());
+  const user = await login.json();
+  const token = login.headers().token || \"\";
+  if (!token || !user.id) throw new Error(\"Mattermost persona requester login is incomplete\");
+  await page.context().addCookies([
+    {name: \"MMAUTHTOKEN\", value: token, url: base, httpOnly: true, sameSite: \"Lax\"},
+    {name: \"MMUSERID\", value: String(user.id), url: base, sameSite: \"Lax\"}
+  ]);
 }"
 
 # shellcheck disable=SC2016
@@ -238,6 +295,8 @@ OPEN_DM_JS='async page => {
   await page.goto(`${config.url.replace(/\/$/, "")}/${team}/messages/@${bot}`);
   await page.locator("[data-testid=post_textbox], #post_textbox, [contenteditable=true][role=textbox]").last().waitFor({state: "visible", timeout: 30000});
 }'
+
+BROWSER_HELPER_JS="$(<"$PROJECT_ROOT/scripts/record_mattermost_browser.js")"
 
 # shellcheck disable=SC2016
 SEND_JS='async page => {
@@ -321,7 +380,7 @@ WAIT_NEXT_JS='async page => {
     const terminal = posts.find(post => ["result", "error"].includes(post.props?.mmag_kind));
     if (terminal) {
       await threadRegion.getByRole("textbox", {name: "Reply to this thread..."}).scrollIntoViewIfNeeded();
-      await page.waitForTimeout(750);
+      await page.waitForTimeout(7500);
       return terminal.props.mmag_kind === "result" ? "final|" : "error|";
     }
     const ids = posts.flatMap(post => [...String(post.message || "").matchAll(pattern)].map(item => item[1]));
@@ -497,19 +556,11 @@ pw sessionstorage-set mmag-demo-team-id "${MM_TEAM_ID:-}" >/dev/null
 pw run-code "$OPEN_DM_JS" >/dev/null
 pw state-save "$AUTH_STATE_FILE" >/dev/null
 
-CLIP_INDEX=0
+CLIP_INDEX="$(wc -l <"$CLIP_MANIFEST")"
 REQUEST_ROOT_ID=""
 WAIT_RESULT=""
 MMAG_DEMO_SEEN_APPROVALS=""
 export MMAG_DEMO_SEEN_APPROVALS
-
-result_value() {
-  awk '/^### Result/{getline; gsub(/\r/, ""); gsub(/^"|"$/, ""); print; exit}'
-}
-
-expand_thread() {
-  pw run-code "$EXPAND_THREAD_JS" >/dev/null
-}
 
 start_clip() {
   pw resize "$VIEWPORT_WIDTH" "$VIEWPORT_HEIGHT" >/dev/null
@@ -553,6 +604,23 @@ send_clip() {
   MMAG_DEMO_SEEN_APPROVALS=""
   pw sessionstorage-set mmag-demo-root-post-id "$REQUEST_ROOT_ID" >/dev/null
   expand_thread
+  pw run-code "$HOLD_JS" >/dev/null
+  stop_clip "$name" "$label"
+}
+
+view_clip() {
+  local name="$1" label="$2" message="$3" output
+  start_clip
+  pw sessionstorage-set mmag-demo-message "$message" >/dev/null
+  pw sessionstorage-set mmag-demo-browser-op send-view >/dev/null
+  output="$(pw run-code "$BROWSER_HELPER_JS")"
+  REQUEST_ROOT_ID="$(printf '%s\n' "$output" | result_value)"
+  if [[ -z "$REQUEST_ROOT_ID" || "$REQUEST_ROOT_ID" == null ]]; then
+    printf 'Could not capture the workspace command post ID.\n' >&2
+    exit 1
+  fi
+  pw sessionstorage-set mmag-demo-root-post-id "$REQUEST_ROOT_ID" >/dev/null
+  pw sessionstorage-set mmag-demo-hold-ms 6000 >/dev/null
   pw run-code "$HOLD_JS" >/dev/null
   stop_clip "$name" "$label"
 }
@@ -628,50 +696,58 @@ finish_with_approvals() {
   done
 }
 
-MMCHAT_MARKER="DEMO-MMCHAT-02-$DEMO_RUN_ID"
-send_clip \
-  "default-get" \
-  "默认 get：请求已进入处理" \
-  "@${MM_RECORD_BOT#@} 无需调用工具，请直接从 Agent、Skill、Capability、Policy 四个层次简要说明 MMAG 如何防止模型自行扩大权限，并给出一个审批示例。请保留编号 $MMCHAT_MARKER。" \
-  "$MMCHAT_MARKER"
-finish_with_approvals "mmchat" "真实 AI 生成等待" "$MMCHAT_MARKER" 0
-export MMAG_DEMO_HOLD_MS=7000
-start_clip
-pw sessionstorage-set mmag-demo-hold-ms "$MMAG_DEMO_HOLD_MS" >/dev/null
-pw run-code "$HOLD_JS" >/dev/null
-stop_clip "mmchat-result" "检查真实回复内容"
-
-PROJECT_MARKER="DEMO-PROJECT-03-$DEMO_RUN_ID"
-send_clip \
-  "project-request" \
-  "Project Agent 与 Skill" \
-  "项目助理：确认‘所有通过入口验收的用户消息默认回复 get’为当前项目决策，并保存到知识库。请保留编号 $PROJECT_MARKER。" \
-  "$PROJECT_MARKER"
-# The following retrieval request is the deterministic completion evidence for this write.
-# It also keeps the recording independent of a slow, optional post-write model summary.
-finish_with_approvals "project" "知识写入等待" "$PROJECT_MARKER" 2 1
-
-if ((SKIP_PPT == 0)); then
-  PROJECT_VERIFY_MARKER="DEMO-PROJECT-VERIFY-03-$DEMO_RUN_ID"
+if ((START_SCENE <= 1)); then
+  slash_clip "cli-discovery" "使用 /mmag 发现系统能力" "/mmag help"
+  slash_clip "cli-skills" "查看已注册 Agent 与 Skills" "/mmag skills"
+  view_clip "personal-workspace" "我的 Skills 与版本" "我的 Skills"
+  action_clip "personal-version-action" "点击按钮查看 Skill 版本" "版本"
+  view_clip "personal-cases" "查看我的历史案例" "我的案例"
+  view_clip "personal-memory" "查看我的长期记忆" "我的记忆"
+  PERSONAL_MARKER="DEMO-PERSONAL-01-$DEMO_RUN_ID"
   send_clip \
-    "project-verify-request" \
-    "验证知识真正写入" \
-    "项目助理：只读查询刚才确认的默认 ACK 决策，并在回复中保留编号 $PROJECT_VERIFY_MARKER。不得写入或修改知识库。" \
-    "$PROJECT_VERIFY_MARKER"
-  finish_with_approvals "project-verify" "知识读取等待" "$PROJECT_VERIFY_MARKER" 0
-  export MMAG_DEMO_HOLD_MS=7000
-  start_clip
-  pw sessionstorage-set mmag-demo-hold-ms "$MMAG_DEMO_HOLD_MS" >/dev/null
-  pw run-code "$HOLD_JS" >/dev/null
-  stop_clip "project-result" "Project 决策回读成功"
+    "personal-run" \
+    "复用个人研究方法" \
+    "@${MM_RECORD_BOT#@} 请用我的竞品研究速报方法，快速评估 https://github.com/openai/codex 的定位、核心能力、企业采用风险和下一步建议。只分析这个明确来源。" \
+    "$PERSONAL_MARKER"
+  finish_with_approvals "personal" "个人 Skill 正在执行" "$PERSONAL_MARKER" 0
+  action_clip "personal-save-action" "一键保存为可复用案例" "保存案例"
 fi
 
-if ((SKIP_PPT == 0)); then
+if ((START_SCENE <= 2)); then
+  pw run-code "$LOGIN_PERSONA_JS" >/dev/null
+  pw run-code "$OPEN_DM_JS" >/dev/null
+  PERSONA_MARKER="DEMO-PERSONA-02-$DEMO_RUN_ID"
+  send_clip \
+    "persona-request" \
+    "同事询问个人数字人" \
+    "@${MM_RECORD_BOT#@} 问一下 ${MM_PRIMARY_NAME} 的数字人：MMAG 为什么选择 LangGraph？" \
+    "$PERSONA_MARKER"
+  finish_with_approvals "persona" "基于本人授权资料代答" "$PERSONA_MARKER" 0
+  pw state-load "$AUTH_STATE_FILE" >/dev/null
+  pw sessionstorage-set mmag-demo-url "$MM_URL" >/dev/null
+  pw sessionstorage-set mmag-demo-bot "$MM_RECORD_BOT" >/dev/null
+fi
+
+if ((START_SCENE <= 3)); then
+  pw sessionstorage-set mmag-demo-group "$MM_GROUP_NAME" >/dev/null
+  pw sessionstorage-set mmag-demo-browser-op open-group >/dev/null
+  pw run-code "$BROWSER_HELPER_JS" >/dev/null
+  MEETING_MARKER="DEMO-MEETING-03-$DEMO_RUN_ID"
+  send_clip \
+    "meeting-request" \
+    "多人群聊中的会议总结" \
+    "@${MM_RECORD_BOT#@} 总结最近 2 小时的讨论：列出已达成共识、仍有风险和明确行动项，并附来源 Post ID。" \
+    "$MEETING_MARKER"
+  finish_with_approvals "meeting" "读取群聊并生成总结" "$MEETING_MARKER" 0
+fi
+
+if ((SKIP_PPT == 0 && START_SCENE <= 4)); then
+  pw run-code "$OPEN_DM_JS" >/dev/null
   PPT_MARKER="DEMO-PPT-04-$DEMO_RUN_ID"
   send_clip \
     "ppt-request" \
     "真实 PPT Agent" \
-    "PPT 助理：生成一份三页的《MMAG 企业智能体能力概览》。第 1 页是 Agent、Skill、Capability 架构；第 2 页是 Policy、审批与 Sandbox 安全边界；第 3 页是 Mattermost 交互与评估闭环。使用简洁企业风格。请将 preview.png 和 deck.pptx 作为附件发给我，并保留编号 $PPT_MARKER。" \
+    "PPT 助理：生成一份三页的《MMAG 企业智能体能力概览》。第 1 页是 Agent、Skill、Capability 架构；第 2 页是 Policy、审批与 Sandbox 安全边界；第 3 页是 Mattermost 交互与评估闭环。使用简洁企业风格。请将 preview.png 和 deck.pptx 作为附件发给我。" \
     "$PPT_MARKER"
   finish_with_approvals "ppt" "PPT 生成与上传等待" "$PPT_MARKER" 4
   export MMAG_DEMO_TIMEOUT_MS=300000
@@ -706,10 +782,12 @@ if ((SKIP_PPT)); then
 else
   FINAL_NAME='mmag-real-e2e-demo-2k.mp4'
 fi
+RECORDING_COMPLETE=1
 uv run python "$PROJECT_ROOT/scripts/render_mattermost_demo.py" \
   --run-dir "$RUN_DIR" \
   --output-name "$FINAL_NAME" \
   --speed "$PROCESS_SPEED" \
+  --result-speed "$RESULT_SPEED" \
   --title-duration "$TITLE_DURATION" \
   --chapter-duration "$CHAPTER_DURATION" \
   --speech-model "$NARRATION_MODEL" \
