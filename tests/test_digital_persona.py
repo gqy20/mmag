@@ -1,5 +1,7 @@
 """Digital Persona publication, isolation, and Mattermost interaction contracts."""
 
+import pytest
+
 from mmag.agent_packages.models import PromptAsset
 from mmag.application import ActionTokenService, BotIdentity, ContextBuilder
 from mmag.application.persona_ui import PersonaWorkspaceUI
@@ -7,6 +9,7 @@ from mmag.control_plane import (
     DigitalPersonaStatus,
     MattermostScopeResolver,
     MemoryItemKind,
+    PersonaReplyState,
     Scope,
     ScopeKind,
     SQLiteControlPlane,
@@ -161,3 +164,63 @@ def test_persona_context_uses_only_published_snapshot(tmp_path):
     assert "只能使用下方已发布快照" in context["system"]
     store.close()
     memory.close()
+
+
+def test_high_risk_reply_requires_owner_and_can_be_edited_once(tmp_path):
+    store = SQLiteControlPlane(str(tmp_path / "persona-reply.db"))
+    memory = _memory(store)
+    persona = store.personas.activate(
+        store.personas.create_revision(
+            installation_id="install-1",
+            tenant_id="tenant-1",
+            owner_id="user-1",
+            owner_username="alice",
+            scope_id=SCOPE,
+            display_name="Alice的数字人",
+            allowed_topics=("MMAG",),
+            approval_topics=("承诺",),
+            source_memory_ids=(memory.ref,),
+        ).ref,
+        owner_id="user-1",
+    )
+    ui = PersonaWorkspaceUI(
+        personas=store.personas,
+        memories=store.memory_items,
+        action_tokens=None,
+        reply_requests=store.persona_replies,
+    )
+    invocation, rejected = ui.resolve_question(
+        "问一下 alice 的数字人：MMAG 可以承诺什么时候交付？",
+        installation_id="install-1",
+        tenant_id="tenant-1",
+    )
+    assert invocation is not None and rejected is None
+    assert invocation.approval_required
+
+    request = ui.create_reply_request(
+        invocation,
+        {
+            "id": "question-1",
+            "channel_id": "channel-1",
+            "user_id": "user-2",
+            "_scope_id": "mattermost:install-1:tenant-1:chn:channel-1",
+        },
+        requester_username="bob",
+        draft_text="原始回答草稿",
+        status_post_id="status-1",
+    )
+    with pytest.raises(PermissionError):
+        ui.decide_reply(request.id, actor_id="user-2", approved=True)
+
+    approved = ui.decide_reply(
+        request.id,
+        actor_id="user-1",
+        approved=True,
+        draft_text="本人修改后的回答",
+    )
+    assert approved.state is PersonaReplyState.APPROVED
+    assert approved.draft_text == "本人修改后的回答"
+    assert approved.persona_ref == persona.ref
+    with pytest.raises(ValueError):
+        ui.decide_reply(request.id, actor_id="user-1", approved=False)
+    store.close()

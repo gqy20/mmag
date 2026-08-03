@@ -38,7 +38,14 @@ from ..skill_packages import SkillPackageError
 from .delivery import OUTBOUND_COLLECTOR, MattermostDelivery
 from .persona_ui import PersonaWorkspaceUI
 from .personal_ui import PersonalWorkspaceUI
-from .views import ResponseAction, ResponsePresenter, ResponseSection, ResponseView
+from .views import (
+    ResponseAction,
+    ResponseKind,
+    ResponsePresenter,
+    ResponseSection,
+    ResponseView,
+    RunStatus,
+)
 
 if TYPE_CHECKING:
     from ..agent_system import ManagedAgent
@@ -77,6 +84,7 @@ class MessageHandler:
         intent_runtime=None,
         memory_items=None,
         personas=None,
+        persona_replies=None,
     ) -> None:
         self.mm = mm_client
         self.memory = memory
@@ -117,6 +125,7 @@ class MessageHandler:
                 personas=personas,
                 memories=memory_items,
                 action_tokens=action_tokens,
+                reply_requests=persona_replies,
                 audit_store=audit_store,
             )
             if personas is not None and memory_items is not None
@@ -296,6 +305,14 @@ class MessageHandler:
                     )
                 return
         if self.persona_ui is not None:
+            reply_command = self.persona_ui.reply_command(message)
+            if reply_command is not None and access_scope.kind is ScopeKind.PERSONAL:
+                await self._handle_persona_reply_command(
+                    post,
+                    reply_command,
+                    status_post_id=status_post_id,
+                )
+                return
             handled, view = self.persona_ui.consume_owner(post, message, access_scope)
             if handled:
                 if view is not None:
@@ -333,7 +350,12 @@ class MessageHandler:
                 )
                 typing_task = asyncio.create_task(self.delivery.typing_loop(channel_id))
                 try:
-                    await self.respond(post, tag="persona", status_post_id=status_post_id)
+                    if invocation.approval_required:
+                        await self._start_persona_reply_approval(
+                            post, invocation, status_post_id=status_post_id
+                        )
+                    else:
+                        await self.respond(post, tag="persona", status_post_id=status_post_id)
                 finally:
                     typing_task.cancel()
                 return
@@ -470,7 +492,9 @@ class MessageHandler:
         tag: str,
         max_rounds: int | None = None,
         status_post_id: str = "",
-    ) -> None:
+        deliver: bool = True,
+        stream_enabled: bool = True,
+    ) -> ResponseView:
         started = time.monotonic()
         await self.delivery.typing_indicator(post["channel_id"])
         context = self.context_builder.build(post, mention=tag == "mention")
@@ -488,7 +512,7 @@ class MessageHandler:
                 selection = self.agent_router.default(request)
             else:
                 selection = self.agent_router.route(request)
-            if self._should_stream(selection.agent):
+            if stream_enabled and self._should_stream(selection.agent):
                 stream = self.delivery.stream(
                     post,
                     self._run_id(post),
@@ -585,10 +609,106 @@ class MessageHandler:
             invocation=tag,
         )
         update_post_id = status_post_id or (stream.post_id if stream is not None else "")
+        if deliver:
+            await self.delivery.reply_view(
+                post,
+                response_view,
+                update_post_id=update_post_id,
+            )
+        return response_view
+
+    async def _start_persona_reply_approval(
+        self,
+        post: dict,
+        invocation,
+        *,
+        status_post_id: str,
+    ) -> None:
+        if self.persona_ui is None:
+            raise RuntimeError("persona workspace is not configured")
+        draft = await self.respond(
+            post,
+            tag="persona",
+            status_post_id=status_post_id,
+            deliver=False,
+            stream_enabled=False,
+        )
+        if draft.status is not RunStatus.SUCCEEDED:
+            await self.delivery.reply_view(post, draft, update_post_id=status_post_id)
+            return
+        requester_username = await self.mm.get_username_async(str(post.get("user_id") or ""))
+        request = self.persona_ui.create_reply_request(
+            invocation,
+            post,
+            requester_username=requester_username,
+            draft_text=draft.summary,
+            status_post_id=status_post_id,
+        )
+        try:
+            channel = await self.mm.create_direct_channel_async(
+                self.identity.user_id, invocation.represented_owner
+            )
+            owner_channel_id = str(channel["id"])
+            owner_scope_id = self.scope_resolver.scope_id(
+                self.scope_resolver.installation_id,
+                self.scope_resolver.tenant_id,
+                ScopeKind.PERSONAL,
+                invocation.represented_owner,
+            )
+            owner_post = {
+                "id": "",
+                "channel_id": owner_channel_id,
+                "user_id": invocation.represented_owner,
+                "_scope_id": owner_scope_id,
+            }
+            approval_posts = await self.delivery.reply_view(
+                owner_post,
+                self.persona_ui.approval_view(request, owner_post),
+                delivery_key=f"persona-reply:{request.id}:approval",
+            )
+            if approval_posts and self.persona_ui.reply_requests is not None:
+                request = self.persona_ui.reply_requests.set_approval_post(
+                    request.id, approval_posts[0]
+                )
+        except Exception as error:
+            if self.persona_ui.reply_requests is not None:
+                self.persona_ui.reply_requests.mark_failed(request.id, type(error).__name__)
+            log_event(
+                log,
+                "persona.reply_approval_failed",
+                level=40,
+                status="failed",
+                error_code=type(error).__name__,
+            )
+            await self.delivery.reply_view(
+                post,
+                self.presenter.error(
+                    title="无法请求本人确认",
+                    summary="回答草稿未发送，请稍后重试。",
+                    run_id=f"persona-reply:{request.id}",
+                ),
+                update_post_id=status_post_id,
+            )
+            return
+        self.audit_store.append_audit(
+            "persona.reply_requested",
+            actor_id=str(post.get("user_id") or ""),
+            scope_id=str(post.get("_scope_id") or ""),
+            trace_id=self._run_id(post),
+            target=request.id,
+            decision="pending",
+            details={
+                "schema_version": "1.0",
+                "persona_ref": request.persona_ref,
+                "persona_hash": request.persona_hash,
+                "owner_id": request.owner_id,
+            },
+        )
         await self.delivery.reply_view(
             post,
-            response_view,
-            update_post_id=update_post_id,
+            self.persona_ui.waiting_view(request),
+            update_post_id=status_post_id,
+            delivery_key=f"persona-reply:{request.id}:waiting",
         )
 
     def _resolve_skill(self, request: AgentRequest, agent: ManagedAgent) -> AgentRequest:
@@ -753,6 +873,8 @@ class MessageHandler:
     async def handle_action_callback(self, payload: dict) -> dict:
         if self.action_tokens is None:
             raise PermissionError("interactive actions are not configured")
+        if str(payload.get("type") or "") == "dialog_submission":
+            return await self._handle_persona_reply_dialog(payload)
         context = payload.get("context")
         token = context.get("token") if isinstance(context, dict) else ""
         actor_id = str(payload.get("user_id") or "")
@@ -770,6 +892,8 @@ class MessageHandler:
         scope_id = self.post_scope({"channel_id": channel_id, "user_id": actor_id})
         if scope_id != claims.scope_id:
             raise PermissionError("action belongs to another scope")
+        if claims.action.startswith("persona_reply_"):
+            return await self._handle_persona_reply_action(payload, claims, actor_id)
         if claims.action.startswith("persona_"):
             if self.persona_ui is None:
                 raise RuntimeError("persona workspace is not configured")
@@ -854,6 +978,189 @@ class MessageHandler:
                 },
             }
         }
+
+    async def _handle_persona_reply_action(
+        self, payload: dict, claims, actor_id: str
+    ) -> dict:
+        if self.persona_ui is None or self.persona_ui.reply_requests is None:
+            raise RuntimeError("persona reply approval is not configured")
+        if actor_id != claims.requested_by:
+            raise PermissionError("persona reply action belongs to another owner")
+        request = self.persona_ui.pending_reply(claims.target, actor_id=actor_id)
+        token = str((payload.get("context") or {}).get("token") or "")
+        if claims.action == "persona_reply_edit":
+            trigger_id = str(payload.get("trigger_id") or "")
+            self.action_tokens.consume(token, actor_id=actor_id)
+            submit_token = self.action_tokens.issue(
+                action="persona_reply_submit",
+                target=request.id,
+                scope_id=claims.scope_id,
+                run_id=claims.run_id,
+                conversation_id=claims.conversation_id,
+                root_id=claims.root_id,
+                requested_by=claims.requested_by,
+            )
+            await self.mm.open_dialog_async(
+                trigger_id=trigger_id,
+                callback_url=config.mm_action_callback_url,
+                dialog={
+                    "callback_id": "persona_reply_edit",
+                    "title": "修改数字人回答",
+                    "introduction_text": "修改后将以数字人代理身份回复原 Thread。",
+                    "elements": [
+                        {
+                            "display_name": "回答内容",
+                            "name": "draft",
+                            "type": "textarea",
+                            "default": request.draft_text,
+                            "optional": False,
+                            "max_length": 16000,
+                        }
+                    ],
+                    "submit_label": "确认发送",
+                    "state": submit_token,
+                },
+            )
+            return {"ephemeral_text": "已打开回答编辑框。"}
+        if claims.action not in {"persona_reply_approve", "persona_reply_reject"}:
+            raise ValueError("unsupported persona reply action")
+        self.action_tokens.consume(token, actor_id=actor_id)
+        request = self.persona_ui.decide_reply(
+            request.id,
+            actor_id=actor_id,
+            approved=claims.action == "persona_reply_approve",
+        )
+        await self._deliver_persona_reply(request)
+        message = "回答已发送。" if request.state.value == "approved" else "已拒绝发送。"
+        return {
+            "update": {
+                "message": message,
+                "props": {
+                    "from_bot": "true",
+                    "mmag_kind": "persona_approval",
+                    "mmag_status": "completed",
+                },
+            },
+            "ephemeral_text": message,
+        }
+
+    async def _handle_persona_reply_dialog(self, payload: dict) -> dict:
+        if self.action_tokens is None or self.persona_ui is None:
+            raise RuntimeError("persona reply approval is not configured")
+        token = str(payload.get("state") or "")
+        actor_id = str(payload.get("user_id") or "")
+        claims = self.action_tokens.verify(token)
+        if claims.action != "persona_reply_submit" or actor_id != claims.requested_by:
+            raise PermissionError("invalid persona reply dialog")
+        channel_id = str(payload.get("channel_id") or "")
+        if channel_id and channel_id != claims.conversation_id:
+            raise PermissionError("persona reply dialog belongs to another conversation")
+        submission = payload.get("submission")
+        draft_text = str(submission.get("draft") or "").strip() if isinstance(
+            submission, dict
+        ) else ""
+        if not draft_text:
+            return {"errors": {"draft": "回答内容不能为空"}}
+        self.action_tokens.consume(token, actor_id=actor_id)
+        request = self.persona_ui.decide_reply(
+            claims.target,
+            actor_id=actor_id,
+            approved=True,
+            draft_text=draft_text,
+        )
+        await self._deliver_persona_reply(request)
+        if request.owner_approval_post_id:
+            await self.mm.update_post_async(
+                request.owner_approval_post_id,
+                "回答已修改并发送。",
+                props={
+                    "from_bot": "true",
+                    "mmag_kind": "persona_approval",
+                    "mmag_status": "completed",
+                },
+            )
+        return {}
+
+    async def _handle_persona_reply_command(
+        self,
+        post: dict,
+        command: tuple[str, str, str],
+        *,
+        status_post_id: str,
+    ) -> None:
+        if self.persona_ui is None:
+            raise RuntimeError("persona reply approval is not configured")
+        action, request_id, draft_text = command
+        try:
+            request = self.persona_ui.decide_reply(
+                request_id,
+                actor_id=str(post.get("user_id") or ""),
+                approved=action == "approve",
+                draft_text=draft_text,
+            )
+            await self._deliver_persona_reply(request)
+            view = ResponseView(
+                kind=ResponseKind.STATUS,
+                title="代答处理完成",
+                summary="回答已发送。" if action == "approve" else "已拒绝发送。",
+                status=RunStatus.SUCCEEDED,
+            )
+        except (KeyError, PermissionError, ValueError) as error:
+            log_event(
+                log,
+                "persona.reply_decision_failed",
+                level=30,
+                status="failed",
+                error_code=type(error).__name__,
+            )
+            view = self.presenter.error(
+                title="代答处理失败",
+                summary="请求不存在、已处理、已过期，或不属于当前用户。",
+                run_id=f"persona-reply:{request_id}",
+            )
+        await self.delivery.reply_view(post, view, update_post_id=status_post_id)
+
+    async def _deliver_persona_reply(self, request) -> None:
+        if self.persona_ui is None or self.persona_ui.reply_requests is None:
+            raise RuntimeError("persona reply approval is not configured")
+        post = {
+            "id": request.source_root_id,
+            "root_id": request.source_root_id,
+            "channel_id": request.source_channel_id,
+            "user_id": request.requester_id,
+            "_scope_id": request.source_scope_id,
+        }
+        view = (
+            self.persona_ui.final_view(request)
+            if request.state.value == "approved"
+            else self.persona_ui.rejected_view(request)
+        )
+        try:
+            await self.delivery.reply_view(
+                post,
+                view,
+                update_post_id=request.source_status_post_id,
+                delivery_key=f"persona-reply:{request.id}:decision",
+            )
+            if request.state.value == "approved":
+                self.persona_ui.reply_requests.mark_delivered(request.id)
+        except Exception as error:
+            self.persona_ui.reply_requests.mark_failed(request.id, type(error).__name__)
+            raise
+        self.audit_store.append_audit(
+            "persona.reply_decided",
+            actor_id=request.owner_id,
+            scope_id=request.source_scope_id,
+            trace_id=f"persona-reply:{request.id}",
+            target=request.id,
+            decision=request.state.value,
+            details={
+                "schema_version": "1.0",
+                "persona_ref": request.persona_ref,
+                "persona_hash": request.persona_hash,
+                "requester_id": request.requester_id,
+            },
+        )
 
     async def close_actions(self) -> None:
         tasks = tuple(self._action_tasks)

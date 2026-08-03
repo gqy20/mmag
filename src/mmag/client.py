@@ -163,6 +163,36 @@ class MMClient:
         response = await self._request_async("GET", f"/channels/{channel_id}")
         return response.json()
 
+    async def create_direct_channel_async(self, user_id: str, other_user_id: str) -> dict:
+        """Get or create the stable direct-message channel for two users."""
+        if not user_id or not other_user_id or user_id == other_user_id:
+            raise ValueError("direct channel requires two distinct users")
+        response = await self._request_async(
+            "POST", "/channels/direct", json=[user_id, other_user_id]
+        )
+        channel = response.json()
+        channel_id = str(channel.get("id") or "")
+        if not channel_id or str(channel.get("type") or "") != "D":
+            raise RuntimeError("Mattermost returned an invalid direct channel")
+        self._channels[channel_id] = channel
+        return channel
+
+    async def open_dialog_async(
+        self,
+        *,
+        trigger_id: str,
+        callback_url: str,
+        dialog: dict[str, Any],
+    ) -> None:
+        """Open a native Mattermost interactive dialog from an action callback."""
+        if not trigger_id or not callback_url:
+            raise ValueError("dialog trigger and callback URL are required")
+        await self._request_async(
+            "POST",
+            "/actions/dialogs/open",
+            json={"trigger_id": trigger_id, "url": callback_url, "dialog": dialog},
+        )
+
     def get_username(self, user_id: str) -> str:
         return self.get_user(user_id).get("username", user_id[:8])
 

@@ -118,6 +118,14 @@ class DigitalPersonaStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class PersonaReplyState(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+
+
 class TaskState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -351,6 +359,7 @@ class DigitalPersona:
     scope_id: str
     display_name: str
     allowed_topics: tuple[str, ...]
+    approval_topics: tuple[str, ...]
     denied_topics: tuple[str, ...]
     response_mode: str
     source_memory_ids: tuple[str, ...]
@@ -363,6 +372,33 @@ class DigitalPersona:
     @property
     def ref(self) -> str:
         return f"persona://{self.id}@{self.revision}"
+
+
+@dataclass(frozen=True, slots=True)
+class PersonaReplyRequest:
+    id: str
+    installation_id: str
+    tenant_id: str
+    persona_ref: str
+    persona_hash: str
+    owner_id: str
+    requester_id: str
+    requester_username: str
+    source_scope_id: str
+    source_channel_id: str
+    source_root_id: str
+    source_status_post_id: str
+    owner_approval_post_id: str
+    question: str
+    draft_text: str
+    approval_reason: str
+    expires_at: float
+    state: PersonaReplyState = PersonaReplyState.PENDING
+    decision_by: str = ""
+    decided_at: float = 0.0
+    last_error: str = ""
+    created_at: float = 0.0
+    updated_at: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

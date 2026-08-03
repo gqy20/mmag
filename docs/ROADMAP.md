@@ -354,7 +354,7 @@ Sandbox；切换远程 Sandbox 只替换 Execution Backend。
 - [x] 普通频道不再注入或投影当前用户私人画像；
 - [x] Personal Skill 已支持 owner/tenant 隔离、不可变 revision、激活/归档、显式或自动解析、运行时覆盖层，
   并提供 Mattermost “我的 Skills / 我的案例”、WorkCase 保存与反馈、单案例或同基础 Skill 多案例生成草稿；
-- [ ] PersonalMemory、成员退出、用户停用及派生知识的权限撤销传播仍不完整；
+- [x] PersonalMemory 已采用 Installation + Tenant + Owner + Personal Scope 隔离，源消息编辑/删除会撤销记忆并暂停依赖它的数字人；成员退出、用户停用及其他派生知识的撤销传播仍需继续完善；
 - [x] LangGraph Checkpoint 恢复强制匹配原 actor、scope、installation 和 tenant；
 - [x] Artifact 交付意图、审批恢复和 Outbox 实际发送前重新查询 Mattermost 成员关系；原 actor 已退出频道、
   身份接口异常或个人 Artifact 目标不是本人 DM 时默认拒绝；
@@ -370,7 +370,8 @@ Sandbox；切换远程 Sandbox 只替换 Execution Backend。
 - [x] 将用户画像升级为 Installation + Tenant + User 联合身份，现有 Memory Repository 查询固定绑定
   当前 Installation/Tenant；
 - [x] Personal Skill Draft/Active/Archived、基础 Skill 覆盖层、WorkCase 及 Mattermost DM 管理入口已实现；
-- [ ] 继续新增 PersonalMemory，并让群聊私人操作转入 DM 或私有交付；
+- [x] 新增版本化 PersonalMemory，支持显式记住、查看、忘记、来源绑定和过期状态；
+- [ ] 让群聊中的私人记忆操作转入 DM 或私有交付；
 - [x] 为现有 SQLite FTS、缓存、Artifact 和 Checkpoint 增加 Tenant/Scope 查询或终局校验；
 - [ ] 后续向量索引必须使用相同 Scope 分区，不能先全库召回再在应用层过滤；
 - [x] Bot Token 只代表服务身份，不继承为发消息用户的权限；Artifact 读取、Checkpoint 恢复、审批和交付
@@ -401,8 +402,10 @@ Sandbox。
 ### 场景二：基于历史工作的个人数字人
 
 用户显式选择可使用的历史消息、文档、案例和回答边界，形成带来源、保留策略和撤销能力的个人数字人；
-面向他人回答时明确数字人身份，对高风险承诺或外发内容请求本人确认。当前用户画像较浅，仍缺授权采集、
-私有知识索引、代答策略和持续反馈闭环。
+面向他人回答时明确数字人身份。当前已支持 MemoryItem 快照授权、不可变 Persona revision、允许/确认/禁止
+主题、低风险自动回答，以及高风险回答草稿通过所有者 DM 的同意、修改、拒绝后回投原 Thread；决策使用
+一次性 Token 并记录 Persona 版本、Hash 和审计。仍需扩展文档/WorkCase 数据源、成员与用户状态撤销传播、
+待确认请求的重启恢复/运维查询，以及持续反馈闭环。
 
 ### 场景三：多人群聊中的主动总结与回答
 

@@ -51,6 +51,8 @@ from .models import (
     OutboundMessage,
     PersonalSkill,
     PersonalSkillStatus,
+    PersonaReplyRequest,
+    PersonaReplyState,
     Principal,
     Scope,
     ScopeKind,
@@ -61,6 +63,7 @@ from .models import (
     WorkCase,
     WorkCaseStatus,
 )
+from .persona_replies import PersonaReplyStore
 from .personal_skills import PersonalSkillStore
 from .personas import DigitalPersonaStore
 from .pipeline import MessagePipeline, PartitionedScheduler
@@ -111,6 +114,9 @@ __all__ = [
     "PersonalSkill",
     "PersonalSkillStatus",
     "PersonalSkillStore",
+    "PersonaReplyRequest",
+    "PersonaReplyState",
+    "PersonaReplyStore",
     "SQLiteControlPlane",
     "Principal",
     "Scope",

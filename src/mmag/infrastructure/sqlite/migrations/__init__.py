@@ -609,6 +609,43 @@ def _v017_add_digital_personas(connection: sqlite3.Connection) -> None:
     )
 
 
+def _v018_add_persona_reply_approval(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "ALTER TABLE digital_personas ADD COLUMN approval_topics TEXT NOT NULL DEFAULT '[]'"
+    )
+    connection.execute(
+        "UPDATE digital_personas SET response_mode='risk_approval' WHERE response_mode='auto'"
+    )
+    connection.execute(
+        """CREATE TABLE persona_reply_requests (
+        id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
+        persona_ref TEXT NOT NULL, persona_hash TEXT NOT NULL, owner_id TEXT NOT NULL,
+        requester_id TEXT NOT NULL, requester_username TEXT NOT NULL,
+        source_scope_id TEXT NOT NULL, source_channel_id TEXT NOT NULL,
+        source_root_id TEXT NOT NULL, source_status_post_id TEXT NOT NULL DEFAULT '',
+        question TEXT NOT NULL, draft_text TEXT NOT NULL, approval_reason TEXT NOT NULL,
+        expires_at REAL NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
+        decision_by TEXT NOT NULL DEFAULT '', decided_at REAL NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, updated_at REAL NOT NULL
+        )"""
+    )
+    connection.execute(
+        """CREATE INDEX idx_persona_reply_owner ON persona_reply_requests
+        (installation_id, tenant_id, owner_id, state, created_at DESC)"""
+    )
+    connection.execute(
+        """CREATE INDEX idx_persona_reply_source ON persona_reply_requests
+        (source_channel_id, source_root_id, state)"""
+    )
+
+
+def _v019_add_persona_approval_post(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """ALTER TABLE persona_reply_requests
+        ADD COLUMN owner_approval_post_id TEXT NOT NULL DEFAULT ''"""
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -711,6 +748,18 @@ DEFAULT_MIGRATIONS = (
         name="add digital personas",
         checksum=_checksum("v017-add-digital-personas-20260802"),
         upgrade=_v017_add_digital_personas,
+    ),
+    Migration(
+        version=18,
+        name="add persona reply approval",
+        checksum=_checksum("v018-add-persona-reply-approval-20260802"),
+        upgrade=_v018_add_persona_reply_approval,
+    ),
+    Migration(
+        version=19,
+        name="add persona approval post",
+        checksum=_checksum("v019-add-persona-approval-post-20260802"),
+        upgrade=_v019_add_persona_approval_post,
     ),
 )
 

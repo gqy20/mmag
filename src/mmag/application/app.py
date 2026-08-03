@@ -300,6 +300,7 @@ class Agent:
             intent_runtime=self.runtime,
             memory_items=self.control_store.memory_items,
             personas=self.control_store.personas,
+            persona_replies=self.control_store.persona_replies,
         )
         self.capability_probe = MattermostCapabilityProbe(self.mm)
         if self.action_tokens is not None:

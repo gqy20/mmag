@@ -35,8 +35,9 @@ class DigitalPersonaStore:
         scope_id: str,
         display_name: str,
         allowed_topics: Iterable[str] = (),
+        approval_topics: Iterable[str] = (),
         denied_topics: Iterable[str] = (),
-        response_mode: str = "auto",
+        response_mode: str = "risk_approval",
         source_memory_ids: Iterable[str] = (),
         persona_id: str = "",
     ) -> DigitalPersona:
@@ -45,9 +46,10 @@ class DigitalPersonaStore:
         owner_username = owner_username.strip().lstrip("@").lower()[:64]
         if not display_name or not owner_username:
             raise ValueError("persona display name and owner username are required")
-        if response_mode not in {"auto"}:
+        if response_mode not in {"auto", "risk_approval", "owner_approval"}:
             raise ValueError("unsupported persona response mode")
         allowed = self._terms(allowed_topics)
+        approval = self._terms(approval_topics)
         denied = self._terms(denied_topics)
         memory_ids = tuple(dict.fromkeys(
             str(item).removeprefix("memory://") for item in source_memory_ids if str(item)
@@ -69,7 +71,8 @@ class DigitalPersonaStore:
             payload = {
                 "id": identifier, "revision": revision, "owner_id": owner_id,
                 "display_name": display_name, "allowed_topics": allowed,
-                "denied_topics": denied, "response_mode": response_mode,
+                "approval_topics": approval, "denied_topics": denied,
+                "response_mode": response_mode,
                 "source_memory_ids": memory_ids, "published_snapshots": snapshots,
             }
             digest = hashlib.sha256(
@@ -79,12 +82,14 @@ class DigitalPersonaStore:
             self.connection.execute(
                 """INSERT INTO digital_personas
                 (id, revision, installation_id, tenant_id, owner_id, owner_username,
-                 scope_id, display_name, allowed_topics, denied_topics, response_mode,
+                 scope_id, display_name, allowed_topics, approval_topics, denied_topics,
+                 response_mode,
                  source_memory_ids, published_snapshots, sha256, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)""",
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)""",
                 (identifier, revision, installation_id, tenant_id, owner_id,
                  owner_username, scope_id, display_name,
                  json.dumps(allowed, ensure_ascii=False),
+                 json.dumps(approval, ensure_ascii=False),
                  json.dumps(denied, ensure_ascii=False), response_mode,
                  json.dumps(memory_ids, ensure_ascii=False),
                  json.dumps(snapshots, ensure_ascii=False), digest, now, now),
@@ -213,6 +218,7 @@ class DigitalPersonaStore:
             owner_id=row["owner_id"], owner_username=row["owner_username"],
             scope_id=row["scope_id"], display_name=row["display_name"],
             allowed_topics=tuple(json.loads(row["allowed_topics"])),
+            approval_topics=tuple(json.loads(row["approval_topics"])),
             denied_topics=tuple(json.loads(row["denied_topics"])),
             response_mode=row["response_mode"],
             source_memory_ids=tuple(json.loads(row["source_memory_ids"])),

@@ -24,6 +24,7 @@ from .models import (
     Scope,
     StateTransition,
 )
+from .persona_replies import PersonaReplyStore
 from .personal_skills import PersonalSkillStore
 from .personas import DigitalPersonaStore
 from .quota import QuotaStore
@@ -54,6 +55,7 @@ class SQLiteControlPlane:
         self.interactions = InteractionSessionStore(self._connection, self._lock)
         self.memory_items = MemoryItemStore(self._connection, self._lock)
         self.personas = DigitalPersonaStore(self._connection, self._lock)
+        self.persona_replies = PersonaReplyStore(self._connection, self._lock)
 
     def close(self) -> None:
         self._connection.close()
