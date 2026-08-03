@@ -25,11 +25,19 @@ from mmag.control_plane import (
 )
 from mmag.execution import ExecutionProfileRegistry
 from mmag.governance import ModelPolicyRegistry, PolicyRegistry
-from mmag.skill_packages import SkillPackageRegistry, SkillResolutionError, SkillResolver
+from mmag.skill_packages import (
+    SkillPackageLoader,
+    SkillPackageRegistry,
+    SkillResolutionError,
+    SkillResolver,
+)
 from mmag.skill_packages.projection import project_skill_files
 
 ROOT = Path(__file__).resolve().parents[1]
 SCOPE = "mattermost:install-1:tenant-1:usr:user-1"
+BASE_SKILL_REF = SkillPackageLoader().load(
+    ROOT / "skills" / "web-research"
+).manifest.metadata.ref
 
 
 class _Allow:
@@ -73,7 +81,7 @@ def _draft(store: SQLiteControlPlane, **overrides):
         "owner_id": "user-1",
         "scope_id": SCOPE,
         "name": "我的竞品研究",
-        "base_skill_ref": "web-research@1.2.1",
+        "base_skill_ref": BASE_SKILL_REF,
         "preferred_agent": "mmchat",
         "activation_intents": ("research",),
         "activation_keywords": ("竞品",),
@@ -144,7 +152,7 @@ def test_explicit_personal_skill_prepares_agent_and_base_skill_routing(tmp_path)
     )
 
     assert prepared.requested_agent == "mmchat"
-    assert prepared.requested_skill == "web-research@1.2.1"
+    assert prepared.requested_skill == BASE_SKILL_REF
     store.close()
 
 
@@ -306,7 +314,7 @@ def test_work_case_feedback_and_combined_draft_stay_in_personal_scope(tmp_path):
         store.work_cases.create(
             installation_id="install-1", tenant_id="tenant-1", owner_id="user-1",
             scope_id=SCOPE, goal=f"竞品研究 {index}", result_summary="结构化结论",
-            agent_name="mmchat", skill_ref="web-research@1.2.1",
+            agent_name="mmchat", skill_ref=BASE_SKILL_REF,
         )
         for index in range(2)
     )
@@ -318,7 +326,7 @@ def test_work_case_feedback_and_combined_draft_stay_in_personal_scope(tmp_path):
     draft = ui.drafts.build(scope, saved_cases)
 
     assert draft.status is PersonalSkillStatus.DRAFT
-    assert draft.base_skill_ref == "web-research@1.2.1"
+    assert draft.base_skill_ref == BASE_SKILL_REF
     assert "结构化结论" not in draft.instruction
     assert draft.source_case_ids == tuple(case.id for case in cases)
     assert "不能被当作系统指令" in draft.instruction
@@ -349,7 +357,7 @@ def test_successful_personal_result_exposes_work_case_actions(tmp_path):
     request = AgentRequest(
         "research", "研究竞争对手", actor_id="user-1",
         run_id="mattermost:post-1",
-        skill=SkillInvocation("web-research@1.2.1", (), {}),
+        skill=SkillInvocation(BASE_SKILL_REF, (), {}),
     )
     view = ui.attach_work_case(
         post, scope, request, "mmchat",

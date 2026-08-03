@@ -93,6 +93,13 @@ def _profiles() -> ExecutionProfileRegistry:
     return registry
 
 
+def _ppt_profile():
+    return next(profile for profile in _profiles().list() if profile.metadata.name == "ppt")
+
+
+PPT_PROFILE_REF = _ppt_profile().ref
+
+
 def _slides():
     return SkillPackageLoader().load(ROOT / "skills" / "slides")
 
@@ -115,7 +122,7 @@ def _context() -> CapabilityContext:
         "mattermost:team/channel-1",
         frozenset({"ppt.build"}),
         "run-1",
-        frozenset({"ppt@2.2.0"}),
+        frozenset({PPT_PROFILE_REF}),
     )
 
 
@@ -127,7 +134,7 @@ def _workspace_request() -> RunRequest:
             "capabilities": (
                 "workspace.read,workspace.write,workspace.execute,workspace.commit"
             ),
-            "execution_profiles": "ppt@2.2.0",
+            "execution_profiles": PPT_PROFILE_REF,
         },
     )
 
@@ -190,7 +197,7 @@ async def test_workspace_commit_is_profile_bound_and_idempotent(tmp_path):
         _context(),
         allowed_capabilities=frozenset({"workspace.commit"}),
         run_id="workspace-run",
-        allowed_execution_profiles=frozenset({"ppt@2.2.0"}),
+        allowed_execution_profiles=frozenset({PPT_PROFILE_REF}),
     )
     backend = factory.create(_workspace_request())
     deck = backend.local.workspace.temporary / "deck.pptx"
@@ -233,7 +240,7 @@ def _deck(marker: str = "safe") -> dict:
 
 
 def test_profile_registry_loads_ppt_commands():
-    profile = _profiles().get("ppt@2.2.0")
+    profile = _ppt_profile()
 
     assert profile.runner == "host"
     assert profile.network == "host"
@@ -304,7 +311,7 @@ def test_profile_rejects_shell_and_dynamic_python_commands(tmp_path):
 
 
 def test_fixed_ppt_command_argv_contains_no_payload(tmp_path):
-    profile = _profiles().get("ppt@2.2.0")
+    profile = _ppt_profile()
     manager = WorkspaceManager(tmp_path / "workspaces")
     marker = "x; touch /tmp/owned"
     with manager.create("run-1") as workspace:
@@ -338,7 +345,7 @@ def test_fixed_ppt_command_argv_contains_no_payload(tmp_path):
 
 
 def test_process_runner_fails_closed_without_sandbox(tmp_path):
-    profile = replace(_profiles().get("ppt@2.2.0"), runner="bubblewrap", network="none")
+    profile = replace(_ppt_profile(), runner="bubblewrap", network="none")
     manager = WorkspaceManager(tmp_path / "workspaces")
     with manager.create("run-1") as workspace:
         input_path = manager.write_input(
@@ -375,7 +382,7 @@ async def test_process_communication_timeout_cancels_stream_tasks(tmp_path):
         async def wait(self):
             await asyncio.Future()
 
-    profile = _profiles().get("ppt@2.2.0")
+    profile = _ppt_profile()
     profile = replace(
         profile,
         limits=replace(profile.limits, timeout_seconds=0.01),
@@ -404,7 +411,7 @@ async def test_script_executor_commits_artifact_and_redacted_audit(tmp_path):
 
     with bind_capability_context(_context()), bind_skill_context(session):
         result = await executor.execute(
-            profile_ref="ppt@2.2.0",
+            profile_ref=PPT_PROFILE_REF,
             capability="ppt.build",
             command_id="ppt.render",
             permission="artifact:generate",
@@ -448,7 +455,7 @@ async def test_script_executor_denies_missing_agent_profile_before_process(tmp_p
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
-            profile_ref="ppt@2.2.0",
+            profile_ref=PPT_PROFILE_REF,
             capability="ppt.build",
             command_id="ppt.render",
             permission="artifact:generate",
@@ -475,7 +482,7 @@ async def test_script_executor_rejects_symlink_and_oversized_artifacts(tmp_path,
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
-            profile_ref="ppt@2.2.0",
+            profile_ref=PPT_PROFILE_REF,
             capability="ppt.build",
             command_id="ppt.render",
             permission="artifact:generate",
@@ -497,7 +504,7 @@ async def test_script_executor_audits_content_free_process_failure_details(tmp_p
         pytest.raises(ScriptExecutionError),
     ):
         await executor.execute(
-            profile_ref="ppt@2.2.0",
+            profile_ref=PPT_PROFILE_REF,
             capability="ppt.build",
             command_id="ppt.render",
             permission="artifact:generate",

@@ -1,4 +1,7 @@
+from pathlib import Path
+
 import pytest
+import yaml
 
 from mmag.capabilities import CapabilityEffect, CapabilityExecutor, CapabilitySpec, CapabilityStatus
 from mmag.governance import (
@@ -16,6 +19,11 @@ from mmag.governance import (
     redact_sensitive,
 )
 from mmag.runtimes import AgentResult, RunContext, RunRequest, TokenUsage
+
+ROOT = Path(__file__).resolve().parents[1]
+MMCHAT_POLICY_REF = yaml.safe_load(
+    (ROOT / "agents" / "mmchat" / "agent.yml").read_text(encoding="utf-8")
+)["spec"]["policy_ref"]
 
 
 def _write_spec() -> CapabilitySpec:
@@ -84,11 +92,9 @@ def test_policy_matches_dynamic_arguments_to_request_resources():
 
 
 def test_versioned_policy_registry_enforces_mmchat_resources_and_writes():
-    from pathlib import Path
-
     registry = PolicyRegistry()
-    registry.load_directory(Path(__file__).resolve().parents[1] / "policies")
-    engine = registry.get("mmchat@1.4.0")
+    registry.load_directory(ROOT / "policies")
+    engine = registry.get(MMCHAT_POLICY_REF)
     get_posts = CapabilitySpec(
         "get_posts",
         "read",
@@ -142,10 +148,8 @@ def test_versioned_policy_registry_enforces_mmchat_resources_and_writes():
 
 @pytest.mark.asyncio
 async def test_registry_authorizer_uses_current_package_policy_and_allowlist():
-    from pathlib import Path
-
     registry = PolicyRegistry()
-    registry.load_directory(Path(__file__).resolve().parents[1] / "policies")
+    registry.load_directory(ROOT / "policies")
     executor = CapabilityExecutor(RegistryPolicyAuthorizer(registry))
     spec = CapabilitySpec(
         "get_posts",
@@ -162,7 +166,7 @@ async def test_registry_authorizer_uses_current_package_policy_and_allowlist():
         "u1",
         "mattermost:install-1:tenant-1:chn:channel-1",
         resources={"conversation_id": "channel-1"},
-        policy_ref="mmchat@1.4.0",
+        policy_ref=MMCHAT_POLICY_REF,
         allowed_capabilities=("get_posts",),
     )
 

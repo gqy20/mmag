@@ -72,10 +72,15 @@ def _packages():
     return skills, agents
 
 
+def _skill(registry: SkillPackageRegistry, name: str):
+    return next(item for item in registry.list() if item.manifest.metadata.name == name)
+
+
 def test_loader_builds_versioned_skill_snapshot():
     package = SkillPackageLoader().load(ROOT / "skills" / "web-research")
 
-    assert package.manifest.metadata.ref == "web-research@1.2.1"
+    assert package.manifest.metadata.name == "web-research"
+    assert package.snapshot.skill_version == package.manifest.metadata.version
     assert package.manifest.capabilities.required == ("analyze_link",)
     assert len(package.snapshot.package_hash) == 64
 
@@ -90,7 +95,7 @@ def test_resolver_projects_agent_and_skill_capability_intersection():
     )
 
     assert invocation is not None
-    assert invocation.ref == "web-research@1.2.1"
+    assert invocation.ref == _skill(skills, "web-research").manifest.metadata.ref
     assert invocation.capabilities == ("analyze_link", "search_knowledge")
 
 
@@ -116,14 +121,14 @@ def test_report_agent_resolves_bounded_meeting_summary_skill():
     )
 
     assert invocation is not None
-    assert invocation.ref == "meeting@1.0.1"
+    assert invocation.ref == _skill(skills, "meeting").manifest.metadata.ref
     assert invocation.capabilities == ("get_posts",)
 
 
 def test_skill_score_prefers_a_matching_personal_default():
     skills, _ = _packages()
-    report = skills.get("report@1.3.1")
-    web = skills.get("web-research@1.2.1")
+    report = _skill(skills, "report")
+    web = _skill(skills, "web-research")
     request = AgentRequest(
         "research",
         "调研市场并生成报告",
@@ -161,7 +166,7 @@ def test_skill_context_exposes_only_validated_selected_package():
 
     with bind_skill_context(context):
         assert get_skill_context() is context
-        assert get_skill_context().skill_ref == "project@1.2.1"
+        assert get_skill_context().skill_ref == package.manifest.metadata.ref
     assert get_skill_context() is None
 
 
@@ -207,9 +212,12 @@ class MeetingRuntime:
 async def test_runtime_rejects_forged_skill_capability_expansion():
     _, agents = _packages()
     package = agents.get("mmchat")
-    skill = package.skills["web-research@1.2.1"]
+    skill = next(
+        item for item in package.skills.values()
+        if item.manifest.metadata.name == "web-research"
+    )
     forged = SkillInvocation(
-        "web-research@1.2.1",
+        skill.manifest.metadata.ref,
         ("analyze_link", "save_knowledge"),
         skill.snapshot.to_dict(),
     )

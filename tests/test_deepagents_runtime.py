@@ -375,7 +375,7 @@ async def test_native_callbacks_write_content_free_model_and_tool_audits(tmp_pat
         request.context,
         request.messages,
         capabilities=request.capabilities,
-        metadata={"agent_ref": "report@2.1.0", "skill_ref": "report@1.3.0"},
+        metadata={"agent_ref": "example-agent@2.1.0", "skill_ref": "example-skill@1.3.0"},
     )
 
     with bind_governance_context(GovernanceContext("user-1", "scope-1")):

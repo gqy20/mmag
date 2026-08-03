@@ -61,11 +61,11 @@ def _package_registry() -> tuple[AgentPackageRegistry, PolicyRegistry, ModelPoli
     return registry, policies, model_policies
 
 
-def test_loader_compiles_direct_manifest_and_version():
+def test_loader_compiles_direct_manifest_and_snapshot():
     package = AgentPackageLoader().load(PACKAGE_ROOT)
 
     assert package.manifest.metadata.name == "link"
-    assert package.snapshot.agent_spec_version == "2.0.1"
+    assert package.snapshot.agent_spec_version == package.manifest.metadata.version
     assert package.manifest.prompt.system_ref is None
     assert package.manifest.runtime.mode == "direct"
     assert package.manifest.runtime.capability == "analyze_link"
@@ -84,14 +84,12 @@ def test_loader_rejects_unknown_manifest_fields(tmp_path):
 
 def test_registry_loads_current_agent_packages():
     registry, _, _ = _package_registry()
-
-    assert {(item.manifest.metadata.name, item.manifest.metadata.version) for item in registry.list()} == {
-        ("link", "2.0.1"),
-        ("mmchat", "2.2.1"),
-        ("ppt", "3.1.2"),
-        ("project", "2.0.2"),
-        ("report", "2.2.1"),
+    package_names = {
+        path.name for path in (ROOT / "agents").iterdir()
+        if path.is_dir() and (path / "agent.yml").is_file()
     }
+
+    assert {item.manifest.metadata.name for item in registry.list()} == package_names
     assert len(registry.get("mmchat").snapshot.skill_set_hash) == 64
 
 
@@ -210,10 +208,6 @@ def test_factory_constructs_every_manifest_without_provider_registry():
     registry = AgentRegistry(factory.create_all(packages.list()))
 
     assert {agent.descriptor.name for agent in registry.list()} == {
-        "link",
-        "mmchat",
-        "ppt",
-        "project",
-        "report",
+        package.manifest.metadata.name for package in packages.list()
     }
     assert registry.default().descriptor.name == "mmchat"
