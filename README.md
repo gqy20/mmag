@@ -251,6 +251,18 @@ MMAG_E2E_ENABLED=1 scripts/record_mattermost_demo.sh
 
 完整依赖、断点续录和剪辑参数见[评估与录制指南](docs/EVALUATION.md)。
 
+## 调试工具
+
+开发时调试命令集，配置放在 `.env.debug`（从 `.env` 继承 `MM_URL` 和 `MM_TOKEN`，补充测试账号和频道 ID）。
+
+```bash
+make debug-status                       # 查看 bot 进程、已加载能力、最近运行
+make debug-test MSG="测试消息"           # 发消息到 mmag-test → 等 bot 回复 → 输出日志+审计
+make debug-update                       # 收集 git log + CHANGELOG → 发到 Bugs 频道
+make debug-collect                      # 拉取 Bugs 频道最近 20 条消息
+make debug-reply POST_ID=xxx MSG="回复"  # 回复 Bugs 频道指定帖子（支持短 ID 前缀）
+```
+
 ## 项目结构
 
 ```text
