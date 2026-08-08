@@ -31,7 +31,7 @@ spec:
   runtime:
     route: default
     max_turns: 10
-    timeout_seconds: 120
+    timeout_seconds: 500
     retry:
       max_attempts: 2
   capabilities:
@@ -44,10 +44,15 @@ spec:
       - get_user_profile
       - analyze_link
       - mcp_crawl_search_*
+      - ppt.build
     deny: []
   skills:
     allow:
       - web-research@1.2.1
+    deny: []
+  execution_profiles:
+    allow:
+      - ppt@2.2.0
     deny: []
   context:
     read_scopes: [conversation, project]

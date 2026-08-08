@@ -3,7 +3,7 @@
   "version": 1,
   "mcpServers": {
     "crawl": {
-      "enabled": false,
+      "enabled": true,
       "type": "stdio",
       "command": "uvx",
       "args": ["crawl-mcp"],

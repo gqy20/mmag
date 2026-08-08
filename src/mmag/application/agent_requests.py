@@ -87,7 +87,7 @@ class AgentRequestHandler:
             return result.text or ""
         except AgentRuntimeError as error:
             log.error("LLM 决策异常: %s", error)
-            return "<SILENT>"
+            return self._runtime_error_text(error)
 
     async def respond(
         self,
@@ -567,6 +567,19 @@ class AgentRequestHandler:
         return self.presenter.error(
             title="系统故障", summary="任务未完成，详情已记录供运维查询。", run_id=run_id
         )
+
+    @staticmethod
+    def _runtime_error_text(error: AgentRuntimeError) -> str:
+        mapping = (
+            (RuntimeTimeoutError, "执行超时，请缩小范围后重试。"),
+            (RuntimeRateLimitError, "模型服务当前限流，请稍后重试。"),
+            (RuntimeRejectedError, "请求未执行：不符合当前执行策略或权限边界。"),
+            (RuntimeUnavailableError, "依赖服务暂时不可用，请稍后重试。"),
+        )
+        for kind, summary in mapping:
+            if isinstance(error, kind):
+                return summary
+        return "处理失败，详情已记录供运维查询。"
 
     def post_scope(self, post: dict) -> str:
         return self.scope_resolver.resolve_post(post).id
