@@ -1,4 +1,4 @@
-.PHONY: help run discover install clean lint format test coverage typecheck build wheel-smoke verify sync
+.PHONY: help run discover install setup-system clean lint format test coverage typecheck build wheel-smoke verify sync
 
 # 默认目标
 help:
@@ -7,6 +7,7 @@ help:
 	@echo "用法:"
 	@echo "  make run        启动 Agent"
 	@echo "  make discover   探测 Mattermost 环境 (Team/Channel/User ID)"
+	@echo "  make setup-system 安装系统依赖 (rsvg-convert, 字体)"
 	@echo "  make install    安装包 (editable 模式)"
 	@echo "  make test       运行测试"
 	@echo "  make coverage   运行测试并检查覆盖率基线"
@@ -30,6 +31,22 @@ run:
 
 discover:
 	uv run python -m mmag.discover
+
+# ---- 系统依赖 ----
+
+setup-system:
+	@echo "安装系统依赖..."
+	@if command -v apt-get >/dev/null 2>&1; then \
+		sudo apt-get update -qq && \
+		sudo apt-get install -y --no-install-recommends librsvg2-bin fonts-noto-cjk; \
+	elif command -v dnf >/dev/null 2>&1; then \
+		sudo dnf install -y librsvg2-tools google-noto-sans-cjk-fonts; \
+	elif command -v yum >/dev/null 2>&1; then \
+		sudo yum install -y librsvg2-tools google-noto-sans-cjk-fonts; \
+	else \
+		echo "不支持的包管理器，请手动安装 librsvg2-bin 和中文字体"; exit 1; \
+	fi
+	@echo "✅ 系统依赖已安装: rsvg-convert, 中文字体"
 
 # ---- 开发工具 ----
 

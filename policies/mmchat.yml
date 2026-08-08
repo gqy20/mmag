@@ -38,6 +38,12 @@ rules:
       channel_id: conversation_id
     reason: Knowledge writes are restricted to the originating channel.
 
+  - id: build-presentation
+    effect: allow
+    actions: [ppt.build]
+    permissions: [artifact:generate]
+    reason: PPT generation is allowed when the slides Skill is active.
+
   - id: approve-allowlisted-mcp
     effect: require_approval
     actions: [mcp_crawl_search_*]

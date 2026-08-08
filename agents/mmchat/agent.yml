@@ -49,6 +49,7 @@ spec:
   skills:
     allow:
       - web-research@1.2.1
+      - slides@3.1.1
     deny: []
   execution_profiles:
     allow:
