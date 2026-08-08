@@ -47,6 +47,7 @@ spec:
       - mcp_tencent_meeting_*
       - tencent_meeting_*
       - tmeet_*
+      - task_*
       - ppt.build
     deny: []
   skills:

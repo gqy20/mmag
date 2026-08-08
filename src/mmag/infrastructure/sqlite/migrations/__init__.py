@@ -653,6 +653,48 @@ def _v020_add_persona_approval_channel(connection: sqlite3.Connection) -> None:
     )
 
 
+_TASKS_SQL = """
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    installation_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    type TEXT NOT NULL DEFAULT 'task',
+    status TEXT NOT NULL DEFAULT 'pending',
+    assignee_id TEXT NOT NULL DEFAULT '',
+    creator_id TEXT NOT NULL DEFAULT '',
+    channel_id TEXT NOT NULL DEFAULT '',
+    scope_id TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'manual',
+    external_id TEXT NOT NULL DEFAULT '',
+    start_time REAL NOT NULL DEFAULT 0,
+    due_time REAL NOT NULL DEFAULT 0,
+    priority INTEGER NOT NULL DEFAULT 1,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+)
+"""
+
+
+def _v021_add_tasks(connection: sqlite3.Connection) -> None:
+    for statement in _TASKS_SQL.split(";"):
+        if statement.strip():
+            connection.execute(statement)
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_assignee "
+        "ON tasks(installation_id, tenant_id, assignee_id, status, due_time)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_channel "
+        "ON tasks(installation_id, tenant_id, channel_id, status, due_time)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status "
+        "ON tasks(installation_id, tenant_id, status, due_time)"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -773,6 +815,12 @@ DEFAULT_MIGRATIONS = (
         name="add persona approval channel",
         checksum=_checksum("v020-add-persona-approval-channel-20260803"),
         upgrade=_v020_add_persona_approval_channel,
+    ),
+    Migration(
+        version=21,
+        name="add task tracking",
+        checksum=_checksum("v021-add-task-tracking-20260808"),
+        upgrade=_v021_add_tasks,
     ),
 )
 

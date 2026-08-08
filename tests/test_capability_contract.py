@@ -81,6 +81,10 @@ def test_builtin_catalog_has_one_runtime_projection():
         "tmeet_transcript_search",
         "tmeet_record_address",
         "tmeet_participants",
+        "create_task",
+        "list_tasks",
+        "update_task",
+        "get_task_overview",
     ]
 
 

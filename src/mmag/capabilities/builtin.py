@@ -15,6 +15,7 @@ from .catalog import (
 from .context import CapabilityContext, get_capability_context
 from .file import create_send_file_capability
 from .link import create_analyze_link_capability
+from .tasks import create_task_capabilities
 from .tencent_meeting import create_tencent_meeting_capabilities
 
 if TYPE_CHECKING:
@@ -50,6 +51,7 @@ def create_builtin_capabilities(
             access_guard=access_guard,
         ),
         *create_tencent_meeting_capabilities(),
+        *create_task_capabilities(memory),
         *additional_specs,
     ]
 
