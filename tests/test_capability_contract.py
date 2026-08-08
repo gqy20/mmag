@@ -68,6 +68,19 @@ def test_builtin_catalog_has_one_runtime_projection():
         "get_user_profile",
         "analyze_link",
         "send_file",
+        "tencent_meeting_auth_login",
+        "tencent_meeting_auth_status",
+        "tencent_meeting_list_meetings",
+        "tencent_meeting_list_ended_meetings",
+        "tencent_meeting_get_meeting",
+        "tencent_meeting_create_meeting",
+        "tencent_meeting_cancel_meeting",
+        "tencent_meeting_list_records",
+        "tencent_meeting_get_smart_minutes",
+        "tmeet_transcript_get",
+        "tmeet_transcript_search",
+        "tmeet_record_address",
+        "tmeet_participants",
     ]
 
 

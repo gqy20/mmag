@@ -44,6 +44,9 @@ spec:
       - get_user_profile
       - analyze_link
       - mcp_crawl_search_*
+      - mcp_tencent_meeting_*
+      - tencent_meeting_*
+      - tmeet_*
       - ppt.build
     deny: []
   skills:

@@ -31,6 +31,7 @@ from .link import create_analyze_link_capability
 from .mcp import create_mcp_capability
 from .ppt import create_ppt_capabilities
 from .registry import CapabilityBinding, CapabilityRegistry
+from .tencent_meeting import create_tencent_meeting_capabilities
 
 __all__ = [
     "AuthorizationDecision",
@@ -59,5 +60,6 @@ __all__ = [
     "create_search_messages_capability",
     "create_save_knowledge_capability",
     "create_send_file_capability",
+    "create_tencent_meeting_capabilities",
     "get_capability_context",
 ]

@@ -2,6 +2,33 @@
   "$schema": "./src/mmag/schemas/mcp-config.schema.json",
   "version": 1,
   "mcpServers": {
+    "tencent_meeting": {
+      "enabled": false,
+      "type": "streamable-http",
+      "url": "https://mcp.meeting.tencent.com/mcp/wemeet-open/v1",
+      "headers": {
+        "Authorization": "Bearer ${TENCENT_MEETING_TOKEN}"
+      },
+      "tools": [
+        "convert_timestamp",
+        "schedule_meeting",
+        "update_meeting",
+        "cancel_meeting",
+        "get_meeting",
+        "get_meeting_by_code",
+        "get_meeting_participants",
+        "get_meeting_invitees",
+        "get_waiting_room",
+        "get_user_meetings",
+        "get_user_ended_meetings",
+        "get_records_list",
+        "get_record_addresses",
+        "get_transcripts_paragraphs",
+        "get_transcripts_details",
+        "search_transcripts",
+        "get_smart_minutes"
+      ]
+    },
     "crawl": {
       "enabled": true,
       "type": "stdio",
