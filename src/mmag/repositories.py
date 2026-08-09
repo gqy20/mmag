@@ -240,7 +240,7 @@ class TaskRepository:
             ),
         )
         self._conn.commit()
-        return {"id": task_id, **task, "created_at": now, "updated_at": now}
+        return self.get(task_id)  # type: ignore[return-value]
 
     def get(self, task_id: str) -> dict | None:
         row = self._conn.execute(
@@ -291,10 +291,9 @@ class TaskRepository:
             return existing
         sets.append("updated_at=?")
         params.append(time.time())
-        params.append(task_id)
         self._conn.execute(
             f"UPDATE tasks SET {', '.join(sets)} WHERE installation_id=? AND tenant_id=? AND id=?",
-            [*params, self._iid, self._tid],  # type: ignore[arg-type]
+            [*params, self._iid, self._tid, task_id],  # type: ignore[arg-type]
         )
         self._conn.commit()
         return self.get(task_id)

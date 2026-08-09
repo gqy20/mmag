@@ -76,8 +76,14 @@ class AgentRequestHandler:
                 post, "chat", personal_preferences=context.get("personal_preferences")
             )
             selection = self.agent_router.default(request)
+            capabilities = self._effective_capabilities(request, selection.agent)
+            if self.scope_resolver.resolve_post(post).kind is ScopeKind.CHANNEL:
+                capabilities = tuple(name for name in capabilities if name != "get_user_profile")
             runtime_request = self.build_run_request(
-                post, context, capabilities=(), max_rounds=config.max_tool_rounds
+                post,
+                context,
+                capabilities=tuple(self.capability_registry.get_schema_list(capabilities)),
+                max_rounds=config.max_tool_rounds,
             )
             result = await self.run_request(
                 post,
@@ -602,11 +608,7 @@ class AgentRequestHandler:
 
     @staticmethod
     def _effective_capabilities(request: AgentRequest, agent: ManagedAgent) -> tuple[str, ...]:
-        return (
-            request.skill.capabilities
-            if request.skill is not None
-            else agent.descriptor.capabilities
-        )
+        return agent.descriptor.capabilities
 
     @staticmethod
     def _effective_execution_profiles(agent: ManagedAgent) -> tuple[str, ...]:

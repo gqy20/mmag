@@ -174,7 +174,7 @@ def _package_governance(
     package: AgentPackage, descriptor: AgentDescriptor, request: AgentRequest
 ) -> GovernanceContext:
     parent = get_governance_context()
-    allowed = request.skill.capabilities if request.skill is not None else descriptor.capabilities
+    allowed = descriptor.capabilities
     return GovernanceContext(
         request.actor_id,
         request.scope,
@@ -408,7 +408,7 @@ class ContractAgentDecorator:
             runtime_request=_constrain_runtime_request(
                 self.package,
                 request.runtime_request,
-                request.skill.capabilities if request.skill is not None else None,
+                None,
             ),
         )
         skill_context = _create_skill_context(
@@ -420,11 +420,7 @@ class ContractAgentDecorator:
             if skill_context is not None
             else nullcontext()
         )
-        allowed_capabilities = (
-            constrained.skill.capabilities
-            if constrained.skill is not None
-            else self.descriptor.capabilities
-        )
+        allowed_capabilities = self.descriptor.capabilities
         with (
             log_context.bind(
                 trace_id=(

@@ -110,17 +110,31 @@ class CapabilityRegistry:
         return binding.executor.authorize(binding.capability, input_data)
 
     def get_schema_list(self, names: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
-        """Project the selected capability allowlist onto the model tool schema."""
-        selected = set(names) if names is not None else None
-        return [
-            {
+        """Project the selected capability allowlist onto the model tool schema.
+
+        Supports trailing ``*`` wildcards (e.g. ``task_*``) in the allow list.
+        """
+        import fnmatch
+
+        if names is None:
+            selected = None
+        else:
+            exact = {n for n in names if "*" not in n}
+            patterns = tuple(n for n in names if "*" in n)
+            selected = exact if not patterns else None
+
+        result = []
+        for t in self._bindings.values():
+            if selected is not None and t.name not in selected and not any(
+                fnmatch.fnmatch(t.name, p) for p in patterns
+            ):
+                continue
+            result.append({
                 "name": t.name,
                 "description": t.description,
                 "input_schema": t.input_schema,
-            }
-            for t in self._bindings.values()
-            if selected is None or t.name in selected
-        ]
+            })
+        return result
 
     async def execute(
         self, name: str, input_data: dict[str, Any], *, preauthorized: bool = False

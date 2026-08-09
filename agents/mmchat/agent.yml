@@ -48,16 +48,14 @@ spec:
       - tencent_meeting_*
       - tmeet_*
       - task_*
-      - ppt.build
+      - delegate_ppt
+      - delegate_report
+      - delegate_project
+      - delegate_link
     deny: []
   skills:
     allow:
       - web-research@1.2.1
-      - slides@3.1.1
-    deny: []
-  execution_profiles:
-    allow:
-      - ppt@2.2.0
     deny: []
   context:
     read_scopes: [conversation, project]

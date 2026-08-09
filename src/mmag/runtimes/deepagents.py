@@ -520,6 +520,8 @@ class DeepAgentRuntime:
                     repaired_fields=repaired_fields,
                 )
         text = _result_text(structured, messages)
+        if structured is None and request.response_schema is None and text:
+            structured = {"text": text}
         usage = _usage(
             messages,
             tool_calls=len(session.calls),

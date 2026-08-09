@@ -201,7 +201,12 @@ def test_factory_constructs_every_manifest_without_provider_registry():
     for spec in create_workspace_capabilities():
         capabilities.register(bind_langgraph_capability(spec, executor=executor))
     factory = AgentFactory(
-        DeepAgentProvider(ModelGateway({"default": StubRuntime()}), capabilities, model_policies),
+        DeepAgentProvider(
+            ModelGateway({"default": StubRuntime()}),
+            capabilities,
+            model_policies,
+            additional_capabilities=("delegate_ppt", "delegate_report", "delegate_project", "delegate_link"),
+        ),
         DirectAgentProvider(capabilities, executor),
     )
 

@@ -20,7 +20,9 @@ from ..agent_system import AgentRegistry, AgentRouter
 from ..capabilities import (
     CapabilityExecutor,
     CapabilityRegistry,
+    bind_langgraph_capability,
     build_builtin_bindings,
+    create_delegate_capabilities,
     create_ppt_capabilities,
 )
 from ..client import MMClient
@@ -75,6 +77,14 @@ log = get_logger(__name__)
 def _validate_database_paths(memory_path: str, checkpoint_path: str) -> None:
     if Path(memory_path).resolve() == Path(checkpoint_path).resolve():
         raise ValueError("MEMORY_DB_PATH and CHECKPOINT_DB_PATH must use separate files")
+
+
+_DELEGATE_CAPABILITY_NAMES = (
+    "delegate_ppt",
+    "delegate_report",
+    "delegate_project",
+    "delegate_link",
+)
 
 
 class Agent:
@@ -199,7 +209,7 @@ class Agent:
                 self.runtime,
                 self.capability_registry,
                 self.model_policy_registry,
-                additional_capabilities=self.mcp_config.capability_names,
+                additional_capabilities=self.mcp_config.capability_names + _DELEGATE_CAPABILITY_NAMES,
                 platform_provenance={
                     "deepagents_version": version("deepagents"),
                     "langgraph_version": version("langgraph"),
@@ -215,6 +225,10 @@ class Agent:
         self.agent_registry = AgentRegistry(
             self.agent_factory.create_all(self.agent_package_registry.list())
         )
+        for delegate_spec in create_delegate_capabilities(self.agent_registry):
+            self.capability_registry.register(
+                bind_langgraph_capability(delegate_spec, executor=self.capability_executor)
+            )
         self.agent_router = AgentRouter(self.agent_registry)
         self.skill_resolver = SkillResolver(
             self.skill_package_registry,

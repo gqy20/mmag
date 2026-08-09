@@ -128,8 +128,7 @@ class DeepAgentProvider:
             personalization = _personalization_instruction(request)
             if personalization:
                 system_prompt = f"{system_prompt.rstrip()}\n\n{personalization}"
-            selected_names = request.skill.capabilities if request.skill is not None else names
-            capabilities = tuple(self.capabilities.get_schema_list(selected_names))
+            capabilities = tuple(self.capabilities.get_schema_list(names))
             runtime_metadata = {
                 "task_id": request.task_id,
                 "agent_ref": (
@@ -150,7 +149,7 @@ class DeepAgentProvider:
                 "model_policy_ref": model_policy.ref,
                 "model_policy_hash": model_policy.sha256,
                 "package_hash": package.snapshot.package_hash,
-                "capabilities": ",".join(selected_names),
+                "capabilities": ",".join(names),
                 "execution_profiles": ",".join(package.execution_profiles),
                 "max_cost_usd": str(package.manifest.budget.max_cost_usd),
                 **self.platform_provenance,
@@ -171,7 +170,7 @@ class DeepAgentProvider:
                     ),
                     max_tokens=model_policy.max_output_tokens,
                     temperature=model_policy.temperature,
-                    response_schema=expected_result_schema(package, request),
+                    response_schema=expected_result_schema(package, request) if request.skill is not None else None,
                     skill_files=project_skill_files(package, request),
                     metadata={**prepared.metadata, **runtime_metadata},
                 )

@@ -26,6 +26,7 @@ from .context import (
     bind_capability_context,
     get_capability_context,
 )
+from .delegate import create_delegate_capabilities
 from .file import create_send_file_capability
 from .link import create_analyze_link_capability
 from .mcp import create_mcp_capability
@@ -61,6 +62,7 @@ __all__ = [
     "create_search_messages_capability",
     "create_save_knowledge_capability",
     "create_send_file_capability",
+    "create_delegate_capabilities",
     "create_tencent_meeting_capabilities",
     "create_task_capabilities",
     "get_capability_context",
