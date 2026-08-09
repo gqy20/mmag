@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -13,12 +12,12 @@ from langchain.agents.middleware import (
     ToolCallLimitMiddleware,
     wrap_model_call,
 )
-from langchain_core.tools import StructuredTool
 
 from ..capabilities import AuthorizationDecision
 
 if TYPE_CHECKING:
     from langchain.agents.middleware.types import AgentMiddleware
+    from langchain_core.tools import StructuredTool
 
     from ..capabilities import CapabilityRegistry
     from .base import RunRequest
@@ -131,16 +130,14 @@ def build_workspace_interrupt_rules(
 def build_tool_discovery(
     tool_schemas: tuple[Mapping[str, Any], ...],
 ) -> tuple[list[StructuredTool], tuple[AgentMiddleware[Any, Any, Any], ...], str]:
-    """Progressive tool disclosure via system prompt catalog + unlock tool.
+    """Progressive tool disclosure via system prompt catalog.
 
     Injects a tool catalog (name + description) into system prompt so the
-    model knows all available capabilities upfront. Tools are hidden from
-    the API tools= list until the model unlocks them via search_tools.
+    model knows all available capabilities upfront with clear guidance on
+    which tool to use. All tool schemas remain in the tools= list for
+    reliability with proxies that may not support dynamic tool overrides.
     """
-    meta_names = {"search_tools"}
-    cap_names = {str(s["name"]) for s in tool_schemas if str(s["name"]) != "search_tools"}
-    discovered: set[str] = set()
-
+    meta_names: set[str] = set()
     catalog: dict[str, Mapping[str, Any]] = {
         str(s["name"]): s for s in tool_schemas if str(s["name"]) not in meta_names
     }
@@ -151,70 +148,8 @@ def build_tool_discovery(
     ]
     catalog_prompt = (
         "\n\n## 可用工具目录\n"
-        "以下是你可使用的全部工具。调用前先用 search_tools(工具名) 解锁参数定义：\n"
+        "以下是你的全部工具。当用户的请求匹配某个工具时，直接调用它：\n"
         + "\n".join(catalog_lines)
     )
 
-    async def search_tools(query: str) -> str:
-        name = query.strip()
-        schema = catalog.get(name)
-        if schema is None:
-            matches = [
-                n for n, s in catalog.items()
-                if name.lower() in n.lower() or name.lower() in str(s.get("description", "")).lower()
-            ]
-            if matches:
-                for m in matches:
-                    discovered.add(m)
-                output = [
-                    {
-                        "name": m,
-                        "description": str(catalog[m].get("description") or m),
-                        "parameters": dict(catalog[m].get("input_schema") or {"type": "object"}),
-                    }
-                    for m in matches
-                ]
-                return json.dumps(
-                    {"count": len(output), "tools": output, "note": "匹配的工具已解锁，可以直接调用"},
-                    ensure_ascii=False,
-                    default=str,
-                )
-            return json.dumps(
-                {"error": f"工具 {name} 不存在", "available": list(catalog.keys())},
-                ensure_ascii=False,
-            )
-        discovered.add(name)
-        return json.dumps(
-            {
-                "name": name,
-                "description": str(schema.get("description") or name),
-                "parameters": dict(schema.get("input_schema") or {"type": "object"}),
-                "note": f"工具 {name} 已解锁，可以直接调用",
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-
-    search_tool = StructuredTool.from_function(
-        coroutine=search_tools,
-        name="search_tools",
-        description="解锁指定工具的参数定义。输入工具名称（如 create_task），返回完整参数 schema 并解锁该工具供直接调用。",
-        args_schema={
-            "type": "object",
-            "properties": {"query": {"type": "string", "description": "要解锁的工具名称"}},
-            "required": ["query"],
-        },
-    )
-
-    @wrap_model_call(name="MMAGToolDiscoveryMiddleware")
-    async def filter_tools(model_request, handler):
-        visible = [
-            tool
-            for tool in model_request.tools
-            if _tool_name(tool) not in cap_names
-            or _tool_name(tool) in meta_names
-            or _tool_name(tool) in discovered
-        ]
-        return await handler(model_request.override(tools=visible))
-
-    return [search_tool], (filter_tools,), catalog_prompt
+    return [], (), catalog_prompt
