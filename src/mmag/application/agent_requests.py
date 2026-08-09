@@ -592,8 +592,9 @@ class AgentRequestHandler:
 
     @staticmethod
     def run_id(post: dict) -> str:
-        post_id = str(post.get("id") or log_context.get("trace_id", "unknown"))
-        return f"mattermost:{post_id}"
+        root_id = str(post.get("root_id") or "")
+        thread = root_id if root_id else str(post.get("id") or log_context.get("trace_id", "unknown"))
+        return f"mattermost:{thread}"
 
     @staticmethod
     def is_silent(text: str) -> bool:

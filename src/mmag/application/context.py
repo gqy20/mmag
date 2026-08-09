@@ -415,24 +415,22 @@ class ContextBuilder:
             )
 
         messages: list[dict[str, Any]] = []
-        previous_ts: float | None = None
-        for item in window[-config.max_context_messages :]:
-            role = "assistant" if item.get("user_id") == self.identity.user_id else "user"
-            timestamp = item.get("create_at") or 0
-            label = format_time_label(timestamp, previous_ts)
-            previous_ts = timestamp or previous_ts
-            raw = str(item.get("message") or "")
-            content = (
-                f"{label} {raw}"
-                if role == "assistant"
-                else (f"{label} {item.get('username', '?')}: {raw}")
-            )
-            messages.append({"role": role, "content": content})
 
         metadata = [
             f"📍 频道: {channel.get('display_name', channel_id[:8])} | "
             f"id={channel_id} | name={channel.get('name', '')}"
         ]
+        if not persona_ref and window:
+            recent = window[-5:]
+            snippets: list[str] = []
+            for item in recent:
+                if item.get("user_id") == self.identity.user_id:
+                    continue
+                uname = item.get("username", "?")
+                msg = str(item.get("message") or "").replace("\n", " ")[:80]
+                snippets.append(f"  - @{uname}: {msg}")
+            if snippets:
+                metadata.append("💬 最近频道消息:\n" + "\n".join(snippets))
         summary = self.memory.get_recent_summary(channel_id) if persona is None else ""
         if summary:
             metadata.append(f"📝 最近讨论摘要: {summary}")
