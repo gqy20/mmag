@@ -171,6 +171,7 @@ def build_tool_discovery(
         return json.dumps(
             {"count": len(output), "tools": output, "note": "匹配的工具已解锁，可以直接调用"},
             ensure_ascii=False,
+            default=str,
         )
 
     search_tool = StructuredTool.from_function(
