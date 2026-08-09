@@ -131,14 +131,16 @@ def build_workspace_interrupt_rules(
 def build_tool_discovery(
     tool_schemas: tuple[Mapping[str, Any], ...],
 ) -> tuple[list[StructuredTool], tuple[AgentMiddleware[Any, Any, Any], ...]]:
-    """Progressive tool disclosure via search_tools + get_tool_details meta-tools.
+    """Progressive tool disclosure via search_tools meta-tool.
 
-    Returns meta-tools to add to the tool list and a middleware that hides
-    capability tools until the model discovers them via get_tool_details.
+    Returns a search_tools meta-tool to add to the tool list and a middleware
+    that hides capability tools until the model discovers them via search.
+    search_tools returns matching tool names + descriptions AND unlocks them
+    for direct use in the next model call.
     Native Deep Agents tools (read_file, ls, etc.) are always visible.
     """
-    meta_names = {"search_tools", "get_tool_details"}
-    cap_names = {str(s["name"]) for s in tool_schemas}
+    meta_names = {"search_tools"}
+    cap_names = {str(s["name"]) for s in tool_schemas if str(s["name"]) != "search_tools"}
     discovered: set[str] = set()
 
     catalog: dict[str, Mapping[str, Any]] = {
@@ -147,66 +149,38 @@ def build_tool_discovery(
 
     async def search_tools(query: str) -> str:
         keywords = [k for k in query.lower().replace(",", " ").replace("：", " ").split() if k]
-        results: list[tuple[int, str, str]] = []
+        results: list[tuple[int, str, Mapping[str, Any]]] = []
         for name, schema in catalog.items():
             text = f"{name} {schema.get('description', '')}".lower()
             score = sum(1 for kw in keywords if kw in text)
             if score > 0:
-                results.append((score, name, str(schema.get("description") or name)))
+                results.append((score, name, schema))
         results.sort(key=lambda r: r[0], reverse=True)
         if not results:
-            return json.dumps(
-                {
-                    "count": len(catalog),
-                    "tools": [
-                        {"name": n, "description": str(s.get("description") or n)}
-                        for n, s in catalog.items()
-                    ],
-                    "hint": "用 get_tool_details(name) 查看工具参数并解锁使用",
-                },
-                ensure_ascii=False,
-            )
-        return json.dumps(
-            {
-                "count": len(results),
-                "tools": [{"name": r[1], "description": r[2]} for r in results],
-                "hint": "用 get_tool_details(name) 查看工具参数并解锁使用",
-            },
-            ensure_ascii=False,
-        )
-
-    async def get_tool_details(name: str) -> str:
-        schema = catalog.get(name)
-        if schema is None:
-            return json.dumps({"error": f"工具 {name} 不存在"}, ensure_ascii=False)
-        discovered.add(name)
-        return json.dumps(
+            results = [(0, n, s) for n, s in catalog.items()]
+        for _, name, _ in results:
+            discovered.add(name)
+        output = [
             {
                 "name": name,
                 "description": str(schema.get("description") or name),
-                "input_schema": schema.get("input_schema") or {"type": "object"},
-            },
+                "parameters": schema.get("input_schema") or {"type": "object"},
+            }
+            for _, name, schema in results
+        ]
+        return json.dumps(
+            {"count": len(output), "tools": output, "note": "匹配的工具已解锁，可以直接调用"},
             ensure_ascii=False,
         )
 
     search_tool = StructuredTool.from_function(
         coroutine=search_tools,
         name="search_tools",
-        description="搜索可用工具。输入关键词（如'创建任务'、'搜索消息'），返回匹配的工具名称和简介。",
+        description="搜索并解锁可用工具。输入关键词（如'创建任务'、'搜索消息'），返回匹配工具的名称、描述和参数定义。搜索后可直接调用解锁的工具。",
         args_schema={
             "type": "object",
             "properties": {"query": {"type": "string", "description": "搜索关键词"}},
             "required": ["query"],
-        },
-    )
-    details_tool = StructuredTool.from_function(
-        coroutine=get_tool_details,
-        name="get_tool_details",
-        description="获取指定工具的完整参数定义。调用后该工具将被解锁供直接使用。",
-        args_schema={
-            "type": "object",
-            "properties": {"name": {"type": "string", "description": "工具名称"}},
-            "required": ["name"],
         },
     )
 
@@ -221,4 +195,4 @@ def build_tool_discovery(
         ]
         return await handler(model_request.override(tools=visible))
 
-    return [search_tool, details_tool], (filter_tools,)
+    return [search_tool], (filter_tools,)
