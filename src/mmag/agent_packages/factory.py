@@ -193,7 +193,7 @@ class DeepAgentProvider:
                 max_tool_calls=package.manifest.budget.max_tool_calls,
                 max_tokens=model_policy.max_output_tokens,
                 temperature=model_policy.temperature,
-                response_schema=expected_result_schema(package, request),
+                response_schema=expected_result_schema(package, request) if request.skill is not None else None,
                 skill_files=project_skill_files(package, request),
                 metadata=runtime_metadata,
             )
