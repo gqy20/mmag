@@ -154,7 +154,15 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         del kwargs
         name = self._tool_names.pop(run_id, "tool")
         duration_ms = self._duration(run_id)
-        output_size = len(output) if isinstance(output, (str, bytes)) else 0
+        if isinstance(output, (str, bytes)):
+            output_size = len(output)
+        elif isinstance(output, list):
+            output_size = sum(
+                len(str(block.get("text", ""))) if isinstance(block, dict) else len(str(block))
+                for block in output
+            )
+        else:
+            output_size = len(str(output)) if output is not None else 0
         self._event(
             "tool.completed",
             "succeeded",

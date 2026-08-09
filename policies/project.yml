@@ -9,6 +9,12 @@ rules:
     permissions: [skill:resource:read]
     reason: Project may load only resources declared by its active Skill.
 
+  - id: manage-tasks
+    effect: allow
+    actions: [create_task, list_tasks, update_task, get_task_overview]
+    permissions: [task:write, task:read]
+    reason: Project agent may create and track organizational items.
+
   - id: read-current-channel
     effect: allow
     actions: [get_channel_info, get_posts, search_messages, search_knowledge]
