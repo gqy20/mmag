@@ -17,28 +17,22 @@ _SUBAGENTS: dict[str, tuple[str, str, str]] = {
     # name → (agent_name, description, intent)
     "delegate_ppt": (
         "ppt",
-        "将 PPT/幻灯片/演示文稿生成任务委托给 PPT 子智能体。"
-        "子智能体拥有独立的 workspace 和 slides 技能，会生成 pptx 文件并交付。"
-        "当用户需要制作 PPT、幻灯片、演示文稿时使用。",
+        "委托 PPT 子智能体生成演示文稿（pptx 文件）。",
         "presentation",
     ),
     "delegate_report": (
         "report",
-        "将研究报告/会议纪要/调研报告生成任务委托给 Report 子智能体。"
-        "子智能体会搜索消息和知识库、分析链接，生成结构化报告。"
-        "当用户需要研报、会议纪要、调研报告时使用。",
+        "委托 Report 子智能体生成研究报告或会议纪要。",
         "report",
     ),
     "delegate_project": (
         "project",
-        "将项目计划/任务拆解/里程碑整理任务委托给 Project 子智能体。"
-        "当用户需要项目计划、任务拆解、进度跟踪时使用。",
+        "委托 Project 子智能体生成项目计划、里程碑规划或进度简报。",
         "project",
     ),
     "delegate_link": (
         "link",
-        "将链接分析任务委托给 Link 子智能体。"
-        "当用户需要分析、总结某个 URL 的内容时使用。",
+        "委托 Link 子智能体分析指定 URL 的网页内容。",
         "link",
     ),
 }

@@ -36,20 +36,16 @@ def create_create_task_capability(memory: Memory) -> CapabilitySpec:
 
     return CapabilitySpec(
         name="create_task",
-        description=(
-            "创建一个事项（任务/会议/OKR）。用于从对话中提取并登记待跟踪的工作项。"
-            "type 可选: task(默认)、meeting、okr。priority: 0-低 1-中 2-高。"
-            "due_time 为 Unix 秒级时间戳，0 表示无截止时间。"
-        ),
+        description="创建任务。当用户要求创建任务、待办、工单时使用此工具。",
         input_schema={
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "事项标题 (必填)"},
-                "assignee_id": {"type": "string", "description": "负责人 user_id (可选)"},
+                "title": {"type": "string", "description": "任务标题"},
+                "assignee_id": {"type": "string", "description": "负责人 user_id"},
                 "description": {"type": "string", "description": "详细描述"},
-                "task_type": {"type": "string", "description": "类型: task/meeting/okr", "default": "task"},
+                "task_type": {"type": "string", "enum": ["task", "meeting", "okr"], "description": "任务类型", "default": "task"},
                 "due_time": {"type": "number", "description": "截止时间 Unix 秒, 0=无截止", "default": 0},
-                "priority": {"type": "integer", "description": "优先级 0-低 1-中 2-高", "default": 1},
+                "priority": {"type": "integer", "enum": [0, 1, 2], "description": "0=低 1=中 2=高", "default": 1},
                 "channel_id": {"type": "string", "description": "所属频道 ID"},
                 "creator_id": {"type": "string", "description": "创建人 user_id"},
             },
@@ -86,12 +82,7 @@ def create_list_tasks_capability(memory: Memory) -> CapabilitySpec:
 
     return CapabilitySpec(
         name="list_tasks",
-        description=(
-            "查询事项列表。可按负责人、状态、类型、频道、截止时间过滤。"
-            "status: pending/in_progress/done/cancelled。"
-            "due_before: 返回截止时间在此 Unix 秒之前的事项 (用于查临期/逾期)。"
-            "全部过滤条件留空 = 返回所有事项。"
-        ),
+        description="查询任务列表。可按负责人、状态、频道、截止时间过滤。",
         input_schema={
             "type": "object",
             "properties": {
@@ -138,19 +129,16 @@ def create_update_task_capability(memory: Memory) -> CapabilitySpec:
 
         task = memory.repositories.tasks.update(task_id, updates)
         if not task:
-            return {"status": "error", "error": f"事项 {task_id} 不存在"}
+            return {"status": "error", "error": f"任务 {task_id} 不存在"}
         return {"status": "ok", "task": _format_task(task)}
 
     return CapabilitySpec(
         name="update_task",
-        description=(
-            "更新事项状态、负责人、截止时间等。至少需要提供一个要更新的字段。"
-            "status 可选: pending/in_progress/done/cancelled。"
-        ),
+        description="更新任务状态、负责人、标题、截止时间等。",
         input_schema={
             "type": "object",
             "properties": {
-                "task_id": {"type": "string", "description": "事项 ID (必填)"},
+                "task_id": {"type": "string", "description": "任务 ID"},
                 "status": {"type": "string", "description": "pending/in_progress/done/cancelled"},
                 "assignee_id": {"type": "string", "description": "新的负责人"},
                 "title": {"type": "string", "description": "新标题"},
@@ -183,10 +171,7 @@ def create_get_task_overview_capability(memory: Memory) -> CapabilitySpec:
 
     return CapabilitySpec(
         name="get_task_overview",
-        description=(
-            "获取事项总览（组织视图）。返回各状态的数量统计和逾期事项列表。"
-            "可按频道过滤。用于回答'团队进度怎么样''有什么逾期的'等问题。"
-        ),
+        description="获取任务总览：各状态数量统计和逾期任务列表。",
         input_schema={
             "type": "object",
             "properties": {
