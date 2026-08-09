@@ -501,6 +501,7 @@ class DeepAgentRuntime:
         structured = dict(output) if isinstance(output, Mapping) else None
         repaired_fields = 0
         messages = list(state.get("messages") or ())
+        _log_final_messages(messages, session)
         if structured is None and request.response_schema is not None:
             fallback = _text_result_fallback(messages, request.response_schema)
             if fallback is not None:
@@ -578,6 +579,46 @@ class DeepAgentRuntime:
     ) -> None:
         if request.event_sink is not None:
             await request.event_sink(RunEvent(kind, text=text, name=name))
+
+
+def _log_final_messages(messages: list[Any], session: _RunSession) -> None:
+    """Diagnose whether the model made tool calls or just generated text."""
+    last_ai: AIMessage | None = None
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            last_ai = msg
+            break
+    if last_ai is None:
+        log_event(log, "model.final_messages", status="no_ai_message", message_count=len(messages))
+        return
+    response_metadata = getattr(last_ai, "response_metadata", None) or {}
+    stop_reason = response_metadata.get("stop_reason") or response_metadata.get("stop") or ""
+    tool_calls = getattr(last_ai, "tool_calls", None) or []
+    content = last_ai.content
+    block_types: list[str] = []
+    text_preview = ""
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict):
+                bt = str(block.get("type", "?"))
+                if bt not in block_types:
+                    block_types.append(bt)
+                if bt == "text" and not text_preview:
+                    raw = str(block.get("text") or "")
+                    text_preview = raw[:200]
+    elif isinstance(content, str):
+        block_types = ["text"]
+        text_preview = content[:200]
+    log_event(
+        log,
+        "model.final_messages",
+        message_count=len(messages),
+        stop_reason=str(stop_reason),
+        tool_call_names=[str(tc.get("name", "?")) for tc in tool_calls] if tool_calls else [],
+        content_block_types=block_types,
+        text_preview=text_preview,
+        capability_calls=len(session.calls),
+    )
 
 
 def _provider_tool_content(payload: Any) -> str:

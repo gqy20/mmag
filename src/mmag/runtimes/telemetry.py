@@ -53,10 +53,22 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
-        del messages, kwargs
         self._started[run_id] = time.monotonic()
         model = _component_name(serialized, "chat_model")
-        self._event("model.started", "running", model=model)
+        prior_tool_calls = 0
+        for msg_list in messages:
+            for msg in msg_list:
+                prior_tool_calls = len(getattr(msg, "tool_calls", []) or [])
+                break
+            break
+        msg_count = sum(len(ml) for ml in messages)
+        self._event(
+            "model.started",
+            "running",
+            model=model,
+            message_count=msg_count,
+            prior_tool_calls=prior_tool_calls,
+        )
         self._audit("model.call", model, "running", run_id, parent_run_id)
 
     async def on_llm_end(
@@ -70,10 +82,41 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         del kwargs
         duration_ms = self._duration(run_id)
         usage = _usage(response)
+        # Diagnose whether the model returned tool calls
+        stop_reasons: list[str] = []
+        response_tool_calls: list[str] = []
+        content_block_types: list[str] = []
+        for generations in response.generations:
+            for generation in generations:
+                message = getattr(generation, "message", None)
+                if message is None:
+                    continue
+                stop = getattr(message, "response_metadata", None)
+                if isinstance(stop, dict):
+                    reason = stop.get("stop_reason") or stop.get("stop") or ""
+                    if reason:
+                        stop_reasons.append(str(reason))
+                tc = getattr(message, "tool_calls", None) or []
+                response_tool_calls.extend(
+                    str(tc_item.get("name", "?")) if isinstance(tc_item, dict) else "?"
+                    for tc_item in tc
+                )
+                content = getattr(message, "content", None)
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            bt = str(block.get("type", "?"))
+                            if bt not in content_block_types:
+                                content_block_types.append(bt)
+                elif isinstance(content, str) and content and "text" not in content_block_types:
+                    content_block_types.append("text")
         self._event(
             "model.completed",
             "succeeded",
             duration_ms=duration_ms,
+            stop_reason=",".join(stop_reasons) if stop_reasons else "",
+            response_tool_calls=response_tool_calls or None,
+            content_block_types=content_block_types or None,
             **usage,
         )
         self._audit(
