@@ -53,6 +53,7 @@ from .base import (
 from .harness import (
     build_run_limit_middleware,
     build_state_filesystem_permissions,
+    build_tool_discovery,
     build_tool_visibility_middleware,
     build_workspace_interrupt_rules,
 )
@@ -325,6 +326,8 @@ class DeepAgentRuntime:
             if str(schema["name"]) not in {"workspace.read", "workspace.write", "workspace.execute"}
             and (str(schema["name"]) != "workspace.commit" or workspace_enabled)
         ]
+        discovery_tools, discovery_middleware = build_tool_discovery(request.capabilities)
+        tools.extend(discovery_tools)
         interrupt_capabilities = tuple(
             schema
             for schema in request.capabilities
@@ -354,6 +357,7 @@ class DeepAgentRuntime:
             subagents=[],
             middleware=(
                 *build_run_limit_middleware(request),
+                *discovery_middleware,
                 *build_tool_visibility_middleware(
                     request,
                     execute_enabled=workspace_enabled,
