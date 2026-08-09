@@ -164,7 +164,7 @@ def build_tool_discovery(
             {
                 "name": name,
                 "description": str(schema.get("description") or name),
-                "parameters": schema.get("input_schema") or {"type": "object"},
+                "parameters": dict(schema.get("input_schema") or {"type": "object"}),
             }
             for _, name, schema in results
         ]
