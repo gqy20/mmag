@@ -57,12 +57,13 @@ def _create_delegate_capability(
         except LookupError:
             return {"status": "error", "error": f"子智能体 {agent_name} 未注册"}
 
+        import uuid
         request = AgentRequest(
             intent=intent,
             prompt=task,
             actor_id=log_context.get("actor_id", "mmchat"),
             task_id=log_context.get("trace_id", ""),
-            run_id=log_context.get("run_id", ""),
+            run_id=f"delegate:{agent_name}:{uuid.uuid4().hex[:16]}",
         )
 
         log_event(log, "delegate.started", status="running",
