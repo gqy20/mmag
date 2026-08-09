@@ -146,19 +146,34 @@ def build_tool_discovery(
     }
 
     async def search_tools(query: str) -> str:
-        keywords = [k for k in query.lower().replace(",", " ").split() if k]
-        results: list[dict[str, str]] = []
+        keywords = [k for k in query.lower().replace(",", " ").replace("：", " ").split() if k]
+        results: list[tuple[int, str, str]] = []
         for name, schema in catalog.items():
             text = f"{name} {schema.get('description', '')}".lower()
             score = sum(1 for kw in keywords if kw in text)
             if score > 0:
-                results.append({"name": name, "description": str(schema.get("description") or name)})
+                results.append((score, name, str(schema.get("description") or name)))
+        results.sort(key=lambda r: r[0], reverse=True)
         if not results:
-            results = [
-                {"name": name, "description": str(schema.get("description") or name)}
-                for name, schema in catalog.items()
-            ]
-        return json.dumps({"count": len(results), "tools": results}, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "count": len(catalog),
+                    "tools": [
+                        {"name": n, "description": str(s.get("description") or n)}
+                        for n, s in catalog.items()
+                    ],
+                    "hint": "用 get_tool_details(name) 查看工具参数并解锁使用",
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "count": len(results),
+                "tools": [{"name": r[1], "description": r[2]} for r in results],
+                "hint": "用 get_tool_details(name) 查看工具参数并解锁使用",
+            },
+            ensure_ascii=False,
+        )
 
     async def get_tool_details(name: str) -> str:
         schema = catalog.get(name)
