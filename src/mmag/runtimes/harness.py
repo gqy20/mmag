@@ -163,19 +163,26 @@ def build_tool_discovery(
                 n for n, s in catalog.items()
                 if name.lower() in n.lower() or name.lower() in str(s.get("description", "")).lower()
             ]
-            if len(matches) == 1:
-                schema = catalog[matches[0]]
-                name = matches[0]
-            elif matches:
+            if matches:
+                for m in matches:
+                    discovered.add(m)
+                output = [
+                    {
+                        "name": m,
+                        "description": str(catalog[m].get("description") or m),
+                        "parameters": dict(catalog[m].get("input_schema") or {"type": "object"}),
+                    }
+                    for m in matches
+                ]
                 return json.dumps(
-                    {"error": f"找到多个匹配工具: {matches}", "hint": "请指定完整工具名"},
+                    {"count": len(output), "tools": output, "note": "匹配的工具已解锁，可以直接调用"},
                     ensure_ascii=False,
+                    default=str,
                 )
-            else:
-                return json.dumps(
-                    {"error": f"工具 {name} 不存在", "available": list(catalog.keys())},
-                    ensure_ascii=False,
-                )
+            return json.dumps(
+                {"error": f"工具 {name} 不存在", "available": list(catalog.keys())},
+                ensure_ascii=False,
+            )
         discovered.add(name)
         return json.dumps(
             {
