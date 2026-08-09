@@ -130,14 +130,12 @@ def build_workspace_interrupt_rules(
 
 def build_tool_discovery(
     tool_schemas: tuple[Mapping[str, Any], ...],
-) -> tuple[list[StructuredTool], tuple[AgentMiddleware[Any, Any, Any], ...]]:
-    """Progressive tool disclosure via search_tools meta-tool.
+) -> tuple[list[StructuredTool], tuple[AgentMiddleware[Any, Any, Any], ...], str]:
+    """Progressive tool disclosure via system prompt catalog + unlock tool.
 
-    Returns a search_tools meta-tool to add to the tool list and a middleware
-    that hides capability tools until the model discovers them via search.
-    search_tools returns matching tool names + descriptions AND unlocks them
-    for direct use in the next model call.
-    Native Deep Agents tools (read_file, ls, etc.) are always visible.
+    Injects a tool catalog (name + description) into system prompt so the
+    model knows all available capabilities upfront. Tools are hidden from
+    the API tools= list until the model unlocks them via search_tools.
     """
     meta_names = {"search_tools"}
     cap_names = {str(s["name"]) for s in tool_schemas if str(s["name"]) != "search_tools"}
@@ -147,29 +145,45 @@ def build_tool_discovery(
         str(s["name"]): s for s in tool_schemas if str(s["name"]) not in meta_names
     }
 
+    catalog_lines = [
+        f"- {name}: {str(schema.get('description') or name)}"
+        for name, schema in catalog.items()
+    ]
+    catalog_prompt = (
+        "\n\n## 可用工具目录\n"
+        "以下是你可使用的全部工具。调用前先用 search_tools(工具名) 解锁参数定义：\n"
+        + "\n".join(catalog_lines)
+    )
+
     async def search_tools(query: str) -> str:
-        keywords = [k for k in query.lower().replace(",", " ").replace("：", " ").split() if k]
-        results: list[tuple[int, str, Mapping[str, Any]]] = []
-        for name, schema in catalog.items():
-            text = f"{name} {schema.get('description', '')}".lower()
-            score = sum(1 for kw in keywords if kw in text)
-            if score > 0:
-                results.append((score, name, schema))
-        results.sort(key=lambda r: r[0], reverse=True)
-        if not results:
-            results = [(0, n, s) for n, s in catalog.items()]
-        for _, name, _ in results:
-            discovered.add(name)
-        output = [
+        name = query.strip()
+        schema = catalog.get(name)
+        if schema is None:
+            matches = [
+                n for n, s in catalog.items()
+                if name.lower() in n.lower() or name.lower() in str(s.get("description", "")).lower()
+            ]
+            if len(matches) == 1:
+                schema = catalog[matches[0]]
+                name = matches[0]
+            elif matches:
+                return json.dumps(
+                    {"error": f"找到多个匹配工具: {matches}", "hint": "请指定完整工具名"},
+                    ensure_ascii=False,
+                )
+            else:
+                return json.dumps(
+                    {"error": f"工具 {name} 不存在", "available": list(catalog.keys())},
+                    ensure_ascii=False,
+                )
+        discovered.add(name)
+        return json.dumps(
             {
                 "name": name,
                 "description": str(schema.get("description") or name),
                 "parameters": dict(schema.get("input_schema") or {"type": "object"}),
-            }
-            for _, name, schema in results
-        ]
-        return json.dumps(
-            {"count": len(output), "tools": output, "note": "匹配的工具已解锁，可以直接调用"},
+                "note": f"工具 {name} 已解锁，可以直接调用",
+            },
             ensure_ascii=False,
             default=str,
         )
@@ -177,10 +191,10 @@ def build_tool_discovery(
     search_tool = StructuredTool.from_function(
         coroutine=search_tools,
         name="search_tools",
-        description="搜索并解锁可用工具。输入关键词（如'创建任务'、'搜索消息'），返回匹配工具的名称、描述和参数定义。搜索后可直接调用解锁的工具。",
+        description="解锁指定工具的参数定义。输入工具名称（如 create_task），返回完整参数 schema 并解锁该工具供直接调用。",
         args_schema={
             "type": "object",
-            "properties": {"query": {"type": "string", "description": "搜索关键词"}},
+            "properties": {"query": {"type": "string", "description": "要解锁的工具名称"}},
             "required": ["query"],
         },
     )
@@ -196,4 +210,4 @@ def build_tool_discovery(
         ]
         return await handler(model_request.override(tools=visible))
 
-    return [search_tool], (filter_tools,)
+    return [search_tool], (filter_tools,), catalog_prompt

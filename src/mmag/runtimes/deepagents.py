@@ -326,7 +326,7 @@ class DeepAgentRuntime:
             if str(schema["name"]) not in {"workspace.read", "workspace.write", "workspace.execute"}
             and (str(schema["name"]) != "workspace.commit" or workspace_enabled)
         ]
-        discovery_tools, discovery_middleware = build_tool_discovery(request.capabilities)
+        discovery_tools, discovery_middleware, catalog_prompt = build_tool_discovery(request.capabilities)
         tools.extend(discovery_tools)
         interrupt_capabilities = tuple(
             schema
@@ -351,7 +351,7 @@ class DeepAgentRuntime:
                 temperature=request.temperature,
             ),
             tools=tools,
-            system_prompt=request.system_prompt,
+            system_prompt=request.system_prompt + catalog_prompt,
             backend=backend,
             skills=["/skills/"] if request.skill_files else None,
             subagents=[],
