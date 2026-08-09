@@ -63,16 +63,33 @@ def _validate_agent_output(
     envelope: Mapping[str, Any],
 ) -> None:
     asset = package.schemas[package.manifest.result_schema_ref]
-    if request.skill is None:
+    runtime_request = request.runtime_request
+    response_schema = (
+        runtime_request.response_schema
+        if isinstance(runtime_request, RunRequest)
+        else None
+    )
+    if request.skill is None and response_schema is None:
+        result = envelope.get("result")
+        if isinstance(result, Mapping) and set(result.keys()) <= {"text"}:
+            schema = dict(asset.schema)
+            properties = dict(schema.get("properties", {}))
+            properties["result"] = {"type": "object"}
+            schema["properties"] = properties
+            _validate_schema(schema, envelope, direction="output")
+            return
         _validate(asset, envelope, direction="output")
         return
-    # A selected Skill owns and already validates the exact result contract. The Agent
-    # contract still validates the governed envelope without duplicating every Skill schema.
-    schema = dict(asset.schema)
-    properties = dict(schema.get("properties", {}))
-    properties["result"] = {"type": "object"}
-    schema["properties"] = properties
-    _validate_schema(schema, envelope, direction="output")
+    if request.skill is not None:
+        # A selected Skill owns and already validates the exact result contract. The Agent
+        # contract still validates the governed envelope without duplicating every Skill schema.
+        schema = dict(asset.schema)
+        properties = dict(schema.get("properties", {}))
+        properties["result"] = {"type": "object"}
+        schema["properties"] = properties
+        _validate_schema(schema, envelope, direction="output")
+        return
+    _validate(asset, envelope, direction="output")
 
 
 def _render(asset: PromptAsset, variables: Mapping[str, Any]) -> str:
