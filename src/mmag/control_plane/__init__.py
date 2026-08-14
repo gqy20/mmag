@@ -68,6 +68,7 @@ from .personal_skills import PersonalSkillStore
 from .personas import DigitalPersonaStore
 from .pipeline import MessagePipeline, PartitionedScheduler
 from .store import SQLiteControlPlane
+from .task_drafts import TaskDraft, TaskDraftState, TaskDraftStore
 from .work_cases import InteractionSessionStore, WorkCaseStore
 
 __all__ = [
@@ -125,6 +126,9 @@ __all__ = [
     "scope_resource_id",
     "StateTransition",
     "Task",
+    "TaskDraft",
+    "TaskDraftState",
+    "TaskDraftStore",
     "TaskState",
     "TaskStep",
     "WorkCase",

@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from mmag.application import BotIdentity, MattermostDelivery  # noqa: E402
+from mmag.application.views import ResponseKind, ResponseView, RunStatus  # noqa: E402
 from mmag.client import PROP_FROM_BOT, PROP_TRUE  # noqa: E402
 
 
@@ -87,6 +88,28 @@ class TestSendGetAck:
 
         call_kwargs = a.mm.send_post.call_args
         assert call_kwargs.kwargs["root_id"] == ""
+
+
+def test_render_messages_reuses_validated_ingress_scope_without_network_lookup():
+    delivery = _make_delivery()
+    post = {
+        "id": "msg_abc",
+        "channel_id": "ch1",
+        "user_id": "user1",
+        "_scope_id": "mattermost:default:default:chn:ch1",
+    }
+    view = ResponseView(
+        kind=ResponseKind.RESULT,
+        title="任务草案已确认",
+        summary="已创建任务。",
+        status=RunStatus.SUCCEEDED,
+        run_id="mattermost:msg_abc",
+    )
+
+    messages = delivery.render_messages(post, view)
+
+    assert messages[0].scope_id == post["_scope_id"]
+    delivery.mm.get_channel.assert_not_called()
 
 
 # ---- _typing_loop ----

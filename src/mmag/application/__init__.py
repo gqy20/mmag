@@ -14,6 +14,7 @@ from .message_handler import MessageHandler
 from .probe import MattermostCapabilities, MattermostCapabilityProbe
 from .render import MattermostRenderer, RenderedResponse, split_markdown
 from .stream import MattermostStream
+from .task_drafts import TaskDraftCoordinator
 from .views import (
     ResponseAction,
     ResponseArtifact,
@@ -40,6 +41,7 @@ __all__ = [
     "MessageHandler",
     "MattermostRenderer",
     "MattermostStream",
+    "TaskDraftCoordinator",
     "RenderedResponse",
     "ResponseAction",
     "ResponseArtifact",

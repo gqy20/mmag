@@ -26,6 +26,7 @@ from .delivery import OUTBOUND_COLLECTOR, MattermostDelivery
 from .persona_replies import PersonaReplyCoordinator
 from .persona_ui import PersonaWorkspaceUI
 from .personal_ui import PersonalWorkspaceUI
+from .task_drafts import TaskDraftCoordinator
 
 if TYPE_CHECKING:
     from ..skill_packages import SkillResolver
@@ -63,6 +64,8 @@ class MessageHandler:
         memory_items=None,
         personas=None,
         persona_replies=None,
+        task_drafts=None,
+        access_guard=None,
     ) -> None:
         self.mm = mm_client
         self.memory = memory
@@ -109,6 +112,19 @@ class MessageHandler:
             if personas is not None and memory_items is not None
             else None
         )
+        self.task_drafts = (
+            TaskDraftCoordinator(
+                store=task_drafts,
+                memory=memory,
+                capability_registry=capability_registry,
+                access_guard=access_guard,
+                scope_resolver=self.scope_resolver,
+                action_tokens=action_tokens,
+                audit_store=audit_store,
+            )
+            if task_drafts is not None and access_guard is not None
+            else None
+        )
         self.agent_requests = AgentRequestHandler(
             capability_registry=capability_registry,
             agent_router=agent_router,
@@ -120,6 +136,7 @@ class MessageHandler:
             scope_resolver=self.scope_resolver,
             personal_ui=self.personal_ui,
             action_tokens=action_tokens,
+            task_drafts=self.task_drafts,
         )
         self.persona_replies = (
             PersonaReplyCoordinator(
@@ -245,7 +262,14 @@ class MessageHandler:
         token = OUTBOUND_COLLECTOR.set(collector)
         try:
             await self.process_posted_event(dict(event.payload))
-            return tuple(collector)
+            messages = tuple(collector)
+            log_event(
+                log,
+                "inbox.processor_completed",
+                status="completed",
+                outbound_count=len(messages),
+            )
+            return messages
         finally:
             OUTBOUND_COLLECTOR.reset(token)
 
@@ -383,6 +407,19 @@ class MessageHandler:
                     typing_task.cancel()
                 return
         approval = self.approval_command(message, bot_username=self.identity.username)
+        task_draft_command = (
+            self.task_drafts.parse_command(message, bot_username=self.identity.username)
+            if self.task_drafts is not None
+            else None
+        )
+        if task_draft_command is not None:
+            await self._handle_task_draft_command(
+                post,
+                task_draft_command,
+                scope=access_scope,
+                status_post_id=status_post_id,
+            )
+            return
         if approval is not None:
             with log_context.bind(operation="approval"):
                 await self._handle_approval_command(post, approval)
@@ -501,6 +538,39 @@ class MessageHandler:
             if self.persona_replies is None:
                 raise RuntimeError("persona reply approval is not configured")
             return await self.persona_replies.handle_action(payload, claims, actor_id)
+        if claims.action.startswith("task_draft_"):
+            if self.task_drafts is None:
+                raise RuntimeError("task draft workflow is not configured")
+            action_post = await load_action_post(
+                self.mm,
+                payload,
+                channel_id=channel_id,
+                bot_user_id=self.identity.user_id,
+            )
+            claims = self.action_tokens.consume(str(token), actor_id=actor_id)
+            scope = self.scope_resolver.resolve_post(
+                {"channel_id": channel_id, "user_id": actor_id}
+            )
+            draft, message = await self.task_drafts.decide(
+                claims.target,
+                actor_id=actor_id,
+                scope=scope,
+                approved=claims.action == "task_draft_commit",
+            )
+            log_event(
+                log,
+                "mattermost.action_completed",
+                status="completed",
+                action=claims.action,
+                action_jti=claims.jti,
+            )
+            return preserve_action_post(
+                action_post,
+                payload,
+                message,
+                terminal=True,
+                status="succeeded" if draft.task_ids else "rejected",
+            )
         if claims.action == "persona_policy_edit":
             return await self._open_persona_policy_dialog(payload, claims, actor_id)
         if claims.action.startswith("persona_"):
@@ -723,6 +793,59 @@ class MessageHandler:
             post,
             view,
             delivery_key=f"{claims.run_id}:action:{claims.jti}",
+        )
+
+    async def _handle_task_draft_command(
+        self,
+        post: dict,
+        command: tuple[bool, str],
+        *,
+        scope,
+        status_post_id: str,
+    ) -> None:
+        if self.task_drafts is None:
+            return
+        approved, draft_id = command
+        try:
+            draft, message = await self.task_drafts.decide(
+                draft_id,
+                actor_id=str(post.get("user_id") or ""),
+                scope=scope,
+                approved=approved,
+            )
+            view = self.task_drafts.result_view(draft, message)
+        except (KeyError, PermissionError, RuntimeError, ValueError) as error:
+            log_event(
+                log,
+                "task_draft.command_failed",
+                status="failed",
+                error_code=type(error).__name__,
+            )
+            log.warning("任务草案命令处理失败: %s", error)
+            view = self.presenter.error(
+                title="任务草案处理失败",
+                summary="无法处理该草案，请确认草案 ID、当前会话、创建者和草案状态。",
+                run_id=self._run_id(post),
+            )
+        log_event(
+            log,
+            "task_draft.response_ready",
+            status="ready",
+            draft_id=draft_id,
+            approved=approved,
+        )
+        await self.delivery.reply_view(
+            post,
+            view,
+            update_post_id=status_post_id,
+            delivery_key=self._run_id(post),
+            agent_run_id=f"run:{post['id']}",
+        )
+        log_event(
+            log,
+            "task_draft.response_collected",
+            status="completed",
+            draft_id=draft_id,
         )
 
     def post_scope(self, post: dict) -> str:

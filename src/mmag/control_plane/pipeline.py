@@ -246,12 +246,34 @@ class MessagePipeline:
                 self._append_inbox_audit(event, "failed", record.attempts, error)
                 self._fail_execution(event, str(error))
                 return
-            self._complete_execution(event, messages)
+            try:
+                self._complete_execution(event, messages)
+            except Exception as error:
+                record = self.store.get_inbox(event.event_id)
+                self.store.mark_inbox_failed(event.event_id, str(error))
+                self._append_inbox_audit(event, "failed", record.attempts, error)
+                self._fail_execution(event, str(error))
+                log_event(
+                    log,
+                    "outbox.batch.failed",
+                    level=40,
+                    status="failed",
+                    run_id=f"run:{event.event_id}",
+                    error_code=type(error).__name__,
+                    delivery_count=len(messages),
+                )
             return
 
     def _complete_execution(
         self, event: InboundEvent, messages: tuple[OutboundMessage, ...]
     ) -> None:
+        log_event(
+            log,
+            "outbox.batch.committing",
+            status="running",
+            run_id=f"run:{event.event_id}",
+            delivery_count=len(messages),
+        )
         self.store.complete_event(event.event_id, messages)
         log_event(
             log,

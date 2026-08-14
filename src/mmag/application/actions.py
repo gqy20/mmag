@@ -55,6 +55,8 @@ _ALLOWED_ACTIONS = frozenset(
         "persona_reply_reject",
         "persona_policy_edit",
         "persona_policy_submit",
+        "task_draft_commit",
+        "task_draft_reject",
     }
 )
 _MAX_TOKEN_BYTES = 8_192

@@ -54,6 +54,31 @@ def test_report_presenter_exposes_readable_contract_not_raw_json():
     assert "#fragment" not in markdown
 
 
+def test_meeting_presenter_labels_owner_as_related_person_without_mentioning():
+    output = AgentOutput(
+        text="meeting",
+        agent_name="report",
+        result={
+            "title": "会议纪要",
+            "summary": "完成",
+            "message_range": {"type": "thread", "source_post_ids": ["p1"]},
+            "action_items": [
+                {
+                    "content": "整理文档",
+                    "owner_username": "@alice",
+                    "due_date": None,
+                    "source_post_ids": ["p1"],
+                }
+            ],
+        },
+    )
+
+    rendered = MattermostRenderer().render(ResponsePresenter().present(output))
+
+    assert "相关人物：@\u200balice" in rendered.chunks[0]
+    assert "负责人：" not in rendered.chunks[0]
+
+
 def test_markdown_split_closes_and_reopens_fences():
     markdown = "### Result\n\n```python\n" + "x = 1\n" * 300 + "```"
 

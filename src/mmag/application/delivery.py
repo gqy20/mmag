@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING
 
 from ..client import PROP_FROM_BOT, PROP_TRUE
 from ..config import config
-from ..control_plane import MattermostAccessGuard, MattermostScopeResolver, OutboundMessage
+from ..control_plane import (
+    MattermostAccessGuard,
+    MattermostScopeResolver,
+    OutboundMessage,
+    ScopeKind,
+)
 from ..logger import get_logger, log_event, safe_hash
 
 if TYPE_CHECKING:
@@ -328,6 +333,26 @@ class MattermostDelivery:
         return str(post.get("root_id") or post.get("id") or "")
 
     def scope(self, post: dict) -> str:
+        trusted_scope = str(post.get("_scope_id") or "")
+        if trusted_scope:
+            try:
+                installation_id, tenant_id, kind, resource_id = self.scope_resolver.parse(
+                    trusted_scope
+                )
+            except ValueError:
+                pass
+            else:
+                expected_resource = (
+                    str(post.get("user_id") or "")
+                    if kind is ScopeKind.PERSONAL
+                    else str(post.get("channel_id") or "")
+                )
+                if (
+                    installation_id == self.scope_resolver.installation_id
+                    and tenant_id == self.scope_resolver.tenant_id
+                    and resource_id == expected_resource
+                ):
+                    return trusted_scope
         return self.scope_resolver.resolve_post(post).id
 
     def _record(

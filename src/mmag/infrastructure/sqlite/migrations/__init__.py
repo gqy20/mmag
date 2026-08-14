@@ -707,6 +707,34 @@ def _v022_add_scoped_task_idempotency(connection: sqlite3.Connection) -> None:
     )
 
 
+def _v023_add_task_drafts(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """CREATE TABLE task_drafts (
+            id TEXT PRIMARY KEY,
+            installation_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            scope_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            root_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            requested_by TEXT NOT NULL,
+            title TEXT NOT NULL,
+            items TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'draft',
+            decided_by TEXT NOT NULL DEFAULT '',
+            task_ids TEXT NOT NULL DEFAULT '[]',
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            UNIQUE(installation_id, tenant_id, run_id)
+        )"""
+    )
+    connection.execute(
+        "CREATE INDEX idx_task_drafts_scope_state "
+        "ON task_drafts(installation_id, tenant_id, scope_id, state, created_at)"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -839,6 +867,12 @@ DEFAULT_MIGRATIONS = (
         name="add scoped task idempotency",
         checksum=_checksum("v022-add-scoped-task-idempotency-20260809"),
         upgrade=_v022_add_scoped_task_idempotency,
+    ),
+    Migration(
+        version=23,
+        name="add meeting task drafts",
+        checksum=_checksum("v023-add-meeting-task-drafts-20260814"),
+        upgrade=_v023_add_task_drafts,
     ),
 )
 

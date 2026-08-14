@@ -335,6 +335,8 @@ class Agent:
             memory_items=self.control_store.memory_items,
             personas=self.control_store.personas,
             persona_replies=self.control_store.persona_replies,
+            task_drafts=self.control_store.task_drafts,
+            access_guard=self.access_guard,
         )
         self.capability_probe = MattermostCapabilityProbe(self.mm)
         callback_path = (

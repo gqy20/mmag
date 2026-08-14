@@ -18,7 +18,7 @@ MMAG 不只是一个聊天 Bot。它把 Agent、Skill、Capability、Policy、�
 |---|---|---|
 | 个人工作台 | 在 Bot DM 中管理个人 Skill、案例和长期记忆；运行 Skill 后可将优秀结果沉淀为案例 | 已实现主链 |
 | 个人数字人 | 所有者发布数字人后，基于其授权资料为其他成员生成建议回复；高风险回复回到所有者批准 | 已实现受控主链 |
-| 多人群聊 | 在频道或 Thread 中主动回答、研究、总结讨论，会议纪要保留来源 Post ID | 已实现 |
+| 多人群聊 | 在频道或 Thread 中主动回答、研究、总结讨论；会议行动项可先形成可追溯任务草案，确认后再创建无负责人的正式任务 | 已实现 |
 | 业务审批与交付 | Agent 完成前置总结和产物生成，真人通过按钮决定副作用，PPTX 与 PNG 预览经 Outbox 交付 | 已实现演示主链；验收、返工和业务报表仍在建设 |
 
 此外，MMAG 已支持：
@@ -101,6 +101,8 @@ Deep Agents 的 `StateBackend` 只保存当前 graph/thread 的小型工作文�
 - `/mmag help`、`/mmag agents`、`/mmag skills [agent]` 和 `/mmag status [run-id]` 提供可发现入口；
 - `/mmag summary today [--tasks]`、`summary --since HH:MM [--tasks]` 和
   `summary thread --root <post-id> [--tasks]` 提交受治理的频道总结；
+- 会议纪要中的行动项会列出相关人物、截止时间原文和来源 Post；用户通过按钮或
+  `确认任务草案 <草案ID>` 明确确认后才创建正式任务，首版不会自动映射或 `@` 人员；
 - 需要副作用时优先展示签名、短时、一次性的批准/拒绝按钮；按钮不可用时仍可使用文本命令。
 
 “我的 Skills”“我的案例”“我的记忆”等个人入口使用意图识别，不要求用户死记固定句式。交互按钮只更新

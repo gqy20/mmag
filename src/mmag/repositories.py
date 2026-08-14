@@ -84,6 +84,32 @@ class MessageRepository:
         ).fetchone()
         return float(row["ts"]) if row and row["ts"] else 0.0
 
+    def verified_source_ids(
+        self,
+        message_ids: tuple[str, ...],
+        *,
+        conversation_id: str,
+        scope_id: str,
+    ) -> frozenset[str]:
+        """Return locally persisted sources bound to this channel and scope."""
+        bounded = tuple(dict.fromkeys(item for item in message_ids[:100] if item))
+        if not bounded:
+            return frozenset()
+        placeholders = ",".join("?" for _ in bounded)
+        rows = self.connection.execute(
+            f"""SELECT id FROM message_log
+            WHERE installation_id=? AND tenant_id=? AND channel_id=?
+              AND (scope_id='' OR scope_id=?) AND id IN ({placeholders})""",  # noqa: S608
+            (
+                self.installation_id,
+                self.tenant_id,
+                conversation_id,
+                scope_id,
+                *bounded,
+            ),
+        ).fetchall()
+        return frozenset(str(row["id"]) for row in rows)
+
 
 @dataclass(frozen=True, slots=True)
 class ProfileRepository:

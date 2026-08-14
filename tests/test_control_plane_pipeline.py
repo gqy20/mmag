@@ -102,6 +102,39 @@ async def test_delivery_retry_does_not_reprocess_agent(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_outbox_persistence_failure_marks_inbox_failed_and_keeps_partition_alive(
+    tmp_path, monkeypatch
+):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    original_complete = store.complete_event
+
+    def complete_event(event_id, messages):
+        if event_id == "broken":
+            raise RuntimeError("outbox unavailable")
+        return original_complete(event_id, messages)
+
+    monkeypatch.setattr(store, "complete_event", complete_event)
+
+    async def process(event: InboundEvent) -> tuple[OutboundMessage, ...]:
+        return (OutboundMessage(event.conversation_id, event.event_id),)
+
+    async def deliver(message: OutboundMessage) -> str:
+        return f"post-{message.text}"
+
+    pipeline = MessagePipeline(store, process, deliver)
+    await pipeline.start()
+    await pipeline.accept(_event("broken", "channel"))
+    await pipeline.accept(_event("healthy", "channel"))
+    await pipeline.join()
+    await pipeline.close()
+
+    assert store.get_inbox("broken").status == "failed"
+    assert store.get_inbox("healthy").status == "completed"
+    assert store.list_deliveries(status="delivered")[0].remote_id == "post-healthy"
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_delivery_terminal_state_settles_parent_task(tmp_path):
     store = SQLiteControlPlane(tmp_path / "control.db")
 

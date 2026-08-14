@@ -9,6 +9,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from ..infrastructure.sqlite import SQLiteDatabase
+from ..logger import get_logger, log_event
 from .memory_items import MemoryItemStore
 from .models import (
     ApprovalRequest,
@@ -30,10 +31,14 @@ from .personas import DigitalPersonaStore
 from .quota import QuotaStore
 from .releases import ReleaseStore
 from .runs import AgentRunStore
+from .task_drafts import TaskDraftStore
 from .work_cases import InteractionSessionStore, WorkCaseStore
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+log = get_logger(__name__)
 
 
 def _json(value: Any) -> str:
@@ -56,6 +61,7 @@ class SQLiteControlPlane:
         self.memory_items = MemoryItemStore(self._connection, self._lock)
         self.personas = DigitalPersonaStore(self._connection, self._lock)
         self.persona_replies = PersonaReplyStore(self._connection, self._lock)
+        self.task_drafts = TaskDraftStore(self._connection, self._lock)
 
     def close(self) -> None:
         self._connection.close()
@@ -154,7 +160,20 @@ class SQLiteControlPlane:
     ) -> tuple[str, ...]:
         now = time.time()
         delivery_ids: list[str] = []
+        log_event(
+            log,
+            "outbox.transaction.waiting",
+            status="running",
+            delivery_count=len(messages),
+        )
         with self._lock:
+            log_event(
+                log,
+                "outbox.transaction.started",
+                status="running",
+                delivery_count=len(messages),
+            )
+            stage = "begin"
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
                 for index, message in enumerate(messages):
@@ -162,6 +181,7 @@ class SQLiteControlPlane:
                     delivery_id = uuid.uuid5(uuid.NAMESPACE_URL, f"mmag:delivery:{stable_key}").hex
                     channel_id = message.channel_id or message.conversation_id
                     agent_run_id = message.agent_run_id or f"run:{event_id}"
+                    stage = "delivery_insert"
                     self._connection.execute(
                         """INSERT INTO outbox_deliveries
                         (id, conversation_id, channel_id, message, props, status,
@@ -189,6 +209,7 @@ class SQLiteControlPlane:
                             now,
                         ),
                     )
+                    stage = "lifecycle_insert"
                     self._connection.execute(
                         """INSERT INTO lifecycle_entities
                         (entity_type, entity_id, scope_id, state, payload, created_at, updated_at)
@@ -196,14 +217,30 @@ class SQLiteControlPlane:
                         (delivery_id, message.conversation_id, now, now),
                     )
                     delivery_ids.append(delivery_id)
+                stage = "inbox_update"
                 self._connection.execute(
                     """UPDATE inbox_events SET status='completed', version=version+1,
                     last_error='', next_attempt_at=0, updated_at=? WHERE event_id=?""",
                     (now, event_id),
                 )
+                stage = "commit"
                 self._connection.commit()
-            except Exception:
+                log_event(
+                    log,
+                    "outbox.transaction.completed",
+                    status="completed",
+                    delivery_count=len(delivery_ids),
+                )
+            except Exception as error:
                 self._connection.rollback()
+                log_event(
+                    log,
+                    "outbox.transaction.failed",
+                    level=40,
+                    status="failed",
+                    error_code=type(error).__name__,
+                    transaction_stage=stage,
+                )
                 raise
         return tuple(delivery_ids)
 

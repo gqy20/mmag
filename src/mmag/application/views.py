@@ -257,12 +257,12 @@ class ResponsePresenter:
         actions: list[str] = []
         for item in self._mappings(result.get("action_items")):
             content = self._text(item.get("content"))
-            owner = self._text(item.get("owner_username")) or "未指定"
+            owner = self._text(item.get("owner_username")) or "未提及"
             due = self._text(item.get("due_date")) or "未指定"
             refs = self._strings(item.get("source_post_ids"))
             if content:
                 source = f"；来源：{', '.join(refs)}" if refs else ""
-                actions.append(f"{content}（负责人：{owner}；截止：{due}{source}）")
+                actions.append(f"{content}（相关人物：{owner}；截止：{due}{source}）")
         sections = (
             ResponseSection("已确认决定", items=sourced(result.get("decisions"))),
             ResponseSection("行动项", items=tuple(actions)),
