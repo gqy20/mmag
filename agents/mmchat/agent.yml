@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: mmchat
-  version: 2.2.1
+  version: 2.2.2
   description: 在受限的企业能力范围内参与 Mattermost 对话。
 
 spec:
@@ -47,7 +47,6 @@ spec:
       - mcp_tencent_meeting_*
       - tencent_meeting_*
       - tmeet_*
-      - task_*
       - delegate_ppt
       - delegate_report
       - delegate_project
@@ -60,7 +59,7 @@ spec:
   context:
     read_scopes: [conversation, project]
     write_scopes: [conversation]
-  policy_ref: mmchat@1.4.0
+  policy_ref: mmchat@1.4.1
   model_policy_ref: reasoning-medium@1.0.0
   budget:
     max_model_calls: 10

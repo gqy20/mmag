@@ -554,6 +554,7 @@ text.delta
 tool.started
 tool.progress
 tool.completed
+tool.failed
 approval.required
 artifact.created
 run.status

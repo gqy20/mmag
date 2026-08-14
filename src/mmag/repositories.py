@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
+import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import sqlite3
-
 
 _PREFERENCE_REF = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}(?:@[0-9]+\.[0-9]+\.[0-9]+)?$")
 _LANGUAGES = frozenset({"auto", "zh-CN", "en-US"})
@@ -221,38 +218,63 @@ class TaskRepository:
 
     def create(self, task: dict) -> dict:
         now = time.time()
-        task_id = task.get("id") or f"task_{int(now * 1000)}"
-        self._conn.execute(
-            """INSERT INTO tasks
-               (id, installation_id, tenant_id, title, description, type, status,
-                assignee_id, creator_id, channel_id, scope_id, source, external_id,
-                start_time, due_time, priority, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                task_id, self._iid, self._tid,
-                task["title"], task.get("description", ""),
-                task.get("type", "task"), task.get("status", "pending"),
-                task.get("assignee_id", ""), task.get("creator_id", ""),
-                task.get("channel_id", ""), task.get("scope_id", ""),
-                task.get("source", "manual"), task.get("external_id", ""),
-                task.get("start_time", 0), task.get("due_time", 0),
-                task.get("priority", 1), now, now,
-            ),
-        )
+        scope_id = str(task.get("scope_id") or "")
+        if not scope_id:
+            raise ValueError("scope_id is required")
+        execution_key = str(task.get("execution_key") or "")
+        if execution_key:
+            existing = self.get_by_execution_key(execution_key, scope_id=scope_id)
+            if existing:
+                return existing
+        task_id = str(task.get("id") or f"task_{uuid.uuid4().hex}")
+        try:
+            self._conn.execute(
+                """INSERT INTO tasks
+                   (id, installation_id, tenant_id, title, description, type, status,
+                    assignee_id, creator_id, channel_id, scope_id, source, external_id,
+                    start_time, due_time, priority, created_at, updated_at, execution_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    task_id, self._iid, self._tid,
+                    task["title"], task.get("description", ""),
+                    task.get("type", "task"), task.get("status", "pending"),
+                    task.get("assignee_id", ""), task.get("creator_id", ""),
+                    task.get("channel_id", ""), scope_id,
+                    task.get("source", "manual"), task.get("external_id", ""),
+                    task.get("start_time", 0), task.get("due_time", 0),
+                    task.get("priority", 1), now, now, execution_key,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            self._conn.rollback()
+            if execution_key:
+                existing = self.get_by_execution_key(execution_key, scope_id=scope_id)
+                if existing:
+                    return existing
+            raise
         self._conn.commit()
-        return self.get(task_id)  # type: ignore[return-value]
+        return self.get(task_id, scope_id=scope_id)  # type: ignore[return-value]
 
-    def get(self, task_id: str) -> dict | None:
+    def get(self, task_id: str, *, scope_id: str) -> dict | None:
         row = self._conn.execute(
-            "SELECT * FROM tasks WHERE installation_id=? AND tenant_id=? AND id=?",
-            (self._iid, self._tid, task_id),
+            """SELECT * FROM tasks
+            WHERE installation_id=? AND tenant_id=? AND scope_id=? AND id=?""",
+            (self._iid, self._tid, scope_id, task_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_by_execution_key(self, execution_key: str, *, scope_id: str) -> dict | None:
+        row = self._conn.execute(
+            """SELECT * FROM tasks
+            WHERE installation_id=? AND tenant_id=? AND scope_id=? AND execution_key=?""",
+            (self._iid, self._tid, scope_id, execution_key),
         ).fetchone()
         return dict(row) if row else None
 
     def list(self, *, assignee_id: str = "", status: str = "", task_type: str = "",
-             channel_id: str = "", due_before: float = 0, limit: int = 20) -> list[dict]:
-        sql = "SELECT * FROM tasks WHERE installation_id=? AND tenant_id=?"
-        params: list = [self._iid, self._tid]
+             scope_id: str, due_before: float = 0, limit: int = 20) -> list[dict]:
+        sql = "SELECT * FROM tasks WHERE installation_id=? AND tenant_id=? AND scope_id=?"
+        params: list = [self._iid, self._tid, scope_id]
         if assignee_id:
             sql += " AND assignee_id=?"
             params.append(assignee_id)
@@ -262,9 +284,6 @@ class TaskRepository:
         if task_type:
             sql += " AND type=?"
             params.append(task_type)
-        if channel_id:
-            sql += " AND channel_id=?"
-            params.append(channel_id)
         if due_before:
             sql += " AND due_time > 0 AND due_time <= ?"
             params.append(due_before)
@@ -273,8 +292,8 @@ class TaskRepository:
         rows = self._conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
 
-    def update(self, task_id: str, updates: dict) -> dict | None:
-        existing = self.get(task_id)
+    def update(self, task_id: str, updates: dict, *, scope_id: str) -> dict | None:
+        existing = self.get(task_id, scope_id=scope_id)
         if not existing:
             return None
         allowed = {
@@ -292,18 +311,16 @@ class TaskRepository:
         sets.append("updated_at=?")
         params.append(time.time())
         self._conn.execute(
-            f"UPDATE tasks SET {', '.join(sets)} WHERE installation_id=? AND tenant_id=? AND id=?",
-            [*params, self._iid, self._tid, task_id],  # type: ignore[arg-type]
+            f"UPDATE tasks SET {', '.join(sets)} "
+            "WHERE installation_id=? AND tenant_id=? AND scope_id=? AND id=?",
+            [*params, self._iid, self._tid, scope_id, task_id],  # type: ignore[arg-type]
         )
         self._conn.commit()
-        return self.get(task_id)
+        return self.get(task_id, scope_id=scope_id)
 
-    def overview(self, *, channel_id: str = "") -> dict:
-        base = "WHERE installation_id=? AND tenant_id=?"
-        params: list = [self._iid, self._tid]
-        if channel_id:
-            base += " AND channel_id=?"
-            params.append(channel_id)
+    def overview(self, *, scope_id: str) -> dict:
+        base = "WHERE installation_id=? AND tenant_id=? AND scope_id=?"
+        params: list = [self._iid, self._tid, scope_id]
         rows = self._conn.execute(
             f"SELECT status, COUNT(*) as cnt FROM tasks {base} GROUP BY status",  # noqa: S608
             params,

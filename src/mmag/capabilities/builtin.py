@@ -51,7 +51,12 @@ def create_builtin_capabilities(
             access_guard=access_guard,
         ),
         *create_tencent_meeting_capabilities(),
-        *create_task_capabilities(memory),
+        *create_task_capabilities(
+            memory,
+            mm_client,
+            context_provider=context_provider,
+            access_guard=access_guard,
+        ),
         *additional_specs,
     ]
 

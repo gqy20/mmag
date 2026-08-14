@@ -96,9 +96,13 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 
 普通运行日志使用稳定 `event`、`status`、UTC timestamp 和 `trace_id/run_id/thread_id/agent_ref/skill_ref/capability` 等关联字段。`LOG_FORMAT=json` 输出 JSON Lines；开发环境可保留 `text`。本地文件按大小轮转并带 PID，`LOG_DIR=` 可完全关闭文件输出。中心化 Filter 会遮蔽 Secret、Authorization、URL query 和异常正文，但业务代码仍不得主动记录 Prompt、消息正文、完整参数或结果。
 
-Deep Agents 通过 LangChain 原生 Callback 记录 model/tool started、completed、failed，模型和工具正文不会进入日志或 AuditEvent。RunnableConfig 同时携带低基数 tags、动态 run name 和受控 metadata，可供后续 LangSmith/OpenTelemetry exporter 复用；生产环境不得启用会输出完整状态的 `debug` stream。
+Deep Agents 通过 LangChain 原生 `AsyncCallbackHandler` 记录 `runtime.model.*` 和 `runtime.tool.*`，只投影 `langgraph_node`、`langgraph_step`、Provider、模型名、token、耗时、工具名及输入 Hash；模型和工具正文不会进入日志或 AuditEvent。业务 `CapabilityExecutor` 使用独立的 `capability.*` 事件，避免把框架 Tool transport 成功误认为业务 Capability 成功。RunnableConfig 同时携带低基数 tags、动态 run name 和受控 metadata，可供后续 LangSmith/OpenTelemetry exporter 复用；生产环境不得启用会输出完整状态的 `debug` stream。
 
-Agent 成功/失败、模型调用、Capability 调用、受控执行、审批、Inbox replay 和 Delivery 已进入 AuditEvent。查询支持 event、target、trace、actor、scope、decision、run 和时间游标。Policy 决策的完整事件目录、归档/导出和防篡改仍是后续治理项。部署层应至少告警：
+Agent 编排依次记录 `agent.route.selected`、`skill.route.selected|skipped` 和 `agent.tools.projected`，其中工具名来自受信 Catalog，不记录 Prompt。Policy 记录规则、permission、decision 和 `interrupt_check|tool_execute` 阶段。Outbox/Delivery 记录 enqueue、attempt、retry、终态、message kind 和幂等键 Hash，不记录消息正文、文件名或远端异常正文。
+
+开发环境使用 `make debug-trace ID=<trace-id|run-id>` 聚合上述日志和 AuditEvent。`make debug-test` 根据 Mattermost `props.mmag_kind/mmag_status` 忽略 `get` ack 与 stream 更新，只在 result、error、approval 等终态回复后结束。
+
+Agent 路由、Skill 选择、Agent 成功/失败、模型调用、Runtime Tool、Capability、Policy、受控执行、审批、Inbox replay 和 Delivery 已进入 AuditEvent。查询支持 event、target、trace、actor、scope、decision、run 和时间游标。事件归档/导出、访问控制和防篡改仍是后续治理项。部署层应至少告警：
 
 - Inbox `failed` 或 Outbox `failed` 增长；
 - Runtime timeout/rate-limit 连续发生；

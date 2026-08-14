@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from ..client import PROP_FROM_BOT, PROP_TRUE
 from ..config import config
 from ..control_plane import MattermostAccessGuard, MattermostScopeResolver, OutboundMessage
-from ..logger import get_logger
+from ..logger import get_logger, log_event, safe_hash
 
 if TYPE_CHECKING:
     from ..execution import ArtifactRepository
@@ -241,6 +241,19 @@ class MattermostDelivery:
 
     async def deliver(self, outbound: OutboundMessage) -> str:
         channel_id = outbound.channel_id or outbound.conversation_id
+        started = time.monotonic()
+        log_event(
+            log,
+            "delivery.dispatch.started",
+            status="running",
+            run_id=outbound.agent_run_id,
+            message_kind=outbound.message_kind,
+            idempotency_key_sha256=safe_hash(outbound.idempotency_key)
+            if outbound.idempotency_key
+            else "",
+            artifact_count=len(outbound.artifact_refs),
+            is_update=bool(outbound.update_post_id),
+        )
         await self.access_guard.require(
             outbound.actor_id,
             outbound.scope_id,
@@ -290,6 +303,17 @@ class MattermostDelivery:
             outbound.text,
             outbound.root_id,
             outbound.scope_id,
+        )
+        log_event(
+            log,
+            "delivery.dispatch.completed",
+            status="succeeded",
+            run_id=outbound.agent_run_id,
+            duration_ms=round((time.monotonic() - started) * 1000),
+            message_kind=outbound.message_kind,
+            artifact_count=len(outbound.artifact_refs),
+            file_count=len(file_ids),
+            is_update=bool(outbound.update_post_id),
         )
         return post_id
 

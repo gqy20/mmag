@@ -216,3 +216,11 @@ def test_factory_constructs_every_manifest_without_provider_registry():
         package.manifest.metadata.name for package in packages.list()
     }
     assert registry.default().descriptor.name == "mmchat"
+    task_capabilities = {
+        "create_task",
+        "list_tasks",
+        "update_task",
+        "get_task_overview",
+    }
+    assert task_capabilities <= set(registry.get("project").descriptor.capabilities)
+    assert task_capabilities.isdisjoint(registry.get("mmchat").descriptor.capabilities)

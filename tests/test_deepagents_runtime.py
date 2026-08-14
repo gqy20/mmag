@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -5,11 +7,14 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 
 from mmag.capabilities import (
+    CapabilityContext,
     CapabilityEffect,
     CapabilityExecutor,
     CapabilityRegistry,
     CapabilitySpec,
+    bind_capability_context,
     bind_langgraph_capability,
+    get_capability_context,
 )
 from mmag.control_plane import SQLiteControlPlane
 from mmag.governance import (
@@ -23,6 +28,7 @@ from mmag.governance import (
 from mmag.runtimes import (
     DeepAgentRuntime,
     RunContext,
+    RunEventKind,
     RunRequest,
     RuntimeLimitError,
     RuntimeStatus,
@@ -33,6 +39,7 @@ from mmag.runtimes.harness import (
     build_tool_visibility_middleware,
 )
 from mmag.runtimes.outputs import repair_structured_output
+from mmag.runtimes.telemetry import DeepAgentTelemetry
 
 
 class ScriptedModel(BaseChatModel):
@@ -125,6 +132,95 @@ def _tool_call() -> AIMessage:
             }
         ],
     )
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_binds_stable_execution_identity_to_capability():
+    observed = []
+
+    async def publish(value: str):
+        observed.append((value, get_capability_context()))
+        return {"published": value}
+
+    spec = CapabilitySpec(
+        "publish",
+        "Publish a value",
+        {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        },
+        publish,
+        effect=CapabilityEffect.WRITE,
+        permission="content.publish",
+    )
+    policy = PolicyEngine(
+        (PolicyRule("allow-publish", PolicyEffect.ALLOW, permissions=("content.publish",)),)
+    )
+    executor = CapabilityExecutor(PolicyCapabilityAuthorizer(policy))
+    registry = CapabilityRegistry()
+    registry.register(bind_langgraph_capability(spec, executor=executor))
+    runtime = DeepAgentRuntime(
+        registry,
+        model_factory=ModelFactory(_tool_call(), AIMessage(content="done")),
+    )
+    events = []
+
+    async def capture_event(event):
+        events.append(event)
+
+    request = _request(runtime, "execution-run")
+    request = RunRequest(
+        request.context,
+        request.messages,
+        capabilities=request.capabilities,
+        event_sink=capture_event,
+    )
+    capability_context = CapabilityContext(
+        trace_id="trace-1",
+        actor_id="user-1",
+        conversation_id="channel-1",
+        message_id="message-1",
+        message="publish",
+        scope="scope-1",
+        run_id="execution-run",
+        installation_id="installation-1",
+        tenant_id="tenant-1",
+    )
+
+    with (
+        bind_governance_context(GovernanceContext("user-1", "scope-1")),
+        bind_capability_context(capability_context),
+    ):
+        result = await runtime.run(request)
+
+    assert result.text == "done"
+    assert observed[0][0] == "approved"
+    assert observed[0][1].tool_call_id == "call-1"
+    assert len(observed[0][1].execution_key) == 64
+    assert [event.kind for event in events if event.name == "publish"] == [
+        RunEventKind.TOOL_STARTED,
+        RunEventKind.TOOL_COMPLETED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_final_model_observation_does_not_log_response_content(caplog):
+    runtime = _runtime([], AIMessage(content="private-final-body"))
+
+    with caplog.at_level("INFO", logger="mmag.runtimes.deepagents"):
+        result = await runtime.run(_request(runtime, "content-free-log"))
+
+    observations = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "runtime.output.observed"
+    ]
+    assert result.text == "private-final-body"
+    assert observations
+    assert observations[-1].details["text_size"] == len("private-final-body")
+    assert "text_preview" not in observations[-1].details
+    assert "private-final-body" not in str(observations[-1].details)
 
 
 def test_repairs_only_schema_declared_json_containers():
@@ -285,6 +381,29 @@ def test_native_execute_is_visible_only_for_governed_workspace_runs():
 
 
 @pytest.mark.asyncio
+async def test_native_callback_projects_content_free_langgraph_metadata(tmp_path):
+    store = SQLiteControlPlane(str(tmp_path / "native-telemetry.db"))
+    runtime = _runtime([])
+    telemetry = DeepAgentTelemetry(_request(runtime, "native-metadata"), store)
+    native_run_id = uuid4()
+
+    await telemetry.on_tool_start(
+        {"name": "publish"},
+        "private-input",
+        run_id=native_run_id,
+        inputs={"value": "private-input"},
+        metadata={"langgraph_node": "tools", "langgraph_step": 3, "private": "secret"},
+    )
+    await telemetry.on_tool_end("private-output", run_id=native_run_id)
+
+    audits = store.list_audits(event_type="runtime.tool.call", target="publish")
+    assert {audit.decision for audit in audits} == {"running", "succeeded"}
+    assert all(audit.details["graph_node"] == "tools" for audit in audits)
+    assert all(audit.details["graph_step"] == 3 for audit in audits)
+    assert all("private" not in str(audit.details) for audit in audits)
+
+
+@pytest.mark.asyncio
 async def test_deep_agent_interrupts_before_side_effect_and_resumes():
     calls: list[str] = []
     runtime = _runtime(calls, _tool_call(), AIMessage(content="done"))
@@ -390,7 +509,7 @@ async def test_native_callbacks_write_content_free_model_and_tool_audits(tmp_pat
         )
 
     model_audits = store.list_audits(event_type="model.call")
-    tool_audits = store.list_audits(event_type="capability.call", target="publish")
+    tool_audits = store.list_audits(event_type="runtime.tool.call", target="publish")
     policy_audits = store.list_audits(event_type="policy.decision", target="publish")
     assert {item.decision for item in model_audits} >= {"running", "succeeded"}
     assert {item.decision for item in tool_audits} == {"running", "succeeded"}

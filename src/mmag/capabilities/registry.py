@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from ..logger import get_logger, log_event, safe_hash
 from .base import CapabilityResult, CapabilityStatus
+from .context import get_capability_context
 from .sources import enrich_with_sources
 
 log = get_logger(__name__)
@@ -112,22 +113,11 @@ class CapabilityRegistry:
     def get_schema_list(self, names: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
         """Project the selected capability allowlist onto the model tool schema.
 
-        Supports trailing ``*`` wildcards (e.g. ``task_*``) in the allow list.
+        Supports shell-style wildcard patterns in the allow list.
         """
-        import fnmatch
-
-        if names is None:
-            selected = None
-        else:
-            exact = {n for n in names if "*" not in n}
-            patterns = tuple(n for n in names if "*" in n)
-            selected = exact if not patterns else None
-
         result = []
         for t in self._bindings.values():
-            if selected is not None and t.name not in selected and not any(
-                fnmatch.fnmatch(t.name, p) for p in patterns
-            ):
+            if names is not None and not any(fnmatch(t.name, pattern) for pattern in names):
                 continue
             result.append({
                 "name": t.name,
@@ -157,6 +147,15 @@ class CapabilityRegistry:
 
         t0 = time.monotonic()
         input_sha256 = safe_hash(input_data)
+        execution_context = get_capability_context()
+        execution_fields: dict[str, Any] = {
+            "tool_call_id_sha256": safe_hash(execution_context.tool_call_id)
+            if execution_context is not None and execution_context.tool_call_id
+            else "",
+            "execution_key_sha256": safe_hash(execution_context.execution_key)
+            if execution_context is not None and execution_context.execution_key
+            else "",
+        }
         log_event(
             log,
             "capability.started",
@@ -164,6 +163,7 @@ class CapabilityRegistry:
             capability=name,
             input_keys=sorted(input_data),
             input_sha256=input_sha256,
+            **execution_fields,
         )
 
         try:
@@ -198,6 +198,7 @@ class CapabilityRegistry:
                 duration_ms=round(elapsed * 1000),
                 input_sha256=input_sha256,
                 output_type=type(result.data).__name__,
+                **execution_fields,
             )
             return result
 
@@ -212,6 +213,7 @@ class CapabilityRegistry:
                 duration_ms=round(elapsed * 1000),
                 input_sha256=input_sha256,
                 error_code=type(e).__name__,
+                **execution_fields,
             )
             return CapabilityResult(
                 CapabilityStatus.ERROR,

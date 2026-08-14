@@ -96,6 +96,14 @@ def test_fresh_database_migrates_to_latest_schema():
         row["name"] for row in conn.execute("PRAGMA table_info(user_profiles)").fetchall()
     }
     assert {"installation_id", "tenant_id", "user_id"} <= profile_columns
+    task_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
+    }
+    task_indexes = {
+        row["name"] for row in conn.execute("PRAGMA index_list(tasks)").fetchall()
+    }
+    assert "execution_key" in task_columns
+    assert {"idx_tasks_execution_key", "idx_tasks_scope"} <= task_indexes
     conn.close()
 
 

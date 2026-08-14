@@ -1,5 +1,5 @@
 id: project
-version: 1.0.0
+version: 1.0.1
 default_effect: deny
 
 rules:
@@ -13,6 +13,7 @@ rules:
     effect: allow
     actions: [create_task, list_tasks, update_task, get_task_overview]
     permissions: [task:write, task:read]
+    scopes: ["mattermost:*"]
     reason: Project agent may create and track organizational items.
 
   - id: read-current-channel

@@ -14,7 +14,7 @@ from ..capabilities import CapabilityContext, bind_capability_context
 from ..config import config
 from ..control_plane import ScopeKind
 from ..governance import GovernanceContext, bind_governance_context
-from ..logger import get_logger, log_context, log_event
+from ..logger import get_logger, log_context, log_event, safe_hash
 from ..runtimes import (
     AgentResult,
     AgentRuntimeError,
@@ -76,9 +76,11 @@ class AgentRequestHandler:
                 post, "chat", personal_preferences=context.get("personal_preferences")
             )
             selection = self.agent_router.default(request)
+            self._record_agent_route(selection, request, invocation="ambient")
             capabilities = self._effective_capabilities(request, selection.agent)
             if self.scope_resolver.resolve_post(post).kind is ScopeKind.CHANNEL:
                 capabilities = tuple(name for name in capabilities if name != "get_user_profile")
+            self._record_tool_projection(selection.agent, request, capabilities)
             runtime_request = self.build_run_request(
                 post,
                 context,
@@ -120,16 +122,21 @@ class AgentRequestHandler:
                 selection = self.agent_router.default(request)
             else:
                 selection = self.agent_router.route(request)
+            self._record_agent_route(selection, request, invocation=tag)
             if stream_enabled and self._should_stream(selection.agent):
                 stream = self.delivery.stream(post, self.run_id(post), post_id=status_post_id)
-            request = replace(request, intent=selection.intent)
             if not post.get("_persona_ref"):
+                # Skill activation must inspect the originating intent and prompt. Replacing a
+                # mention with the Agent's first accepted intent here would activate a domain
+                # Skill merely because its Agent was selected by a different keyword family.
                 request = self._resolve_skill(request, selection.agent)
+            request = replace(request, intent=selection.intent)
             capabilities = self._effective_capabilities(request, selection.agent)
             if post.get("_persona_ref"):
                 capabilities = ()
             if self.scope_resolver.resolve_post(post).kind is ScopeKind.CHANNEL:
                 capabilities = tuple(name for name in capabilities if name != "get_user_profile")
+            self._record_tool_projection(selection.agent, request, capabilities)
             runtime_request = self.build_run_request(
                 post,
                 context,
@@ -603,9 +610,121 @@ class AgentRequestHandler:
     def _resolve_skill(self, request: AgentRequest, agent: ManagedAgent) -> AgentRequest:
         package = getattr(agent, "package", None)
         if package is None or not package.skills:
+            self._record_skill_route(request, agent, None, reason="not_configured")
             return request
         invocation = self.skill_resolver.resolve(package, request, agent.descriptor.capabilities)
+        self._record_skill_route(
+            request,
+            agent,
+            invocation,
+            reason=("explicit" if request.requested_skill else "activation")
+            if invocation is not None
+            else "no_match",
+        )
         return replace(request, skill=invocation)
+
+    def _record_agent_route(self, selection, request: AgentRequest, *, invocation: str) -> None:
+        descriptor = selection.agent.descriptor
+        fields = {
+            "agent_ref": descriptor.name,
+            "run_id": request.run_id,
+            "invocation": invocation,
+            "originating_intent": request.intent,
+            "selected_intent": selection.intent,
+            "reason": selection.reason,
+            "matched_keywords": selection.matched_keywords,
+            "candidate_count": selection.candidate_count,
+        }
+        log_event(log, "agent.route.selected", status="selected", **fields)
+        self._append_routing_audit(
+            "agent.route",
+            request,
+            target=descriptor.name,
+            decision="selected",
+            details={key: value for key, value in fields.items() if key != "agent_ref"},
+        )
+
+    def _record_skill_route(
+        self,
+        request: AgentRequest,
+        agent: ManagedAgent,
+        invocation,
+        *,
+        reason: str,
+    ) -> None:
+        selected_ref = invocation.ref if invocation is not None else ""
+        decision = "selected" if invocation is not None else "skipped"
+        log_event(
+            log,
+            f"skill.route.{decision}",
+            status=decision,
+            agent_ref=agent.descriptor.name,
+            skill_ref=selected_ref,
+            run_id=request.run_id,
+            originating_intent=request.intent,
+            reason=reason,
+        )
+        self._append_routing_audit(
+            "skill.route",
+            request,
+            target=selected_ref or agent.descriptor.name,
+            decision=decision,
+            details={
+                "run_id": request.run_id,
+                "agent_ref": agent.descriptor.name,
+                "skill_ref": selected_ref,
+                "originating_intent": request.intent,
+                "reason": reason,
+            },
+        )
+
+    def _record_tool_projection(
+        self,
+        agent: ManagedAgent,
+        request: AgentRequest,
+        capabilities: tuple[str, ...],
+    ) -> None:
+        names = tuple(sorted(capabilities))
+        log_event(
+            log,
+            "agent.tools.projected",
+            status="ready",
+            agent_ref=agent.descriptor.name,
+            skill_ref=request.skill.ref if request.skill is not None else "",
+            run_id=request.run_id,
+            capability_count=len(names),
+            capability_names=names,
+            capability_set_sha256=safe_hash(names),
+        )
+
+    def _append_routing_audit(
+        self,
+        event_type: str,
+        request: AgentRequest,
+        *,
+        target: str,
+        decision: str,
+        details: dict,
+    ) -> None:
+        try:
+            self.audit_store.append_audit(
+                event_type,
+                actor_id=request.actor_id,
+                scope_id=request.scope,
+                trace_id=log_context.get("trace_id"),
+                target=target,
+                decision=decision,
+                details={"schema_version": "1.0", **details},
+            )
+        except Exception as error:
+            log_event(
+                log,
+                "audit.write_failed",
+                level=40,
+                status="degraded",
+                error_code=type(error).__name__,
+                audit_event_type=event_type,
+            )
 
     @staticmethod
     def _effective_capabilities(request: AgentRequest, agent: ManagedAgent) -> tuple[str, ...]:

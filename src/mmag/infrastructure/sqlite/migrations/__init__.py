@@ -695,6 +695,18 @@ def _v021_add_tasks(connection: sqlite3.Connection) -> None:
     )
 
 
+def _v022_add_scoped_task_idempotency(connection: sqlite3.Connection) -> None:
+    connection.execute("ALTER TABLE tasks ADD COLUMN execution_key TEXT NOT NULL DEFAULT ''")
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_execution_key "
+        "ON tasks(installation_id, tenant_id, execution_key) WHERE execution_key <> ''"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_scope "
+        "ON tasks(installation_id, tenant_id, scope_id, status, due_time)"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -821,6 +833,12 @@ DEFAULT_MIGRATIONS = (
         name="add task tracking",
         checksum=_checksum("v021-add-task-tracking-20260808"),
         upgrade=_v021_add_tasks,
+    ),
+    Migration(
+        version=22,
+        name="add scoped task idempotency",
+        checksum=_checksum("v022-add-scoped-task-idempotency-20260809"),
+        upgrade=_v022_add_scoped_task_idempotency,
     ),
 )
 

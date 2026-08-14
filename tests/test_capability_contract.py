@@ -8,6 +8,7 @@ from mmag.capabilities import (
     CapabilityEffect,
     CapabilityExecutor,
     CapabilityRegistry,
+    CapabilitySpec,
     CapabilityStatus,
     SourcePolicy,
     bind_langgraph_capability,
@@ -58,7 +59,6 @@ def test_builtin_catalog_has_one_runtime_projection():
         tool.name
         for tool in build_builtin_bindings(_client(), MagicMock(), executor=_executor())
     ]
-
     assert names == [
         "get_posts",
         "search_messages",
@@ -86,6 +86,21 @@ def test_builtin_catalog_has_one_runtime_projection():
         "update_task",
         "get_task_overview",
     ]
+
+
+def test_schema_projection_does_not_expand_wildcard_to_unrelated_capabilities():
+    registry = CapabilityRegistry()
+    for name in ("task_create", "task_list", "send_file"):
+        registry.register(
+            bind_langgraph_capability(
+                CapabilitySpec(name, name, {"type": "object"}, lambda: {}),
+                executor=_executor(),
+            )
+        )
+
+    schemas = registry.get_schema_list(("task_*",))
+
+    assert [schema["name"] for schema in schemas] == ["task_create", "task_list"]
 
 
 @pytest.mark.asyncio

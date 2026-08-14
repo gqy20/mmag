@@ -188,6 +188,45 @@ async def test_explicit_message_routes_and_delivers_reply():
 
 
 @pytest.mark.asyncio
+async def test_skill_resolution_uses_originating_intent_before_agent_normalization():
+    handler, runtime = _make_handler("任务完成")
+    project = MagicMock()
+    project.descriptor = AgentDescriptor(
+        "project",
+        "project",
+        intents=("project", "plan", "status", "task"),
+        scopes=("mattermost:*",),
+        max_cost_usd=config.model_budget_usd,
+        routing_priority=60,
+        routing_keywords=("创建任务",),
+    )
+    project.package = MagicMock()
+    project.package.skills = ("project@1.2.1",)
+    project.run = AsyncMock(return_value=MagicMock(
+        text="任务完成",
+        agent_name="project",
+        artifacts=(),
+        result=None,
+        envelope=None,
+        runtime_result=AgentResult(text="任务完成", runtime="test"),
+    ))
+    handler.agent_router.registry.register(project)
+    handler.skill_resolver.resolve.return_value = None
+    event = _posted_event()
+    event["data"]["post"]["message"] = "@agent2 创建任务：回归测试"
+
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
+        await handler.process_posted_event(event)
+
+    resolved_request = handler.skill_resolver.resolve.call_args.args[1]
+    assert resolved_request.intent == "mention"
+    audit_events = [call.args[0] for call in handler.audit_store.append_audit.call_args_list]
+    assert audit_events[:2] == ["agent.route", "skill.route"]
+    project.run.assert_awaited_once()
+    runtime.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_pipeline_ack_is_sent_at_acceptance_and_reused_by_processor():
     handler, runtime = _make_handler("任务完成")
     accepted = None

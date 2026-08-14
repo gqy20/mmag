@@ -43,6 +43,7 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         self.audit_sink = audit_sink
         self._started: dict[UUID, float] = {}
         self._tool_names: dict[UUID, str] = {}
+        self._native_fields: dict[UUID, dict[str, Any]] = {}
 
     async def on_chat_model_start(
         self,
@@ -51,9 +52,13 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         *,
         run_id: UUID,
         parent_run_id: UUID | None = None,
+        metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        del kwargs
         self._started[run_id] = time.monotonic()
+        native_fields = _native_metadata(metadata)
+        self._native_fields[run_id] = native_fields
         model = _component_name(serialized, "chat_model")
         prior_tool_calls = 0
         for msg_list in messages:
@@ -63,13 +68,21 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
             break
         msg_count = sum(len(ml) for ml in messages)
         self._event(
-            "model.started",
+            "runtime.model.started",
             "running",
             model=model,
             message_count=msg_count,
             prior_tool_calls=prior_tool_calls,
+            **native_fields,
         )
-        self._audit("model.call", model, "running", run_id, parent_run_id)
+        self._audit(
+            "model.call",
+            model,
+            "running",
+            run_id,
+            parent_run_id,
+            **native_fields,
+        )
 
     async def on_llm_end(
         self,
@@ -81,6 +94,7 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
     ) -> None:
         del kwargs
         duration_ms = self._duration(run_id)
+        native_fields = self._native_fields.pop(run_id, {})
         usage = _usage(response)
         # Diagnose whether the model returned tool calls
         stop_reasons: list[str] = []
@@ -111,12 +125,13 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
                 elif isinstance(content, str) and content and "text" not in content_block_types:
                     content_block_types.append("text")
         self._event(
-            "model.completed",
+            "runtime.model.completed",
             "succeeded",
             duration_ms=duration_ms,
             stop_reason=",".join(stop_reasons) if stop_reasons else "",
             response_tool_calls=response_tool_calls or None,
             content_block_types=content_block_types or None,
+            **native_fields,
             **usage,
         )
         self._audit(
@@ -126,6 +141,7 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
             run_id,
             parent_run_id,
             duration_ms=duration_ms,
+            **native_fields,
             **usage,
         )
 
@@ -139,12 +155,14 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
     ) -> None:
         del kwargs
         duration_ms = self._duration(run_id)
+        native_fields = self._native_fields.pop(run_id, {})
         self._event(
-            "model.failed",
+            "runtime.model.failed",
             "failed",
             level=logging.ERROR,
             duration_ms=duration_ms,
             error_code=type(error).__name__,
+            **native_fields,
         )
         self._audit(
             "model.call",
@@ -154,6 +172,7 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
             parent_run_id,
             duration_ms=duration_ms,
             error_code=type(error).__name__,
+            **native_fields,
         )
 
     async def on_tool_start(
@@ -164,26 +183,31 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         run_id: UUID,
         parent_run_id: UUID | None = None,
         inputs: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         del kwargs
         name = _component_name(serialized, "tool")
         input_sha256 = safe_hash(inputs if inputs is not None else input_str)
+        native_fields = _native_metadata(metadata)
         self._started[run_id] = time.monotonic()
         self._tool_names[run_id] = name
+        self._native_fields[run_id] = native_fields
         self._event(
-            "tool.started",
+            "runtime.tool.started",
             "running",
             capability=name,
             input_sha256=input_sha256,
+            **native_fields,
         )
         self._audit(
-            "capability.call",
+            "runtime.tool.call",
             name,
             "running",
             run_id,
             parent_run_id,
             input_sha256=input_sha256,
+            **native_fields,
         )
 
     async def on_tool_end(
@@ -197,6 +221,7 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         del kwargs
         name = self._tool_names.pop(run_id, "tool")
         duration_ms = self._duration(run_id)
+        native_fields = self._native_fields.pop(run_id, {})
         if isinstance(output, (str, bytes)):
             output_size = len(output)
         elif isinstance(output, list):
@@ -207,20 +232,22 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         else:
             output_size = len(str(output)) if output is not None else 0
         self._event(
-            "tool.completed",
+            "runtime.tool.completed",
             "succeeded",
             capability=name,
             duration_ms=duration_ms,
             output_size=output_size,
+            **native_fields,
         )
         self._audit(
-            "capability.call",
+            "runtime.tool.call",
             name,
             "succeeded",
             run_id,
             parent_run_id,
             duration_ms=duration_ms,
             output_size=output_size,
+            **native_fields,
         )
 
     async def on_tool_error(
@@ -234,22 +261,25 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         del kwargs
         name = self._tool_names.pop(run_id, "tool")
         duration_ms = self._duration(run_id)
+        native_fields = self._native_fields.pop(run_id, {})
         self._event(
-            "tool.failed",
+            "runtime.tool.failed",
             "failed",
             level=logging.ERROR,
             capability=name,
             duration_ms=duration_ms,
             error_code=type(error).__name__,
+            **native_fields,
         )
         self._audit(
-            "capability.call",
+            "runtime.tool.call",
             name,
             "failed",
             run_id,
             parent_run_id,
             duration_ms=duration_ms,
             error_code=type(error).__name__,
+            **native_fields,
         )
 
     def _event(self, event: str, status: str, *, level: int = logging.INFO, **fields: Any) -> None:
@@ -334,3 +364,20 @@ def _usage(response: LLMResult) -> dict[str, int]:
             totals["input_tokens"] += int(metadata.get("input_tokens") or 0)
             totals["output_tokens"] += int(metadata.get("output_tokens") or 0)
     return totals
+
+
+def _native_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Project only bounded, content-free LangGraph/LangChain callback metadata."""
+    if not metadata:
+        return {}
+    projected: dict[str, Any] = {}
+    for source, target in (
+        ("langgraph_node", "graph_node"),
+        ("langgraph_step", "graph_step"),
+        ("ls_provider", "model_provider"),
+        ("ls_model_name", "model_name"),
+    ):
+        value = metadata.get(source)
+        if isinstance(value, (str, int)) and value not in ("", None):
+            projected[target] = value
+    return projected

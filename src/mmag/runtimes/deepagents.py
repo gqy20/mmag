@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from contextlib import nullcontext
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -18,6 +20,7 @@ from deepagents import (
 from deepagents.backends import StateBackend
 from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.structured_output import ToolStrategy
+from langchain.tools import ToolRuntime  # noqa: TC002 - runtime injection inspects this annotation
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.tools import StructuredTool
@@ -29,11 +32,12 @@ from ..capabilities import (
     AuthorizationDecision,
     CapabilityResult,
     CapabilityStatus,
+    bind_capability_context,
     get_capability_context,
 )
 from ..config import config
 from ..governance import get_governance_context
-from ..logger import get_logger, log_event
+from ..logger import get_logger, log_context, log_event, safe_hash
 from ..model_artifacts import strip_model_artifacts
 from ..skill_packages import get_skill_context
 from .base import (
@@ -381,24 +385,58 @@ class DeepAgentRuntime:
     ) -> StructuredTool:
         name = str(schema["name"])
 
-        async def invoke(**arguments: Any) -> str:
+        async def invoke(runtime: ToolRuntime, **arguments: Any) -> str:
             await self._emit(request, RunEventKind.TOOL_STARTED, name=name)
-            authorization = self.capability_registry.authorization(name, arguments)
-            if authorization.decision is AuthorizationDecision.DENY:
-                result = CapabilityResult(
-                    CapabilityStatus.FORBIDDEN,
-                    message=authorization.reason,
+            current_context = get_capability_context()
+            tool_call_id = str(runtime.tool_call_id or "")
+            execution_key = ""
+            if current_context is not None and tool_call_id:
+                identity = "\0".join(
+                    (
+                        current_context.installation_id,
+                        current_context.tenant_id,
+                        current_context.scope,
+                        current_context.actor_id,
+                        current_context.run_id or current_context.trace_id,
+                        name,
+                        tool_call_id,
+                    )
                 )
-            else:
-                result = await self.capability_registry.execute(
-                    name,
-                    arguments,
-                    preauthorized=True,
+                execution_key = hashlib.sha256(identity.encode()).hexdigest()
+            bound_context = (
+                replace(
+                    current_context,
+                    tool_call_id=tool_call_id,
+                    execution_key=execution_key,
                 )
+                if current_context is not None
+                else None
+            )
+            context_manager = (
+                bind_capability_context(bound_context)
+                if bound_context is not None
+                else nullcontext()
+            )
+            with context_manager:
+                with log_context.bind(authorization_phase="tool_execute"):
+                    authorization = self.capability_registry.authorization(name, arguments)
+                if authorization.decision is AuthorizationDecision.DENY:
+                    result = CapabilityResult(
+                        CapabilityStatus.FORBIDDEN,
+                        message=authorization.reason,
+                    )
+                else:
+                    result = await self.capability_registry.execute(
+                        name,
+                        arguments,
+                        preauthorized=True,
+                    )
             payload = result.to_payload()
             calls.append(
                 {
                     "name": name,
+                    "tool_call_id": tool_call_id,
+                    "execution_key_sha256": safe_hash(execution_key) if execution_key else "",
                     "arguments": dict(arguments),
                     "result": payload,
                     "status": result.status.value,
@@ -406,10 +444,29 @@ class DeepAgentRuntime:
                     "error_code": (result.status.value if result.status.value != "success" else ""),
                 }
             )
+            log_event(
+                log,
+                "runtime.tool.result",
+                status=result.status.value,
+                capability=name,
+                tool_call_id_sha256=safe_hash(tool_call_id) if tool_call_id else "",
+                execution_key_sha256=safe_hash(execution_key) if execution_key else "",
+                duration_ms=result.duration_ms,
+            )
             if isinstance(payload, dict):
                 artifacts.extend(_mapping_items(payload.get("artifacts")))
                 deliveries.extend(_mapping_items(payload.get("deliveries")))
-            await self._emit(request, RunEventKind.TOOL_COMPLETED, name=name)
+            event_kind = (
+                RunEventKind.TOOL_COMPLETED
+                if result.status is CapabilityStatus.SUCCESS
+                else RunEventKind.TOOL_FAILED
+            )
+            await self._emit(
+                request,
+                event_kind,
+                name=name,
+                data={"status": result.status.value},
+            )
             return _provider_tool_content(payload)
 
         return StructuredTool.from_function(
@@ -433,7 +490,11 @@ class DeepAgentRuntime:
 
             def requires_approval(tool_request, capability_name=name):
                 arguments = dict(tool_request.tool_call.get("args") or {})
-                authorization = self.capability_registry.authorization(capability_name, arguments)
+                with log_context.bind(authorization_phase="interrupt_check"):
+                    authorization = self.capability_registry.authorization(
+                        capability_name,
+                        arguments,
+                    )
                 return bool(
                     authorization
                     and authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL
@@ -576,47 +637,54 @@ class DeepAgentRuntime:
         *,
         text: str = "",
         name: str = "",
+        data: Mapping[str, Any] | None = None,
     ) -> None:
         if request.event_sink is not None:
-            await request.event_sink(RunEvent(kind, text=text, name=name))
+            await request.event_sink(RunEvent(kind, text=text, name=name, data=data or {}))
 
 
 def _log_final_messages(messages: list[Any], session: _RunSession) -> None:
-    """Diagnose whether the model made tool calls or just generated text."""
+    """Record content-free facts about the final model state."""
     last_ai: AIMessage | None = None
     for msg in reversed(messages):
         if isinstance(msg, AIMessage):
             last_ai = msg
             break
     if last_ai is None:
-        log_event(log, "model.final_messages", status="no_ai_message", message_count=len(messages))
+        log_event(
+            log,
+            "runtime.output.observed",
+            status="no_ai_message",
+            message_count=len(messages),
+        )
         return
     response_metadata = getattr(last_ai, "response_metadata", None) or {}
     stop_reason = response_metadata.get("stop_reason") or response_metadata.get("stop") or ""
     tool_calls = getattr(last_ai, "tool_calls", None) or []
     content = last_ai.content
     block_types: list[str] = []
-    text_preview = ""
+    text_size = 0
     if isinstance(content, list):
         for block in content:
             if isinstance(block, dict):
                 bt = str(block.get("type", "?"))
                 if bt not in block_types:
                     block_types.append(bt)
-                if bt == "text" and not text_preview:
-                    raw = str(block.get("text") or "")
-                    text_preview = raw[:200]
+                if bt == "text":
+                    text_size += len(str(block.get("text") or ""))
     elif isinstance(content, str):
         block_types = ["text"]
-        text_preview = content[:200]
+        text_size = len(content)
     log_event(
         log,
-        "model.final_messages",
+        "runtime.output.observed",
+        status="observed",
         message_count=len(messages),
         stop_reason=str(stop_reason),
         tool_call_names=[str(tc.get("name", "?")) for tc in tool_calls] if tool_calls else [],
         content_block_types=block_types,
-        text_preview=text_preview,
+        text_size=text_size,
+        structured_output_requested=session.request.response_schema is not None,
         capability_calls=len(session.calls),
     )
 

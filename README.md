@@ -84,11 +84,11 @@ Deep Agents 的 `StateBackend` 只保存当前 graph/thread 的小型工作文�
 
 | Agent | 绑定 Skill | 职责 |
 |---|---|---|
-| `mmchat@2.2.1` | `web-research@1.2.1` | 默认 Mattermost 协同入口、个人/共享上下文和网络研究 |
+| `mmchat@2.2.2` | `web-research@1.2.1` | 默认 Mattermost 协同入口、个人/共享上下文和网络研究 |
 | `link@2.0.1` | — | 确定性分析单个 URL，不启动不必要的模型循环 |
 | `report@2.2.1` | `report@1.3.1`、`meeting@1.0.1` | 证据账本式研究报告与可追溯会议总结 |
 | `ppt@3.1.2` | `slides@3.1.1` | 从受治理 Markdown 生成可编辑 PPTX、源文件和 PNG 预览 |
-| `project@2.0.2` | `project@1.2.1` | 项目计划、状态简报和任务拆解 |
+| `project@2.0.3` | `project@1.2.1` | 项目计划、状态简报、任务拆解和当前 Scope 内的本地任务跟踪 |
 
 完整权限和交付边界见[数字员工清单](docs/WORKERS.md)。
 
@@ -257,7 +257,8 @@ MMAG_E2E_ENABLED=1 scripts/record_mattermost_demo.sh
 
 ```bash
 make debug-status                       # 查看 bot 进程、已加载能力、最近运行
-make debug-test MSG="测试消息"           # 发消息到 mmag-test → 等 bot 回复 → 输出日志+审计
+make debug-test MSG="测试消息"           # 发消息到 mmag-test → 忽略 ack/stream，等待终态回复并输出时间线
+make debug-trace ID="trace-or-run-id"    # 查看 Agent 路由、Skill、模型、工具、Policy 和交付时间线
 make debug-update                       # 收集 git log + CHANGELOG → 发到 Bugs 频道
 make debug-collect                      # 拉取 Bugs 频道最近 20 条消息
 make debug-reply POST_ID=xxx MSG="回复"  # 回复 Bugs 频道指定帖子（支持短 ID 前缀）

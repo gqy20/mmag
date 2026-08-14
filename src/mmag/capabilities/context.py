@@ -30,6 +30,8 @@ class CapabilityContext:
     owner_id: str = ""
     team_id: str = ""
     channel_type: str = ""
+    tool_call_id: str = ""
+    execution_key: str = ""
 
 
 _CURRENT_CONTEXT: ContextVar[CapabilityContext | None] = ContextVar(

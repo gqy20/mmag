@@ -58,6 +58,7 @@ class RunEventKind(StrEnum):
     TEXT_DELTA = "text_delta"
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"
+    TOOL_FAILED = "tool_failed"
     APPROVAL_REQUIRED = "approval_required"
     ARTIFACT_CREATED = "artifact_created"
     RUN_STATUS = "run_status"

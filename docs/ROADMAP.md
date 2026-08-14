@@ -50,7 +50,7 @@
 - [x] Prompt/Schema/eval/Policy/Model Policy 进入 Package Hash 和 provenance；
 - [x] Agent Manifest 绑定 Skill 精确版本，Skill Set Hash 进入 Agent 快照；
 - [x] 运行时能力收窄为 Agent、Skill 与 Policy 的交集；
-- [x] `web-research@1.2.1` 作为可复用 Skill，由 `mmchat@2.2.1` 激活；
+- [x] `web-research@1.2.1` 作为可复用 Skill，由 `mmchat@2.2.2` 激活；
 - [x] 选中 Skill 投影到 StateBackend，由 Deep Agents SkillsMiddleware 原生渐进披露并随 checkpoint 恢复；
 - [x] strict Prompt render、输入/输出/Artifact Schema 和预算强制；
 - [x] Model Policy Registry 严格加载并校验 route。
@@ -258,7 +258,7 @@
   终态和 Mattermost 能力探测；
 - [x] 中心化 Redaction Filter、安全异常格式和内容无关的 Deep Agents Callback 已落地，普通日志不再记录消息片段、附件名、URL query、完整 Tool 参数和 Provider 异常正文；
 - [x] 可嵌套、自动 reset 的 `LogContext` 已取代手工 trace 前缀，并贯穿 Agent、Deep Agents、模型和 Capability 主链；Delivery/后台任务的全链验收继续保留；
-- [x] 普通日志已有版本化事件名与 JSON Lines；Agent 成功/失败、模型调用和 LangGraph Tool 调用已写入 AuditEvent；Policy 全量决策仍待补齐；
+- [x] 普通日志已有版本化事件名与 JSON Lines；Agent/Skill 路由、模型调用、LangGraph Runtime Tool、Capability、Policy 和 Delivery 已分层写入日志/AuditEvent；
 - [x] AuditEvent Python 模型已暴露 `created_at`，查询支持 trace/run/actor/scope/decision/时间游标；事件 Schema 全覆盖、归档、导出、访问控制和防篡改仍待完成；
 - [x] 空 `LOG_DIR`、大小轮转、UTC、PID 文件隔离和 Handler 关闭已修复；过期清理仍只在启动执行，多进程聚合交给部署日志平台；
 - [x] 已覆盖 LogContext 并发隔离/恢复、Secret/URL/异常脱敏，以及 Deep Agents model/tool 内容无关审计；完整部署验收继续保留。

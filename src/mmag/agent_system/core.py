@@ -79,6 +79,9 @@ class AgentOutput:
 class AgentSelection:
     agent: ManagedAgent
     intent: str
+    reason: str = ""
+    matched_keywords: tuple[str, ...] = ()
+    candidate_count: int = 0
 
 
 class ManagedAgent(Protocol):
@@ -147,12 +150,24 @@ class AgentRouter:
         if not candidates:
             raise LookupError(f"no managed agent can serve intent {request.intent!r}")
         agent = max(candidates, key=lambda item: self._score(item.descriptor, request))
+        descriptor = agent.descriptor
         intent = (
             request.intent
-            if request.intent.lower() in {item.lower() for item in agent.descriptor.intents}
-            else agent.descriptor.intents[0]
+            if request.intent.lower() in {item.lower() for item in descriptor.intents}
+            else descriptor.intents[0]
         )
-        return AgentSelection(agent, intent)
+        matched_keywords = tuple(
+            keyword
+            for keyword in descriptor.routing_keywords
+            if keyword.lower() in request.prompt.lower()
+        )
+        return AgentSelection(
+            agent,
+            intent,
+            reason=self._reason(descriptor, request, matched_keywords),
+            matched_keywords=matched_keywords,
+            candidate_count=len(candidates),
+        )
 
     def default(self, request: AgentRequest) -> AgentSelection:
         agent = self.registry.default()
@@ -163,7 +178,23 @@ class AgentRouter:
             if request.intent in agent.descriptor.intents
             else agent.descriptor.intents[0]
         )
-        return AgentSelection(agent, intent)
+        return AgentSelection(agent, intent, reason="default", candidate_count=1)
+
+    @staticmethod
+    def _reason(
+        descriptor: AgentDescriptor,
+        request: AgentRequest,
+        matched_keywords: tuple[str, ...],
+    ) -> str:
+        if request.requested_agent == descriptor.name:
+            return "requested_agent"
+        if matched_keywords:
+            return "keyword"
+        if request.intent.lower() in {intent.lower() for intent in descriptor.intents}:
+            return "intent"
+        if descriptor.name.lower() in request.preferred_agents:
+            return "preferred_agent"
+        return "default"
 
     @staticmethod
     def _eligible(descriptor: AgentDescriptor, request: AgentRequest) -> bool:

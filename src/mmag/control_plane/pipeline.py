@@ -8,7 +8,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from ..logger import get_logger
+from ..logger import get_logger, log_event, safe_hash
 from .lifecycle import LifecycleService
 from .models import DeliveryRecord, EntityType, InboundEvent, OutboundMessage
 
@@ -129,6 +129,18 @@ class MessagePipeline:
 
     def enqueue_delivery(self, message: OutboundMessage) -> str:
         delivery_id = self.store.enqueue_delivery(message)
+        log_event(
+            log,
+            "outbox.delivery.enqueued",
+            status="pending",
+            delivery_id=delivery_id,
+            run_id=message.agent_run_id,
+            message_kind=message.message_kind,
+            idempotency_key_sha256=safe_hash(message.idempotency_key)
+            if message.idempotency_key
+            else "",
+            artifact_count=len(message.artifact_refs),
+        )
         self._delivery_wake.set()
         return delivery_id
 
@@ -241,6 +253,14 @@ class MessagePipeline:
         self, event: InboundEvent, messages: tuple[OutboundMessage, ...]
     ) -> None:
         self.store.complete_event(event.event_id, messages)
+        log_event(
+            log,
+            "outbox.batch.prepared",
+            status="ready",
+            run_id=f"run:{event.event_id}",
+            delivery_count=len(messages),
+            message_kinds=tuple(message.message_kind for message in messages),
+        )
         run_id = f"run:{event.event_id}"
         run = self.store.get_lifecycle_entity(EntityType.AGENT_RUN, run_id)
         failed = any(message.message_kind == "error" for message in messages)
@@ -308,6 +328,16 @@ class MessagePipeline:
             await self._deliver_one(delivery)
 
     async def _deliver_one(self, delivery: DeliveryRecord) -> None:
+        started = time.monotonic()
+        log_event(
+            log,
+            "delivery.started",
+            status="sending",
+            delivery_id=delivery.id,
+            run_id=delivery.message.agent_run_id,
+            attempt=delivery.attempts,
+            message_kind=delivery.message.message_kind,
+        )
         cycle = self.store.get_lifecycle_entity(EntityType.DELIVERY, delivery.id).version
         self.lifecycle.transition(
             EntityType.DELIVERY,
@@ -331,6 +361,16 @@ class MessagePipeline:
         )
         self._settle_parent_task(delivery.message.agent_run_id)
         self._append_delivery_audit(delivery, "delivered", remote_id=remote_id)
+        log_event(
+            log,
+            "delivery.completed",
+            status="delivered",
+            delivery_id=delivery.id,
+            run_id=delivery.message.agent_run_id,
+            attempt=delivery.attempts,
+            duration_ms=round((time.monotonic() - started) * 1000),
+            message_kind=delivery.message.message_kind,
+        )
         self._settle_persona_reply(delivery, delivered=True, remote_id=remote_id)
 
     def _handle_delivery_failure(self, delivery: DeliveryRecord, error: Exception) -> None:
@@ -346,7 +386,22 @@ class MessagePipeline:
                 ),
             )
             self._settle_parent_task(delivery.message.agent_run_id, failed=True)
-            self._append_delivery_audit(delivery, "failed", error=str(error))
+            self._append_delivery_audit(
+                delivery,
+                "failed",
+                error_code=type(error).__name__,
+            )
+            log_event(
+                log,
+                "delivery.failed",
+                level=40,
+                status="failed",
+                delivery_id=delivery.id,
+                run_id=delivery.message.agent_run_id,
+                attempt=delivery.attempts,
+                error_code=type(error).__name__,
+                message_kind=delivery.message.message_kind,
+            )
             self._settle_persona_reply(delivery, delivered=False, error=error)
             return
         delay = self.delivery_retry_base_seconds * 2 ** (delivery.attempts - 1)
@@ -360,17 +415,35 @@ class MessagePipeline:
                 f"v{self.store.get_lifecycle_entity(EntityType.DELIVERY, delivery.id).version}"
             ),
         )
+        log_event(
+            log,
+            "delivery.retry_scheduled",
+            status="retrying",
+            delivery_id=delivery.id,
+            run_id=delivery.message.agent_run_id,
+            attempt=delivery.attempts,
+            error_code=type(error).__name__,
+            retry_delay_ms=round(delay * 1000),
+            message_kind=delivery.message.message_kind,
+        )
 
     def _append_delivery_audit(
-        self, delivery: DeliveryRecord, decision: str, **details: str
+        self, delivery: DeliveryRecord, decision: str, **details: Any
     ) -> None:
         try:
             self.store.append_audit(
                 f"delivery.{decision}",
-                scope_id=delivery.message.conversation_id,
+                actor_id=delivery.message.actor_id,
+                scope_id=delivery.message.scope_id,
                 target=delivery.id,
                 decision=decision,
-                details=details,
+                details={
+                    "schema_version": "1.0",
+                    "run_id": delivery.message.agent_run_id,
+                    "message_kind": delivery.message.message_kind,
+                    "attempt": delivery.attempts,
+                    **details,
+                },
             )
         except Exception:
             log.exception("delivery %s audit write failed", delivery.id)

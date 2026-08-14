@@ -3,18 +3,18 @@ kind: ManagedAgent
 
 metadata:
   name: project
-  version: 2.0.2
+  version: 2.0.3
   description: 将限定范围内的团队上下文整理为可执行的项目计划和状态简报。
 
 spec:
   routing:
     default: false
     priority: 60
-    keywords: [项目助理, 项目计划, 任务拆解, 进度跟踪, 里程碑, project-plan, milestone]
+    keywords: [项目助理, 项目计划, 任务拆解, 进度跟踪, 里程碑, 创建任务, 待办, 任务管理, project-plan, milestone, create-task, todo]
     requires_url: false
     scopes: ["mattermost:*"]
 
-  accepted_intents: [project, plan, status]
+  accepted_intents: [project, plan, status, task]
   prompt:
     system_ref: system.md
     required_variables:
@@ -40,7 +40,10 @@ spec:
       - search_messages
       - search_knowledge
       - save_knowledge
-      - task_*
+      - create_task
+      - list_tasks
+      - update_task
+      - get_task_overview
     deny: []
 
   skills:
@@ -52,7 +55,7 @@ spec:
     read_scopes: [conversation, project, organization]
     write_scopes: [task, project]
 
-  policy_ref: project@1.0.0
+  policy_ref: project@1.0.1
   model_policy_ref: reasoning-medium@1.0.0
 
   budget:

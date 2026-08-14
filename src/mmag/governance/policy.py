@@ -11,13 +11,15 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from ..capabilities import CapabilityAuthorization
-from ..logger import log_context
+from ..logger import get_logger, log_context, log_event
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
     from typing import Any
 
     from ..capabilities import CapabilitySpec
+
+log = get_logger(__name__)
 
 
 class PolicyEffect(StrEnum):
@@ -220,6 +222,17 @@ class RegistryPolicyAuthorizer:
 
 
 def _audit_policy(audit_sink, spec, context, authorization, *, rule_id: str) -> None:
+    log_event(
+        log,
+        "policy.decision",
+        status=authorization.decision.value,
+        capability=spec.name,
+        policy_ref=context.policy_ref if context is not None else "",
+        decision=authorization.decision.value,
+        rule_id=rule_id,
+        permission=spec.permission,
+        authorization_phase=log_context.get("authorization_phase", "execute"),
+    )
     if audit_sink is None:
         return
     audit_sink.append_audit(
@@ -235,5 +248,6 @@ def _audit_policy(audit_sink, spec, context, authorization, *, rule_id: str) -> 
             "policy_ref": context.policy_ref if context is not None else "",
             "rule_id": rule_id,
             "permission": spec.permission,
+            "authorization_phase": log_context.get("authorization_phase", "execute"),
         },
     )

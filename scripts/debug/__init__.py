@@ -235,8 +235,22 @@ def _bot_info() -> tuple[str, str]:
 
 
 def _latest_log_file() -> Path | None:
-    logs = sorted(LOGS_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    logs = _log_files()
     return logs[0] if logs else None
+
+
+def _latest_bot_log_file() -> Path | None:
+    for path in _log_files()[:20]:
+        try:
+            if "Agent 就绪" in path.read_text(encoding="utf-8", errors="replace"):
+                return path
+        except OSError:
+            continue
+    return _latest_log_file()
+
+
+def _log_files() -> list[Path]:
+    return sorted(LOGS_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 def _extract_trace_id(post_id: str) -> str:
@@ -259,6 +273,14 @@ def _find_trace_id_from_log(log_file: Path, run_id: str) -> str:
     return ""
 
 
+def _find_trace_log(run_id: str) -> tuple[str, Path | None]:
+    for log_file in _log_files()[:20]:
+        trace_id = _find_trace_id_from_log(log_file, run_id)
+        if trace_id:
+            return trace_id, log_file
+    return "", _latest_log_file()
+
+
 def _grep_log(log_file: Path, trace_id: str) -> list[str]:
     if not log_file or not log_file.is_file():
         return []
@@ -279,6 +301,83 @@ def _query_audit(trace_id: str) -> list[dict]:
     ).fetchall()
     db.close()
     return [dict(r) for r in rows]
+
+
+def _terminal_reply(post: dict, *, bot_uid: str, root_post_id: str, created_at: int) -> bool:
+    if post.get("user_id") != bot_uid or post.get("create_at", 0) <= created_at:
+        return False
+    if str(post.get("root_id") or "") != root_post_id:
+        return False
+    props = post.get("props") if isinstance(post.get("props"), dict) else {}
+    kind = str(props.get("mmag_kind") or "")
+    status = str(props.get("mmag_status") or "")
+    return kind not in {"status", "stream"} or status in {
+        "completed",
+        "failed",
+        "waiting_approval",
+    }
+
+
+def _print_timeline(trace_id: str, log_file: Path | None = None) -> None:
+    audit = _query_audit(trace_id)
+    print(f"\n🧭 执行时间线 (trace={trace_id}):")
+    if not audit:
+        print("   未找到审计事件")
+    for item in audit:
+        details = json.loads(item.get("details", "{}")) if item.get("details") else {}
+        agent = str(details.get("agent_ref") or "")
+        skill = str(details.get("skill_ref") or "")
+        reason = str(details.get("reason") or details.get("rule_id") or "")
+        suffix = " ".join(value for value in (agent, skill, reason) if value)
+        print(
+            f"   {item['event_type']:25s} {item['decision']:16s} "
+            f"{str(item.get('target') or '')[:24]:24s} {suffix}"
+        )
+    if log_file is None:
+        _, log_file = _find_trace_log(trace_id)
+    if log_file is None:
+        return
+    events: list[dict] = []
+    for line in _grep_log(log_file, trace_id):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        events.append(payload)
+    if events:
+        print(f"\n📋 结构化运行事件 ({log_file.name}):")
+    for payload in events:
+        print(
+            "   "
+            f"{str(payload.get('event') or ''):30s} "
+            f"{str(payload.get('status') or ''):16s} "
+            f"agent={str(payload.get('agent_ref') or '-'):18s} "
+            f"skill={str(payload.get('skill_ref') or '-'):18s} "
+            f"cap={str(payload.get('capability') or '-'):20s} "
+            f"duration={payload.get('duration_ms', '-')}"
+        )
+
+
+def show_trace(identifier: str) -> None:
+    if not DB_PATH.is_file():
+        print("❌ 未找到 agent_memory.db", file=sys.stderr)
+        sys.exit(1)
+    db = sqlite3.connect(str(DB_PATH))
+    db.row_factory = sqlite3.Row
+    row = db.execute(
+        "SELECT trace_id FROM audit_events "
+        "WHERE trace_id=? OR details LIKE ? ORDER BY created_at DESC LIMIT 1",
+        (identifier, f"%{identifier}%"),
+    ).fetchone()
+    db.close()
+    trace_id = str(row["trace_id"] or "") if row else ""
+    if not trace_id:
+        trace_id, _ = _find_trace_log(identifier)
+    if not trace_id:
+        print(f"❌ 未找到 trace/run: {identifier}", file=sys.stderr)
+        sys.exit(1)
+    _, log_file = _find_trace_log(trace_id)
+    _print_timeline(trace_id, log_file)
 
 
 def test_message(message: str, wait_seconds: int = 120) -> None:
@@ -319,7 +418,12 @@ def test_message(message: str, wait_seconds: int = 120) -> None:
             key=lambda p: p.get("create_at", 0),
         )
         for p in recent:
-            if p.get("user_id") == bot_uid and p.get("create_at", 0) > post["create_at"]:
+            if _terminal_reply(
+                p,
+                bot_uid=bot_uid,
+                root_post_id=post_id,
+                created_at=post["create_at"],
+            ):
                 bot_reply = p
                 break
         if bot_reply:
@@ -329,8 +433,7 @@ def test_message(message: str, wait_seconds: int = 120) -> None:
         print(f"   {bot_reply['message'][:500]}")
     else:
         print(f"\n⚠️  {wait_seconds}s 内未收到 bot 回复")
-    log_file = _latest_log_file()
-    trace_id = _find_trace_id_from_log(log_file, run_id)
+    trace_id, log_file = _find_trace_log(run_id)
     if trace_id:
         log_lines = _grep_log(log_file, trace_id)
         print(f"\n📋 日志 ({len(log_lines)} 条, trace={trace_id[:12]}..., {log_file.name}):")
@@ -345,6 +448,7 @@ def test_message(message: str, wait_seconds: int = 120) -> None:
                 print(f"   {a['event_type']:25s} {a['decision']:10s} {a.get('target','')[:20]:20s} {skill}")
         else:
             print("\n🔍 审计: 未找到相关条目")
+        _print_timeline(trace_id, log_file)
     else:
         log_lines = _grep_log(log_file, run_id)
         if log_lines:
@@ -361,16 +465,20 @@ def test_message(message: str, wait_seconds: int = 120) -> None:
 def show_status() -> None:
     print("📊 MMAG 调试状态\n")
     result = subprocess.run(
-        ["pgrep", "-f", "mmag.cli"],
+        ["ps", "-eo", "pid=,args="],
         capture_output=True,
         text=True,
     )
-    pids = [p for p in result.stdout.strip().split("\n") if p]
+    pids = []
+    for line in result.stdout.splitlines():
+        pid, _, args = line.strip().partition(" ")
+        if args == "uv run python -m mmag.cli" or args.endswith("/python3 -m mmag.cli"):
+            pids.append(pid)
     if pids:
         print(f"🟢 Bot 进程运行中 (PID: {', '.join(pids)})")
     else:
         print("🔴 Bot 进程未运行")
-    log_file = _latest_log_file()
+    log_file = _latest_bot_log_file()
     if log_file and log_file.is_file():
         print(f"\n📄 最新日志: {log_file.name}")
         lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -406,7 +514,7 @@ def show_status() -> None:
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("用法: python -m scripts.debug <update|collect|reply|test|status> [args]")
+        print("用法: python -m scripts.debug <update|collect|reply|test|status|trace> [args]")
         sys.exit(1)
     cmd = sys.argv[1]
     if cmd == "update":
@@ -426,6 +534,11 @@ def main() -> None:
         test_message(sys.argv[2], wait_seconds=wait)
     elif cmd == "status":
         show_status()
+    elif cmd == "trace":
+        if len(sys.argv) < 3:
+            print("用法: python -m scripts.debug trace <trace-id|run-id>")
+            sys.exit(1)
+        show_trace(sys.argv[2])
     else:
         print(f"未知命令: {cmd}")
         sys.exit(1)

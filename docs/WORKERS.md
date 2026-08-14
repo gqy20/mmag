@@ -10,11 +10,11 @@ Capability 调用再由当前 Package Policy 动态裁决。
 
 | Agent | Skill | 路由职责 | 当前可执行能力 | 结构化结果 |
 |---|---|---|---|---|
-| `mmchat@2.2.1` | `web-research@1.2.1` | 默认群聊/私聊协同入口 | 隔离后的个人/共享上下文、知识、链接与 crawl 搜索子集 | 文本答复 |
+| `mmchat@2.2.2` | `web-research@1.2.1` | 默认群聊/私聊协同入口 | 隔离后的个人/共享上下文、知识、链接与 crawl 搜索子集；任务请求委派给 `project` | 文本答复 |
 | `link@2.0.1` | — | 单 URL 解析 | 确定性 `analyze_link`，无模型循环 | `link_analysis` |
 | `report@2.2.1` | `report@1.3.1`、`meeting@1.0.1` | 研报、行业/竞品研究、会议总结 | 当前频道知识/消息、公开链接与完整 crawl 工具集 | 证据账本式研究报告或会议纪要 |
 | `ppt@3.1.2` | `slides@3.1.1` | PPT、幻灯片、路演结构与文件生成 | 当前频道知识、受控 Markdown/主题、可编辑 PPTX/PNG 预览、受治理 Workspace、审批后 Artifact 交付 | Presentation Bundle 与 Artifact refs |
-| `project@2.0.2` | `project@1.2.1` | 项目计划、状态和任务拆解 | 当前频道消息/知识、审批后写入共享知识 | project brief |
+| `project@2.0.3` | `project@1.2.1` | 项目计划、状态、任务拆解和本地任务跟踪 | 当前频道消息/知识、当前可信 Scope 内的任务 CRUD、审批后写入共享知识 | project brief |
 
 `link` 直接执行确定性 Capability，因为单 URL 提取不需要模型和 Skill；输入、输出与版本
 provenance 由 Agent Package 契约负责。
@@ -51,7 +51,7 @@ Profile 中运行。
 
 - `ppt` 已可通过受控执行平面提交 PPTX/PDF Artifact；缺少 Bubblewrap namespace 权限或 LibreOffice
   时按设计失败关闭，不降级到宿主机执行；
-- `project` 当前生成计划/状态并可审批写入知识库，不声称已在 Jira、Linear 等系统创建任务；
+- `project` 当前可在 MMAG SQLite 中创建和跟踪 Scope 隔离的本地任务，并可审批写入知识库；不声称已在 Jira、Linear 等外部系统创建任务；
 - Agent Manifest 声明允许产生的 Artifact kind，但默认消息链尚未把结构化结果原子写入 Artifact
   Repository；
 - `report → ppt` 尚未强制只通过版本化 Artifact ref 交接。
@@ -62,5 +62,5 @@ Profile 中运行。
 2. 让 `ppt` 只消费通过 Schema、scope 和版本校验的 Artifact ref；
 3. 为 PPTX/PDF 增加封面/关键页 PNG 预览，并接入 Mattermost Presenter；
 4. 将 Artifact ref 通过审批、Outbox 与文件上传交付，不让模型处理宿主路径；
-5. 通过 MCP/企业 API 增加任务系统 Capability，让 `project` 在审批后创建或更新真实任务；
+5. 通过 MCP/企业 API 增加外部任务系统 Capability，让 `project` 在审批后创建或更新 Jira、Linear 等真实外部任务；
 6. 补齐接受、驳回、返工和质量反馈，使 Task、AgentRun、Artifact、Delivery、Feedback 形成闭环。

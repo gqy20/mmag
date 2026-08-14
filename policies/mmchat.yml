@@ -1,5 +1,5 @@
 id: mmchat
-version: 1.4.0
+version: 1.4.1
 default_effect: deny
 
 rules:
@@ -49,12 +49,6 @@ rules:
     actions: [delegate_ppt, delegate_report, delegate_project, delegate_link]
     permissions: [delegate:ppt, delegate:report, delegate:project, delegate:link]
     reason: MMChat may dispatch tasks to registered sub-agents.
-
-  - id: manage-tasks
-    effect: allow
-    actions: [create_task, list_tasks, update_task, get_task_overview]
-    permissions: [task:write, task:read]
-    reason: MMChat may create and track organizational items.
 
   - id: approve-allowlisted-mcp
     effect: require_approval

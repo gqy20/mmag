@@ -58,6 +58,9 @@ def test_registry_and_router_apply_permission_scope_cost_and_health():
     )
     assert selection.agent.descriptor.name == "link"
     assert selection.intent == "link"
+    assert selection.reason == "intent"
+    assert selection.matched_keywords == ()
+    assert selection.candidate_count == 1
 
 
 @pytest.mark.asyncio
@@ -115,6 +118,9 @@ def test_router_prefers_yaml_specialization_and_normalizes_intent():
 
     assert selection.agent.descriptor.name == "link"
     assert selection.intent == "link"
+    assert selection.reason == "keyword"
+    assert selection.matched_keywords == ("链接",)
+    assert selection.candidate_count == 2
 
 
 def test_router_uses_personal_agent_preference_only_after_hard_route_match():
