@@ -238,7 +238,7 @@ uv run mmag-eval --root evals validate
 
 ```bash
 MMAG_E2E_ENABLED=1 uv run mmag-eval --root evals run suites/smoke.yml \
-  --profile profiles/staging-mattermost.yml --allow-external
+  --profile profiles/staging-mattermost.yml --env-file .env.debug --allow-external
 ```
 
 演示视频可重复录制；脚本会创建真实多人讨论、运行 Personal Skill/数字人/会议总结/PPT 审批链，录制

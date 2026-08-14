@@ -18,10 +18,12 @@ uv run mmag-eval --root evals validate
 
 ```bash
 MMAG_E2E_ENABLED=1 uv run mmag-eval --root evals run suites/smoke.yml \
-  --profile profiles/staging-mattermost.yml --allow-external
+  --profile profiles/staging-mattermost.yml --env-file .env.debug --allow-external
 ```
 
 远程地址必须使用 HTTPS；只有 `localhost`、`127.0.0.1` 和 `::1` 可以使用 HTTP。
+运行真实套件时，同一 Bot 凭据只能对应一个活动消费者和一套共享控制面；并行调试请使用独立测试 Bot，
+否则审批命令和幂等投递会被另一实例抢占。
 完整契约与运行边界见 [Evaluation Framework](../docs/EVALUATION.md)。
 
 三分钟真实体验录制使用 `scripts/record_mattermost_demo.sh`；先运行 `--dry-run` 检查账号引用、Bot 名称

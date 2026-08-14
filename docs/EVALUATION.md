@@ -32,16 +32,19 @@ uv run mmag-eval --root evals validate
 3. `MMAG_E2E_ENABLED=1`；
 4. 命令行显式传入 `--allow-external`；
 5. 远程 Mattermost 使用 HTTPS，或仅在受信 localhost 使用 HTTP；
-6. Bot 已独立启动并监听目标频道。
+6. Bot 已独立启动并监听目标频道；
+7. 同一 Bot 凭据只有一个活动消费者，或所有副本共享同一控制面和 Inbox/Outbox；本地调试与其他部署并行时，使用独立测试 Bot 凭据。
 
 ```bash
 uv run mmag-eval --root evals run suites/smoke.yml \
   --profile profiles/staging-mattermost.yml \
+  --env-file .env.debug \
   --allow-external
 ```
 
-`staging-mattermost` 使用 `MM_USERNAME` / `MM_PASSWORD` 作为 requester；审批和越权套件按需读取独立
-approver/unauthorized 账号。缺失的非当前 Case 账号不会被读取。登录 Session 在 Case 退出时注销。
+`staging-mattermost` 从 `.env.debug` 读取 `DEBUG_TEST_CHANNEL_ID`，并使用 `MM_USERNAME` / `MM_PASSWORD`
+作为 requester；审批和越权套件按需读取独立 approver/unauthorized 账号。缺失的非当前 Case 账号不会被
+读取。登录 Session 在 Case 退出时注销。
 
 ## 观察与断言
 
@@ -65,7 +68,7 @@ excerpt 和 SHA-256；报告不保存密码、Token 或 Session。
 ## Suite 与报告
 
 - `suites/smoke.yml`：单账号用户—Bot Thread 主链；
-- `suites/mattermost-e2e.yml`：聊天、统一入口创建真实项目 Task，以及 PPT 审批与 Artifact 交付；Task 场景同时断言 Project Agent 路由、`create_task` 授权调用、新增业务记录、可信 actor/channel 和 execution key；
+- `suites/mattermost-e2e.yml`：聊天、统一入口创建真实项目 Task，以及 PPT 审批与 Artifact 交付；Task 场景同时断言 `mmchat → delegate_project → create_task` 调用链、新增业务记录、可信 actor/channel 和 execution key；
 - `suites/security.yml`：独立未授权账号尝试批准他人的请求。
 
 每次运行在 `.eval-runs/<evaluation-run-id>.json` 原子生成报告，记录资产 Hash、Profile ID、Case 结果、

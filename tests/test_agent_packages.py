@@ -12,11 +12,14 @@ from mmag.agent_packages import (
     DirectAgentProvider,
     ManifestValidationError,
 )
+from mmag.agent_packages.runtime import _package_capability_context
 from mmag.agent_system import AgentRegistry, AgentRequest
 from mmag.capabilities import (
+    CapabilityContext,
     CapabilityExecutor,
     CapabilityRegistry,
     CapabilitySpec,
+    bind_capability_context,
     bind_langgraph_capability,
     build_builtin_bindings,
 )
@@ -70,6 +73,42 @@ def test_loader_compiles_direct_manifest_and_snapshot():
     assert package.manifest.runtime.mode == "direct"
     assert package.manifest.runtime.capability == "analyze_link"
     assert package.manifest.routing.requires_url is True
+
+
+def test_nested_package_context_inherits_trusted_scope_dimensions():
+    package = AgentPackageLoader().load(ROOT / "agents" / "project")
+    parent = CapabilityContext(
+        trace_id="trace-1",
+        actor_id="user-1",
+        conversation_id="channel-1",
+        message_id="post-1",
+        message="创建任务",
+        scope="mattermost:install:tenant:chn:channel-1",
+        installation_id="install",
+        tenant_id="tenant",
+        scope_kind="channel",
+        owner_id="owner-1",
+        team_id="team-1",
+        channel_type="O",
+    )
+    request = AgentRequest(
+        "project",
+        "创建任务",
+        scope=parent.scope,
+        actor_id=parent.actor_id,
+        run_id="delegate:project:1",
+    )
+
+    with bind_capability_context(parent):
+        nested = _package_capability_context(package, request, None, ("create_task",))
+
+    assert nested.scope == parent.scope
+    assert nested.installation_id == "install"
+    assert nested.tenant_id == "tenant"
+    assert nested.scope_kind == "channel"
+    assert nested.owner_id == "owner-1"
+    assert nested.team_id == "team-1"
+    assert nested.channel_type == "O"
 
 
 def test_loader_rejects_unknown_manifest_fields(tmp_path):

@@ -75,6 +75,7 @@ class ControlPlaneObservation:
     delivery_states: tuple[str, ...] = ()
     agent_name: str = ""
     capability_names: tuple[str, ...] = ()
+    delivery_post_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -18,7 +18,7 @@ def test_external_environment_requires_double_gate():
     environment = EvaluationEnvironment(
         {
             "MM_URL": "https://mattermost.example",
-            "MM_CHANNEL_ID": "channel-1",
+            "DEBUG_TEST_CHANNEL_ID": "channel-1",
         }
     )
 
@@ -31,7 +31,7 @@ def test_credentialed_remote_http_is_rejected():
         {
             "MMAG_E2E_ENABLED": "1",
             "MM_URL": "http://mattermost.example",
-            "MM_CHANNEL_ID": "channel-1",
+            "DEBUG_TEST_CHANNEL_ID": "channel-1",
         }
     )
 

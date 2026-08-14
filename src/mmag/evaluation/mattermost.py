@@ -204,6 +204,26 @@ class SQLiteEvaluationObserver:
         finally:
             connection.close()
 
+    def approval_registered(self, path: str, approval_id: str, root_post_id: str) -> bool:
+        if not path or not approval_id or not root_post_id:
+            return False
+        database = Path(path).resolve()
+        if not database.is_file():
+            return False
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        try:
+            row = connection.execute(
+                """SELECT 1 FROM approval_requests
+                WHERE id=? AND json_extract(arguments, '$.thread_id')=?
+                LIMIT 1""",
+                (approval_id, f"mattermost:{root_post_id}"),
+            ).fetchone()
+            return row is not None
+        except sqlite3.Error:
+            return False
+        finally:
+            connection.close()
+
     def observe(
         self,
         path: str,
@@ -228,6 +248,15 @@ class SQLiteEvaluationObserver:
                 for row in connection.execute(
                     "SELECT status FROM outbox_deliveries WHERE agent_run_id=? ORDER BY created_at",
                     (f"run:{root_post_id}",),
+                ).fetchall()
+            )
+            delivery_post_ids = tuple(
+                str(row[0])
+                for row in connection.execute(
+                    """SELECT remote_id FROM outbox_deliveries
+                    WHERE root_id=? AND status='delivered' AND remote_id<>''
+                    ORDER BY created_at""",
+                    (root_post_id,),
                 ).fetchall()
             )
             trace_id, agent_name = self._agent_trace(connection, root_post_id)
@@ -257,6 +286,7 @@ class SQLiteEvaluationObserver:
                 deliveries,
                 agent_name,
                 capabilities,
+                delivery_post_ids,
             ), tasks
         except sqlite3.Error:
             return ControlPlaneObservation(), ()
@@ -397,7 +427,16 @@ class MattermostEvaluationDriver:
             bot_posts = self._bot_posts(latest_posts)
             approval_post = self._latest_with_status(bot_posts, "waiting_approval")
             if approval_post is not None:
-                approval_id = approval_id or self._approval_id(str(approval_post.get("message") or ""))
+                candidate_id = self._approval_id(str(approval_post.get("message") or ""))
+                locally_registered = not resolved.control_plane_db_path or (
+                    self.control_plane_observer.approval_registered(
+                        resolved.control_plane_db_path,
+                        candidate_id,
+                        root_post_id,
+                    )
+                )
+                if candidate_id and locally_registered:
+                    approval_id = candidate_id
                 if decision and not decision_sent and approval_id:
                     actor_name = str(approval.get("actor") or scenario.actor)
                     if actor_name == scenario.actor:
@@ -414,7 +453,7 @@ class MattermostEvaluationDriver:
                         root_id=root_post_id,
                     )
                     decision_sent = True
-                elif not decision:
+                elif not decision and approval_id:
                     return self._observation(
                         latest_posts,
                         root_post_id,
@@ -438,7 +477,7 @@ class MattermostEvaluationDriver:
                     await asyncio.sleep(resolved.poll_interval_seconds)
                     continue
                 denied = bool(decision_sent and not authorized and self._kind(terminal) == "error")
-                return self._observation(
+                observation = self._observation(
                     latest_posts,
                     root_post_id,
                     started,
@@ -449,6 +488,8 @@ class MattermostEvaluationDriver:
                     requester_id=requester.user_id,
                     channel_id=resolved.channel_id,
                 )
+                if self._control_plane_ready(scenario, observation):
+                    return observation
             await asyncio.sleep(resolved.poll_interval_seconds)
 
         return self._observation(
@@ -461,6 +502,59 @@ class MattermostEvaluationDriver:
             baseline_task_ids=baseline_task_ids,
             requester_id=requester.user_id,
             channel_id=resolved.channel_id,
+        )
+
+    @staticmethod
+    def _control_plane_ready(
+        scenario: EvaluationScenario,
+        observation: EvaluationObservation,
+    ) -> bool:
+        expected = scenario.expected
+        control_plane = expected.get("control_plane", {})
+        control_plane = dict(control_plane) if isinstance(control_plane, dict) else {}
+        actual = observation.control_plane
+        if control_plane.get("agent_run_state") != actual.agent_run_state and control_plane.get(
+            "agent_run_state"
+        ):
+            return False
+        if control_plane.get("task_state") != actual.task_state and control_plane.get("task_state"):
+            return False
+        if control_plane.get("agent_name") != actual.agent_name and control_plane.get("agent_name"):
+            return False
+        delivery_states = control_plane.get("delivery_states_all", ())
+        if isinstance(delivery_states, list) and not set(delivery_states).issubset(
+            actual.delivery_states
+        ):
+            return False
+
+        capabilities = expected.get("capabilities", {})
+        capabilities = dict(capabilities) if isinstance(capabilities, dict) else {}
+        capability_names = capabilities.get("contains_all", ())
+        if isinstance(capability_names, list) and not set(capability_names).issubset(
+            actual.capability_names
+        ):
+            return False
+
+        tasks = expected.get("tasks", {})
+        tasks = dict(tasks) if isinstance(tasks, dict) else {}
+        created = observation.created_tasks
+        if tasks.get("minimum_created") is not None and len(created) < int(
+            tasks["minimum_created"]
+        ):
+            return False
+        title_contains = str(tasks.get("title_contains") or "")
+        if title_contains and not any(title_contains in task.title for task in created):
+            return False
+        if tasks.get("requester_is_creator") and (
+            not created or not all(task.creator_matches_requester for task in created)
+        ):
+            return False
+        if tasks.get("current_channel") and (
+            not created or not all(task.channel_matches_request for task in created)
+        ):
+            return False
+        return not tasks.get("execution_key_required") or (
+            bool(created) and all(task.execution_key_present for task in created)
         )
 
     def _observation(
@@ -477,14 +571,7 @@ class MattermostEvaluationDriver:
         requester_id: str = "",
         channel_id: str = "",
     ) -> EvaluationObservation:
-        bot_posts = self._bot_posts(posts)
-        terminal = self._latest_terminal(bot_posts)
-        approval_seen = self._latest_with_status(bot_posts, "waiting_approval") is not None
-        visible = [
-            str(post.get("message") or "")
-            for post in bot_posts
-            if self._kind(post) not in {"status", "approval"}
-        ]
+        all_bot_posts = self._bot_posts(posts)
         control_plane, created_tasks = self.control_plane_observer.observe(
             control_plane_path,
             root_post_id,
@@ -492,6 +579,19 @@ class MattermostEvaluationDriver:
             requester_id=requester_id,
             channel_id=channel_id,
         )
+        local_post_ids = frozenset(control_plane.delivery_post_ids)
+        bot_posts = (
+            tuple(post for post in all_bot_posts if str(post.get("id") or "") in local_post_ids)
+            if local_post_ids
+            else all_bot_posts
+        )
+        terminal = self._latest_terminal(bot_posts)
+        approval_seen = self._latest_with_status(bot_posts, "waiting_approval") is not None
+        visible = [
+            str(post.get("message") or "")
+            for post in bot_posts
+            if self._kind(post) not in {"status", "approval"}
+        ]
         return EvaluationObservation(
             root_post_id=root_post_id,
             run_id=f"mattermost:{root_post_id}",

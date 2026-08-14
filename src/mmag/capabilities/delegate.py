@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..agent_system import AgentRequest
-from ..logger import get_logger, log_context, log_event
+from ..logger import get_logger, log_context, log_event, safe_hash
 from .base import CapabilityEffect, CapabilitySpec, SourcePolicy
+from .context import get_capability_context
 
 if TYPE_CHECKING:
     from ..agent_system import AgentRegistry
@@ -51,24 +52,40 @@ def _create_delegate_capability(
         except LookupError:
             return {"status": "error", "error": f"子智能体 {agent_name} 未注册"}
 
+        parent_context = get_capability_context()
+        if parent_context is None or not parent_context.actor_id or not parent_context.scope:
+            return {"status": "error", "error": "缺少可信的子智能体委托上下文"}
+
         import uuid
         request = AgentRequest(
             intent=intent,
             prompt=task,
-            actor_id=log_context.get("actor_id", "mmchat"),
-            task_id=log_context.get("trace_id", ""),
+            scope=parent_context.scope,
+            actor_id=parent_context.actor_id,
+            task_id=log_context.get("task_id", parent_context.trace_id),
             run_id=f"delegate:{agent_name}:{uuid.uuid4().hex[:16]}",
         )
 
-        log_event(log, "delegate.started", status="running",
-                   subagent=agent_name, task_preview=task[:100])
+        log_event(
+            log,
+            "delegate.started",
+            status="running",
+            subagent=agent_name,
+            input_sha256=safe_hash(task),
+        )
 
         try:
             output = await agent.run(request)
         except Exception as error:
-            log_event(log, "delegate.failed", level=40, status="failed",
-                       subagent=agent_name, error=str(error)[:200])
-            return {"status": "error", "error": f"子智能体执行失败: {error}"}
+            log_event(
+                log,
+                "delegate.failed",
+                level=40,
+                status="failed",
+                subagent=agent_name,
+                error_code=type(error).__name__,
+            )
+            return {"status": "error", "error": f"子智能体执行失败: {type(error).__name__}"}
 
         log_event(log, "delegate.completed", status="completed",
                    subagent=agent_name, text_length=len(output.text))

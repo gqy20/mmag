@@ -228,16 +228,58 @@ def _package_capability_context(
         ),
         message_id=parent.message_id if parent is not None else "",
         message=parent.message if parent is not None else request.prompt,
-        scope=runtime_context.scope if runtime_context is not None else request.scope,
+        scope=(
+            runtime_context.scope
+            if runtime_context is not None
+            else parent.scope
+            if parent is not None
+            else request.scope
+        ),
         allowed_capabilities=frozenset(allowed_capabilities),
         run_id=(runtime_context.run_id if runtime_context is not None else request.run_id),
         allowed_execution_profiles=frozenset(package.execution_profiles),
-        installation_id=(runtime_context.installation_id if runtime_context is not None else ""),
-        tenant_id=(runtime_context.tenant_id if runtime_context is not None else ""),
-        scope_kind=(runtime_context.scope_kind if runtime_context is not None else ""),
-        owner_id=(runtime_context.owner_id if runtime_context is not None else ""),
-        team_id=(runtime_context.team_id if runtime_context is not None else ""),
-        channel_type=(runtime_context.channel_type if runtime_context is not None else ""),
+        installation_id=(
+            runtime_context.installation_id
+            if runtime_context is not None
+            else parent.installation_id
+            if parent is not None
+            else ""
+        ),
+        tenant_id=(
+            runtime_context.tenant_id
+            if runtime_context is not None
+            else parent.tenant_id
+            if parent is not None
+            else ""
+        ),
+        scope_kind=(
+            runtime_context.scope_kind
+            if runtime_context is not None
+            else parent.scope_kind
+            if parent is not None
+            else ""
+        ),
+        owner_id=(
+            runtime_context.owner_id
+            if runtime_context is not None
+            else parent.owner_id
+            if parent is not None
+            else ""
+        ),
+        team_id=(
+            runtime_context.team_id
+            if runtime_context is not None
+            else parent.team_id
+            if parent is not None
+            else ""
+        ),
+        channel_type=(
+            runtime_context.channel_type
+            if runtime_context is not None
+            else parent.channel_type
+            if parent is not None
+            else ""
+        ),
     )
 
 

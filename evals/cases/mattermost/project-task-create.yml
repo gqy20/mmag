@@ -3,7 +3,7 @@ kind: EvaluationScenario
 
 metadata:
   id: mattermost-project-task-create
-  version: 1.0.0
+  version: 1.0.1
   tags: [mattermost, project, task, capability]
 
 spec:
@@ -18,10 +18,10 @@ spec:
       raw_json_forbidden: true
       not_contains: ["core_agent 当前无 create_task", "save_knowledge"]
     control_plane:
-      agent_name: project
+      agent_name: mmchat
       delivery_states_all: [delivered]
     capabilities:
-      contains_all: [create_task]
+      contains_all: [delegate_project, create_task]
     tasks:
       minimum_created: 1
       title_contains: MMAG-E2E-
