@@ -259,6 +259,8 @@ MMAG_E2E_ENABLED=1 scripts/record_mattermost_demo.sh
 make debug-status                       # 查看 bot 进程、已加载能力、最近运行
 make debug-test MSG="测试消息"           # 发消息到 mmag-test → 忽略 ack/stream，等待终态回复并输出时间线
 make debug-trace ID="trace-or-run-id"    # 查看 Agent 路由、Skill、模型、工具、Policy 和交付时间线
+make debug-test MSG="创建任务..." JSON=1  # 输出机器可读报告，失败或超时返回非零退出码
+make debug-trace ID="mattermost:<post-id>" JSON=1  # 精确 run 查询并聚合轮转日志
 make debug-update                       # 收集 git log + CHANGELOG → 发到 Bugs 频道
 make debug-collect                      # 拉取 Bugs 频道最近 20 条消息
 make debug-reply POST_ID=xxx MSG="回复"  # 回复 Bugs 频道指定帖子（支持短 ID 前缀）
@@ -308,6 +310,7 @@ src/mmag/
 
 ## 文档
 
+- [产品定义](docs/PRODUCT.md)
 - [AI Native 架构](docs/AI_NATIVE_REFACTORING.md)
 - [Deep Agents 重构](docs/DEEP_AGENTS_REFACTORING.md)
 - [Agent Package](docs/AGENT_PACKAGES.md)

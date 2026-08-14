@@ -3,6 +3,7 @@ from mmag.evaluation import (
     DeterministicEvaluator,
     EvaluationObservation,
     EvaluationScenario,
+    TaskObservation,
 )
 
 
@@ -76,3 +77,39 @@ def test_actual_agent_name_is_asserted_from_control_plane():
     assert not assertion.passed
     assert assertion.expected == "mmchat"
     assert assertion.actual == "project"
+
+
+def test_task_and_capability_assertions_use_control_plane_state():
+    scenario = EvaluationScenario(
+        id="project-task",
+        version="1.0.0",
+        actor="requester",
+        message="create task",
+        expected={
+            "capabilities": {"contains_all": ["create_task"]},
+            "tasks": {
+                "minimum_created": 1,
+                "title_contains": "MMAG-E2E-",
+                "requester_is_creator": True,
+                "current_channel": True,
+                "execution_key_required": True,
+            },
+        },
+    )
+    observation = EvaluationObservation(
+        root_post_id="post-1",
+        run_id="mattermost:post-1",
+        control_plane=ControlPlaneObservation(capability_names=("create_task",)),
+        created_tasks=(
+            TaskObservation(
+                "task-1",
+                "MMAG-E2E-one",
+                "mattermost:i:t:chn:c",
+                True,
+                True,
+                True,
+            ),
+        ),
+    )
+
+    assert all(item.passed for item in DeterministicEvaluator().evaluate(scenario, observation))

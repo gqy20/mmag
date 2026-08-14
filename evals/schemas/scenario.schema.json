@@ -37,7 +37,9 @@
             "response": {"$ref": "#/$defs/response"},
             "approval": {"$ref": "#/$defs/approval"},
             "artifacts": {"$ref": "#/$defs/artifacts"},
-            "control_plane": {"$ref": "#/$defs/controlPlane"}
+            "control_plane": {"$ref": "#/$defs/controlPlane"},
+            "capabilities": {"$ref": "#/$defs/capabilities"},
+            "tasks": {"$ref": "#/$defs/tasks"}
           }
         },
         "thresholds": {
@@ -81,13 +83,32 @@
       "additionalProperties": false,
       "properties": {"minimum": {"type": "integer", "minimum": 0}}
     },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contains_all": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "tasks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimum_created": {"type": "integer", "minimum": 0},
+        "title_contains": {"type": "string", "minLength": 1},
+        "requester_is_creator": {"type": "boolean"},
+        "current_channel": {"type": "boolean"},
+        "execution_key_required": {"type": "boolean"}
+      }
+    },
     "controlPlane": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "agent_run_state": {"type": "string"},
         "task_state": {"type": "string"},
-        "agent_name": {"type": "string", "minLength": 1}
+        "agent_name": {"type": "string", "minLength": 1},
+        "delivery_states_all": {"$ref": "#/$defs/strings"}
       }
     }
   }

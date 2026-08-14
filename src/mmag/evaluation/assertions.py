@@ -128,6 +128,68 @@ class DeterministicEvaluator:
                 control_plane["agent_name"],
                 observation.control_plane.agent_name,
             )
+        for state in self._strings(control_plane.get("delivery_states_all")):
+            self._append(
+                assertions,
+                f"delivery_state:{state}",
+                True,
+                state in observation.control_plane.delivery_states,
+            )
+
+        capabilities = self._mapping(expected.get("capabilities"))
+        for name in self._strings(capabilities.get("contains_all")):
+            self._append(
+                assertions,
+                f"capability_called:{name}",
+                True,
+                name in observation.control_plane.capability_names,
+            )
+
+        tasks = self._mapping(expected.get("tasks"))
+        if tasks.get("minimum_created") is not None:
+            minimum = int(tasks["minimum_created"])
+            assertions.append(
+                EvaluationAssertion(
+                    "created_task_count",
+                    len(observation.created_tasks) >= minimum,
+                    f">={minimum}",
+                    len(observation.created_tasks),
+                )
+            )
+        title_contains = str(tasks.get("title_contains") or "")
+        if title_contains:
+            assertions.append(
+                EvaluationAssertion(
+                    "created_task_title",
+                    any(title_contains in task.title for task in observation.created_tasks),
+                    f"contains {title_contains!r}",
+                    tuple(task.title for task in observation.created_tasks),
+                )
+            )
+        if tasks.get("requester_is_creator"):
+            self._append(
+                assertions,
+                "created_task_actor",
+                True,
+                bool(observation.created_tasks)
+                and all(task.creator_matches_requester for task in observation.created_tasks),
+            )
+        if tasks.get("current_channel"):
+            self._append(
+                assertions,
+                "created_task_channel",
+                True,
+                bool(observation.created_tasks)
+                and all(task.channel_matches_request for task in observation.created_tasks),
+            )
+        if tasks.get("execution_key_required"):
+            self._append(
+                assertions,
+                "created_task_execution_key",
+                True,
+                bool(observation.created_tasks)
+                and all(task.execution_key_present for task in observation.created_tasks),
+            )
 
         max_duration = scenario.thresholds.get("max_duration_seconds")
         if max_duration is not None:

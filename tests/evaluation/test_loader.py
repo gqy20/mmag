@@ -14,7 +14,7 @@ def test_evaluation_tree_loads_strict_versioned_assets():
 
     assert profiles == 1
     assert suites == 3
-    assert cases == 3
+    assert cases == 4
     assert loader.load_suite("suites/smoke.yml").sha256
     assert loader.load_profile("profiles/staging-mattermost.yml").actors["requester"]
 

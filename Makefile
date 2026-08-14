@@ -121,7 +121,7 @@ debug-test:
 	@if [ -z "$(MSG)" ]; then \
 		echo "用法: make debug-test MSG=<测试消息> [WAIT=<秒数>]"; exit 1; \
 	fi
-	uv run python -m scripts.debug test "$(MSG)" $(or $(WAIT),120)
+	uv run python -m scripts.debug test "$(MSG)" $(or $(WAIT),120) $(if $(JSON),--json,)
 
 debug-status:
 	uv run python -m scripts.debug status
@@ -130,4 +130,4 @@ debug-trace:
 	@if [ -z "$(ID)" ]; then \
 		echo "用法: make debug-trace ID=<trace-id|run-id>"; exit 1; \
 	fi
-	uv run python -m scripts.debug trace "$(ID)"
+	uv run python -m scripts.debug trace "$(ID)" $(if $(JSON),--json,)

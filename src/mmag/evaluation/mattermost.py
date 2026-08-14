@@ -22,6 +22,7 @@ from .models import (
     EvaluationObservation,
     EvaluationProfile,
     EvaluationScenario,
+    TaskObservation,
 )
 
 if TYPE_CHECKING:
@@ -189,13 +190,36 @@ class MattermostUserSession:
 class SQLiteEvaluationObserver:
     """Read only stable lifecycle states; never mutates a target deployment."""
 
-    def observe(self, path: str, root_post_id: str) -> ControlPlaneObservation:
+    def task_ids(self, path: str) -> frozenset[str]:
         if not path:
-            return ControlPlaneObservation()
+            return frozenset()
         database = Path(path).resolve()
         if not database.is_file():
-            return ControlPlaneObservation()
+            return frozenset()
         connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        try:
+            return frozenset(str(row[0]) for row in connection.execute("SELECT id FROM tasks"))
+        except sqlite3.Error:
+            return frozenset()
+        finally:
+            connection.close()
+
+    def observe(
+        self,
+        path: str,
+        root_post_id: str,
+        *,
+        baseline_task_ids: frozenset[str] = frozenset(),
+        requester_id: str = "",
+        channel_id: str = "",
+    ) -> tuple[ControlPlaneObservation, tuple[TaskObservation, ...]]:
+        if not path:
+            return ControlPlaneObservation(), ()
+        database = Path(path).resolve()
+        if not database.is_file():
+            return ControlPlaneObservation(), ()
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
         try:
             run = self._state(connection, "agent_run", f"run:{root_post_id}")
             task = self._state(connection, "task", f"task:{root_post_id}")
@@ -206,10 +230,36 @@ class SQLiteEvaluationObserver:
                     (f"run:{root_post_id}",),
                 ).fetchall()
             )
-            agent_name = self._agent_name(connection, root_post_id)
-            return ControlPlaneObservation(run, task, deliveries, agent_name)
+            trace_id, agent_name = self._agent_trace(connection, root_post_id)
+            capabilities = tuple(
+                sorted(
+                    {
+                        str(row[0])
+                        for row in connection.execute(
+                            """SELECT target FROM audit_events
+                            WHERE trace_id=? AND event_type IN ('policy.decision', 'runtime.tool.call')
+                            ORDER BY created_at""",
+                            (trace_id,),
+                        ).fetchall()
+                        if row[0]
+                    }
+                )
+            )
+            tasks = self._created_tasks(
+                connection,
+                baseline_task_ids,
+                requester_id=requester_id,
+                channel_id=channel_id,
+            )
+            return ControlPlaneObservation(
+                run,
+                task,
+                deliveries,
+                agent_name,
+                capabilities,
+            ), tasks
         except sqlite3.Error:
-            return ControlPlaneObservation()
+            return ControlPlaneObservation(), ()
         finally:
             connection.close()
 
@@ -222,15 +272,42 @@ class SQLiteEvaluationObserver:
         return str(row[0]) if row else ""
 
     @staticmethod
-    def _agent_name(connection: sqlite3.Connection, root_post_id: str) -> str:
+    def _agent_trace(connection: sqlite3.Connection, root_post_id: str) -> tuple[str, str]:
         row = connection.execute(
-            """SELECT target FROM audit_events
+            """SELECT trace_id, target FROM audit_events
             WHERE event_type='agent.run'
               AND json_extract(details, '$.message_id')=?
             ORDER BY created_at DESC LIMIT 1""",
             (root_post_id,),
         ).fetchone()
-        return str(row[0]) if row else ""
+        return (str(row[0] or ""), str(row[1] or "")) if row else ("", "")
+
+    @staticmethod
+    def _created_tasks(
+        connection: sqlite3.Connection,
+        baseline_task_ids: frozenset[str],
+        *,
+        requester_id: str,
+        channel_id: str,
+    ) -> tuple[TaskObservation, ...]:
+        rows = connection.execute(
+            """SELECT id, title, scope_id, creator_id, channel_id, execution_key
+            FROM tasks ORDER BY created_at"""
+        ).fetchall()
+        return tuple(
+            TaskObservation(
+                id=str(row["id"]),
+                title=str(row["title"]),
+                scope_id=str(row["scope_id"]),
+                creator_matches_requester=str(row["creator_id"]) == requester_id,
+                channel_matches_request=str(row["channel_id"]) == channel_id,
+                execution_key_present=bool(str(row["execution_key"])),
+            )
+            for row in rows
+            if str(row["id"]) not in baseline_task_ids
+            and (not requester_id or str(row["creator_id"]) == requester_id)
+            and (not channel_id or str(row["channel_id"]) == channel_id)
+        )
 
 
 class MattermostEvaluationDriver:
@@ -259,6 +336,9 @@ class MattermostEvaluationDriver:
             )
         resolved = self.environment.resolve_profile(profile)
         requester = self.environment.resolve_actor(profile, scenario.actor)
+        baseline_task_ids = self.control_plane_observer.task_ids(
+            resolved.control_plane_db_path
+        )
         started = time.monotonic()
         async with AsyncExitStack() as stack:
             requester_session = await stack.enter_async_context(
@@ -269,7 +349,11 @@ class MattermostEvaluationDriver:
                     f"scenario {scenario.id!r} requires {profile.bot_username_env}"
                 )
             bot_username = resolved.bot_username.removeprefix("@")
-            message = scenario.message.replace("{bot}", bot_username).strip()
+            message = (
+                scenario.message.replace("{bot}", bot_username)
+                .replace("{eval_id}", evaluation_run_id)
+                .strip()
+            )
             root = await requester_session.create_post(
                 resolved.channel_id,
                 message,
@@ -284,6 +368,7 @@ class MattermostEvaluationDriver:
                 resolved,
                 root_post_id,
                 started,
+                baseline_task_ids,
             )
 
     async def _observe_and_act(
@@ -295,6 +380,7 @@ class MattermostEvaluationDriver:
         resolved: ResolvedMattermostProfile,
         root_post_id: str,
         started: float,
+        baseline_task_ids: frozenset[str],
     ) -> EvaluationObservation:
         deadline = time.monotonic() + resolved.timeout_seconds
         approval = scenario.expected.get("approval", {})
@@ -335,6 +421,9 @@ class MattermostEvaluationDriver:
                         started,
                         approval_id=approval_id,
                         control_plane_path=resolved.control_plane_db_path,
+                        baseline_task_ids=baseline_task_ids,
+                        requester_id=requester.user_id,
+                        channel_id=resolved.channel_id,
                     )
 
             terminal = self._latest_terminal(bot_posts)
@@ -356,6 +445,9 @@ class MattermostEvaluationDriver:
                     approval_id=approval_id,
                     approval_denied=denied,
                     control_plane_path=resolved.control_plane_db_path,
+                    baseline_task_ids=baseline_task_ids,
+                    requester_id=requester.user_id,
+                    channel_id=resolved.channel_id,
                 )
             await asyncio.sleep(resolved.poll_interval_seconds)
 
@@ -366,6 +458,9 @@ class MattermostEvaluationDriver:
             approval_id=approval_id,
             timed_out=True,
             control_plane_path=resolved.control_plane_db_path,
+            baseline_task_ids=baseline_task_ids,
+            requester_id=requester.user_id,
+            channel_id=resolved.channel_id,
         )
 
     def _observation(
@@ -378,6 +473,9 @@ class MattermostEvaluationDriver:
         approval_denied: bool = False,
         timed_out: bool = False,
         control_plane_path: str = "",
+        baseline_task_ids: frozenset[str] = frozenset(),
+        requester_id: str = "",
+        channel_id: str = "",
     ) -> EvaluationObservation:
         bot_posts = self._bot_posts(posts)
         terminal = self._latest_terminal(bot_posts)
@@ -387,6 +485,13 @@ class MattermostEvaluationDriver:
             for post in bot_posts
             if self._kind(post) not in {"status", "approval"}
         ]
+        control_plane, created_tasks = self.control_plane_observer.observe(
+            control_plane_path,
+            root_post_id,
+            baseline_task_ids=baseline_task_ids,
+            requester_id=requester_id,
+            channel_id=channel_id,
+        )
         return EvaluationObservation(
             root_post_id=root_post_id,
             run_id=f"mattermost:{root_post_id}",
@@ -403,9 +508,8 @@ class MattermostEvaluationDriver:
             duration_seconds=time.monotonic() - started,
             timed_out=timed_out,
             post_ids=tuple(str(post.get("id") or "") for post in bot_posts),
-            control_plane=self.control_plane_observer.observe(
-                control_plane_path, root_post_id
-            ),
+            control_plane=control_plane,
+            created_tasks=created_tasks,
         )
 
     @staticmethod

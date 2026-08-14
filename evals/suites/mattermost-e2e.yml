@@ -8,6 +8,7 @@ metadata:
 spec:
   cases:
     - cases/mattermost/chat-basic.yml
+    - cases/mattermost/project-task-create.yml
     - cases/mattermost/ppt-approval.yml
   repetitions: 1
   pass_policy:

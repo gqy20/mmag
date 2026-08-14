@@ -50,10 +50,12 @@ class CapabilityRegistry:
         if binding.name in self._bindings:
             raise ValueError(f"capability binding {binding.name!r} is already registered")
         self._bindings[binding.name] = binding
-        log.info(
-            "Capability 已注册: %s (%d 参数)",
-            binding.name,
-            len(binding.input_schema.get("properties", {})),
+        log_event(
+            log,
+            "capability.registered",
+            status="ready",
+            capability=binding.name,
+            parameter_count=len(binding.input_schema.get("properties", {})),
         )
 
     def unregister(self, name: str) -> bool:

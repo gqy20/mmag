@@ -19,6 +19,7 @@ from .models import (
     EvaluationRunResult,
     EvaluationScenario,
     EvaluationSuite,
+    TaskObservation,
 )
 from .reporting import JSONEvaluationReporter
 from .runner import EvaluationDriver, EvaluationRunner
@@ -45,4 +46,5 @@ __all__ = [
     "PackageActivationError",
     "PackageActivationGate",
     "SQLiteEvaluationObserver",
+    "TaskObservation",
 ]

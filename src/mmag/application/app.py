@@ -409,6 +409,24 @@ class Agent:
             on_response=self.on_ws_response,
         )
         self.running = True
+        log_event(
+            log,
+            "application.ready",
+            status="ready",
+            agent_count=len(self.agent_registry.list()),
+            skill_count=len(self.skill_package_registry.list()),
+            capability_count=len(self.capability_registry.get_all()),
+            agent_names=sorted(
+                agent.descriptor.name for agent in self.agent_registry.list()
+            ),
+            skill_refs=sorted(
+                package.manifest.metadata.ref
+                for package in self.skill_package_registry.list()
+            ),
+            capability_names=sorted(
+                binding.name for binding in self.capability_registry.get_all()
+            ),
+        )
         log.info("Agent 就绪，默认 Runtime=Deep Agents/LangGraph，等待消息")
         await self.ws.run()
 

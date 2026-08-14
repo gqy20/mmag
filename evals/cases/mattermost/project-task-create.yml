@@ -1,0 +1,32 @@
+api_version: mmag.ai/eval/v1
+kind: EvaluationScenario
+
+metadata:
+  id: mattermost-project-task-create
+  version: 1.0.0
+  tags: [mattermost, project, task, capability]
+
+spec:
+  actor: requester
+  input:
+    message: "@{bot} 创建一个标题为 MMAG-E2E-{eval_id} 的高优先级项目任务。"
+  expected:
+    response:
+      kind: result
+      terminal_status: succeeded
+      thread_required: true
+      raw_json_forbidden: true
+      not_contains: ["core_agent 当前无 create_task", "save_knowledge"]
+    control_plane:
+      agent_name: project
+      delivery_states_all: [delivered]
+    capabilities:
+      contains_all: [create_task]
+    tasks:
+      minimum_created: 1
+      title_contains: MMAG-E2E-
+      requester_is_creator: true
+      current_channel: true
+      execution_key_required: true
+  thresholds:
+    max_duration_seconds: 180

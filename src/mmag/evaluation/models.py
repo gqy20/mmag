@@ -74,6 +74,17 @@ class ControlPlaneObservation:
     task_state: str = ""
     delivery_states: tuple[str, ...] = ()
     agent_name: str = ""
+    capability_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TaskObservation:
+    id: str
+    title: str
+    scope_id: str
+    creator_matches_requester: bool
+    channel_matches_request: bool
+    execution_key_present: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +103,7 @@ class EvaluationObservation:
     timed_out: bool = False
     post_ids: tuple[str, ...] = ()
     control_plane: ControlPlaneObservation = field(default_factory=ControlPlaneObservation)
+    created_tasks: tuple[TaskObservation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

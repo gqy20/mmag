@@ -100,7 +100,7 @@ Deep Agents 通过 LangChain 原生 `AsyncCallbackHandler` 记录 `runtime.model
 
 Agent 编排依次记录 `agent.route.selected`、`skill.route.selected|skipped` 和 `agent.tools.projected`，其中工具名来自受信 Catalog，不记录 Prompt。Policy 记录规则、permission、decision 和 `interrupt_check|tool_execute` 阶段。Outbox/Delivery 记录 enqueue、attempt、retry、终态、message kind 和幂等键 Hash，不记录消息正文、文件名或远端异常正文。
 
-开发环境使用 `make debug-trace ID=<trace-id|run-id>` 聚合上述日志和 AuditEvent。`make debug-test` 根据 Mattermost `props.mmag_kind/mmag_status` 忽略 `get` ack 与 stream 更新，只在 result、error、approval 等终态回复后结束。
+开发环境使用 `make debug-trace ID=<trace-id|run-id>` 精确查询上述日志和 AuditEvent，并聚合当前日志目录中的轮转文件；`JSON=1` 输出机器可读报告。`make debug-test` 根据 Mattermost `props.mmag_kind/mmag_status` 忽略 `get` ack 与 stream 更新，只在 result、error、approval 等终态回复后结束，失败和超时返回非零退出码。调试工具读取 `MEMORY_DB_PATH`/`LOG_DIR`，可用 `DEBUG_MEMORY_DB_PATH`/`DEBUG_LOG_DIR` 覆盖；远程用户登录要求 HTTPS，TLS 校验默认开启，只有显式 `DEBUG_TLS_VERIFY=false` 才能用于受信自签名开发环境。
 
 Agent 路由、Skill 选择、Agent 成功/失败、模型调用、Runtime Tool、Capability、Policy、受控执行、审批、Inbox replay 和 Delivery 已进入 AuditEvent。查询支持 event、target、trace、actor、scope、decision、run 和时间游标。事件归档/导出、访问控制和防篡改仍是后续治理项。部署层应至少告警：
 

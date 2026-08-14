@@ -65,7 +65,7 @@ excerpt 和 SHA-256；报告不保存密码、Token 或 Session。
 ## Suite 与报告
 
 - `suites/smoke.yml`：单账号用户—Bot Thread 主链；
-- `suites/mattermost-e2e.yml`：主链加 PPT 审批与 Artifact 交付；
+- `suites/mattermost-e2e.yml`：聊天、统一入口创建真实项目 Task，以及 PPT 审批与 Artifact 交付；Task 场景同时断言 Project Agent 路由、`create_task` 授权调用、新增业务记录、可信 actor/channel 和 execution key；
 - `suites/security.yml`：独立未授权账号尝试批准他人的请求。
 
 每次运行在 `.eval-runs/<evaluation-run-id>.json` 原子生成报告，记录资产 Hash、Profile ID、Case 结果、
