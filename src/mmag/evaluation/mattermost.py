@@ -449,7 +449,7 @@ class MattermostEvaluationDriver:
                     verb = "批准" if decision == "approve" else "拒绝"
                     await decision_session.create_post(
                         resolved.channel_id,
-                        f"{verb} {approval_id}",
+                        f"@{resolved.bot_username.removeprefix('@')} {verb} {approval_id}",
                         root_id=root_post_id,
                     )
                     decision_sent = True

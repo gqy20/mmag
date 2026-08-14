@@ -382,7 +382,7 @@ class MessageHandler:
                 finally:
                     typing_task.cancel()
                 return
-        approval = self.approval_command(message)
+        approval = self.approval_command(message, bot_username=self.identity.username)
         if approval is not None:
             with log_context.bind(operation="approval"):
                 await self._handle_approval_command(post, approval)
@@ -427,6 +427,9 @@ class MessageHandler:
 
     def _accept(self, post: dict) -> bool:
         if post.get("user_id") == self.identity.user_id or post.get("type"):
+            return False
+        props = post.get("props")
+        if isinstance(props, dict) and str(props.get("from_bot") or "").lower() == "true":
             return False
         channel_id = str(post.get("channel_id") or "")
         if config.mm_channel_id and channel_id != config.mm_channel_id:
@@ -733,6 +736,12 @@ class MessageHandler:
                 )
             )
         except (KeyError, PermissionError, ValueError) as error:
+            log_event(
+                log,
+                "approval.command.failed",
+                status="failed",
+                error_code=type(error).__name__,
+            )
             response_view = self.presenter.error(
                 title="审批失败",
                 summary="当前审批无法处理，请确认审批 ID、权限和状态。",
@@ -742,8 +751,16 @@ class MessageHandler:
         await self.delivery.reply_view(post, response_view)
 
     @staticmethod
-    def approval_command(message: str) -> tuple[bool, str] | None:
+    def approval_command(
+        message: str, *, bot_username: str = ""
+    ) -> tuple[bool, str] | None:
         parts = message.strip().split()
+        if (
+            len(parts) == 3
+            and bot_username
+            and parts[0].lower() == f"@{bot_username.lower()}"
+        ):
+            parts = parts[1:]
         if len(parts) != 2:
             return None
         if parts[0].lower() in {"批准", "approve"}:

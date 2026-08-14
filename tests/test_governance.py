@@ -18,7 +18,7 @@ from mmag.governance import (
     bind_governance_context,
     redact_sensitive,
 )
-from mmag.runtimes import AgentResult, RunContext, RunRequest, TokenUsage
+from mmag.runtimes import AgentResult, RunContext, RunRequest, RuntimeStatus, TokenUsage
 
 ROOT = Path(__file__).resolve().parents[1]
 MMCHAT_POLICY_REF = yaml.safe_load(
@@ -231,6 +231,91 @@ async def test_model_gateway_uses_snapshot_route_and_rejects_conflicts():
     assert (await gateway.run(request)).text == "ok"
     with pytest.raises(ValueError, match="conflicts"):
         await gateway.run(request, route="default")
+
+
+@pytest.mark.asyncio
+async def test_model_gateway_uses_distinct_quota_reservations_per_trace_and_actor(tmp_path):
+    from mmag.control_plane import SQLiteControlPlane
+
+    class Runtime:
+        async def run(self, request: RunRequest) -> AgentResult:
+            return AgentResult(
+                "ok",
+                "stub",
+                usage=TokenUsage(input_tokens=2, output_tokens=1, cost_usd=0.1),
+            )
+
+    store = SQLiteControlPlane(tmp_path / "gateway-quota.db")
+    gateway = ModelGateway(
+        {"default": Runtime()},
+        ledger=QuotaLedger(default_limit_usd=1.0, store=store.quota),
+    )
+
+    async def run(trace_id: str, actor_id: str) -> None:
+        await gateway.run(
+            RunRequest(
+                context=RunContext(
+                    trace_id, actor_id, "channel", "project:p1", run_id="shared-run"
+                ),
+                messages=({"role": "user", "content": "hi"},),
+            )
+        )
+
+    await run("trace-1", "user-1")
+    await run("trace-2", "user-1")
+    await run("trace-3", "user-2")
+
+    assert gateway.ledger.snapshot("user-1").cost_usd == pytest.approx(0.2)
+    assert gateway.ledger.snapshot("user-2").cost_usd == pytest.approx(0.1)
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_model_gateway_resumes_and_settles_original_quota_reservation(tmp_path):
+    from mmag.control_plane import SQLiteControlPlane
+
+    class Runtime:
+        async def run(self, request: RunRequest) -> AgentResult:
+            return AgentResult("waiting", "stub", status=RuntimeStatus.WAITING_APPROVAL)
+
+        async def resume(self, thread_id: str, decision: dict) -> AgentResult:
+            return AgentResult(
+                "done",
+                "stub",
+                usage=TokenUsage(input_tokens=3, output_tokens=2, cost_usd=0.1),
+            )
+
+    context = RunContext(
+        "approval-trace", "user-1", "channel", "project:p1", run_id="approval-run"
+    )
+    store = SQLiteControlPlane(tmp_path / "resume-quota.db")
+    gateway = ModelGateway(
+        {"default": Runtime()},
+        ledger=QuotaLedger(default_limit_usd=1.0, store=store.quota),
+    )
+    paused = await gateway.run(
+        RunRequest(context=context, messages=({"role": "user", "content": "hi"},))
+    )
+    assert paused.status is RuntimeStatus.WAITING_APPROVAL
+
+    completed = await gateway.resume(
+        "approval-run",
+        {
+            "runtime_snapshot": {
+                "context": {
+                    "run_id": context.run_id,
+                    "trace_id": context.trace_id,
+                    "actor_id": context.actor_id,
+                }
+            }
+        },
+    )
+
+    assert completed.status is RuntimeStatus.COMPLETED
+    snapshot = gateway.ledger.snapshot("user-1")
+    assert snapshot.cost_usd == pytest.approx(0.1)
+    assert snapshot.reserved_cost_usd == 0
+    store.close()
 
 
 def test_quota_ledger_persists_atomic_reservations_and_settlement(tmp_path):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 from dataclasses import dataclass
@@ -145,6 +146,12 @@ class ModelGateway:
         if route not in self.runtimes:
             raise ValueError(f"unknown model route {route!r}")
 
+    @staticmethod
+    def _quota_reservation_id(*, run_id: str, trace_id: str, subject: str) -> str:
+        base = run_id or trace_id or uuid.uuid4().hex
+        identity = hashlib.sha256(f"{trace_id}\0{subject}".encode()).hexdigest()[:20]
+        return f"{base}:quota:{identity}"
+
     async def run(self, request: RunRequest, *, route: str | None = None) -> AgentResult:
         subject = request.context.actor_id
         policy_route = str(request.metadata.get("route") or "")
@@ -155,7 +162,11 @@ class ModelGateway:
             runtime = self.runtimes[selected]
         except KeyError as error:
             raise LookupError(f"unknown model route {selected!r}") from error
-        reservation_id = request.context.run_id or f"{request.context.trace_id}:{uuid.uuid4().hex}"
+        reservation_id = self._quota_reservation_id(
+            run_id=request.context.run_id,
+            trace_id=request.context.trace_id,
+            subject=subject,
+        )
         declared_limit = request.metadata.get("max_cost_usd", "")
         estimated_cost = (
             float(declared_limit) if declared_limit else self.estimated_run_cost_usd
@@ -232,5 +243,10 @@ class ModelGateway:
             subject = str(context.get("actor_id") or "")
             if not subject:
                 raise RuntimeError("resume is missing the original quota subject")
-            self.ledger.settle(thread_id, subject, result)
+            reservation_id = self._quota_reservation_id(
+                run_id=str(context.get("run_id") or ""),
+                trace_id=str(context.get("trace_id") or ""),
+                subject=subject,
+            )
+            self.ledger.settle(reservation_id, subject, result)
         return result

@@ -46,6 +46,37 @@ class FakeMM:
         return FakeChannel(self._channel_type)
 
 
+# ---- _accept ----
+
+
+def test_accept_rejects_posts_from_another_mmag_bot():
+    handler = _make_handler("u_bot_self")
+
+    assert (
+        handler._accept(
+            {
+                "user_id": "u_bot_other",
+                "type": "",
+                "channel_id": "ch1",
+                "props": {"from_bot": "true"},
+            }
+        )
+        is False
+    )
+
+
+def test_approval_command_accepts_an_explicit_bot_mention():
+    assert MessageHandler.approval_command(
+        "@hz_bot 批准 approval-123", bot_username="hz_bot"
+    ) == (True, "approval-123")
+    assert (
+        MessageHandler.approval_command(
+            "@core_agent 批准 approval-123", bot_username="hz_bot"
+        )
+        is None
+    )
+
+
 # ---- _is_explicit_invocation ----
 
 
