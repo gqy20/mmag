@@ -431,6 +431,29 @@ class MessageHandler:
         props = post.get("props")
         if isinstance(props, dict) and str(props.get("from_bot") or "").lower() == "true":
             return False
+        message = str(post.get("message") or "").strip()
+        first_word = message.split(maxsplit=1)[0].lower() if message else ""
+        own_mention = f"@{self.identity.username.lower()}"
+        if (
+            first_word.startswith("@")
+            and first_word != own_mention
+            and own_mention not in message.lower()
+        ):
+            return False
+        approval = self.approval_command(message, bot_username=self.identity.username)
+        if approval is not None:
+            store = getattr(self.approval_coordinator, "store", None)
+            if store is not None:
+                try:
+                    store.get_approval_request(approval[1])
+                except KeyError:
+                    log_event(
+                        log,
+                        "approval.command.ignored",
+                        status="ignored",
+                        reason="not_owned",
+                    )
+                    return False
         channel_id = str(post.get("channel_id") or "")
         if config.mm_channel_id and channel_id != config.mm_channel_id:
             return False
@@ -735,7 +758,15 @@ class MessageHandler:
                     run_id=self._run_id(post),
                 )
             )
-        except (KeyError, PermissionError, ValueError) as error:
+        except KeyError:
+            log_event(
+                log,
+                "approval.command.ignored",
+                status="ignored",
+                reason="not_owned",
+            )
+            return
+        except (PermissionError, ValueError) as error:
             log_event(
                 log,
                 "approval.command.failed",

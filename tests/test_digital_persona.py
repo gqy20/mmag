@@ -76,7 +76,9 @@ def test_persona_publishes_an_immutable_memory_snapshot(tmp_path):
 def test_persona_owner_can_create_select_publish_and_route_questions(tmp_path):
     store = SQLiteControlPlane(str(tmp_path / "persona-ui.db"))
     memory = _memory(store)
-    tokens = ActionTokenService("s" * 32, store, ttl_seconds=60)
+    tokens = ActionTokenService(
+        "s" * 32, store, ttl_seconds=60, owner_id="bot:i:t:u1"
+    )
     ui = PersonaWorkspaceUI(
         personas=store.personas,
         memories=store.memory_items,

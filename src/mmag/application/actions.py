@@ -78,6 +78,7 @@ _SLASH_COMMAND_HELP = """### MMAG 子命令
 
 @dataclass(frozen=True, slots=True)
 class ActionClaims:
+    issuer: str
     jti: str
     action: str
     target: str
@@ -418,6 +419,7 @@ class ActionTokenService:
         store: SQLiteControlPlane,
         *,
         ttl_seconds: int = 600,
+        owner_id: str = "",
     ) -> None:
         if len(secret.encode()) < 32:
             raise ValueError("MM_ACTION_SIGNING_SECRET must contain at least 32 bytes")
@@ -426,6 +428,15 @@ class ActionTokenService:
         self._secret = secret.encode()
         self.store = store
         self.ttl_seconds = ttl_seconds
+        self._owner_id = owner_id.strip()
+
+    def bind_owner(self, owner_id: str) -> None:
+        owner_id = owner_id.strip()
+        if not owner_id:
+            raise ValueError("Action token owner must not be empty")
+        if self._owner_id and self._owner_id != owner_id:
+            raise RuntimeError("Action token owner is already bound")
+        self._owner_id = owner_id
 
     def issue(
         self,
@@ -440,11 +451,13 @@ class ActionTokenService:
     ) -> str:
         if action not in _ALLOWED_ACTIONS:
             raise ValueError(f"unsupported action {action!r}")
+        owner_id = self._require_owner()
         now = time.time()
         jti = uuid.uuid4().hex
         expires_at = now + self.ttl_seconds
         claims: dict[str, str | int | float] = {
-            "v": 1,
+            "v": 2,
+            "iss": owner_id,
             "jti": jti,
             "act": action,
             "sub": target,
@@ -489,9 +502,11 @@ class ActionTokenService:
             if isinstance(error, ActionTokenError):
                 raise
             raise ActionTokenError("Malformed action token") from error
-        if not isinstance(raw, dict) or raw.get("v") != 1:
+        if not isinstance(raw, dict) or raw.get("v") != 2:
             raise ActionTokenError("Unsupported action token")
         claims = self._claims(raw)
+        if not hmac.compare_digest(claims.issuer, self._require_owner()):
+            raise ActionTokenError("Action token belongs to another Bot")
         now = time.time()
         if claims.expires_at < now:
             raise ActionTokenError("Action token has expired")
@@ -501,6 +516,7 @@ class ActionTokenService:
     def _claims(raw: dict[str, Any]) -> ActionClaims:
         try:
             claims = ActionClaims(
+                issuer=str(raw["iss"]),
                 jti=str(raw["jti"]),
                 action=str(raw["act"]),
                 target=str(raw["sub"]),
@@ -518,6 +534,7 @@ class ActionTokenService:
         if not all(
             (
                 claims.jti,
+                claims.issuer,
                 claims.target,
                 claims.scope_id,
                 claims.conversation_id,
@@ -526,6 +543,11 @@ class ActionTokenService:
         ):
             raise ActionTokenError("Incomplete action token")
         return claims
+
+    def _require_owner(self) -> str:
+        if not self._owner_id:
+            raise ActionTokenError("Action token owner is not bound")
+        return self._owner_id
 
     @staticmethod
     def _encode(value: bytes) -> str:
@@ -538,7 +560,7 @@ class ActionTokenService:
 
 
 class ActionCallbackServer:
-    """Local action/slash callback gateway for a configured HTTPS proxy."""
+    """Local callback gateway plus liveness/readiness probes."""
 
     def __init__(
         self,
@@ -550,15 +572,17 @@ class ActionCallbackServer:
         command_callback: Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]
         | None = None,
         command_path: str = "/integrations/commands",
+        readiness: Callable[[], bool] | None = None,
     ) -> None:
-        if callback is None and command_callback is None:
-            raise ValueError("at least one callback route is required")
+        if callback is None and command_callback is None and readiness is None:
+            raise ValueError("at least one callback route or readiness probe is required")
         self.host = host
         self.port = port
         self.path = path or "/actions"
         self.callback = callback
         self.command_path = command_path
         self.command_callback = command_callback
+        self.readiness = readiness
         if callback is not None and command_callback is not None and self.path == command_path:
             raise ValueError("action and slash command callback paths must differ")
         self._server: ThreadingHTTPServer | None = None
@@ -568,6 +592,7 @@ class ActionCallbackServer:
         if self._server is not None:
             return
         loop = asyncio.get_running_loop()
+        readiness = self.readiness
         routes = {
             route_path: (route_callback, is_form)
             for route_path, route_callback, is_form in (
@@ -578,6 +603,28 @@ class ActionCallbackServer:
         }
 
         class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
+                path = urlsplit(self.path).path
+                if path == "/health/live":
+                    self._send_probe(200, "live")
+                    return
+                if path == "/health/ready" and readiness is not None:
+                    ready = readiness()
+                    self._send_probe(
+                        200 if ready else 503,
+                        "ready" if ready else "not_ready",
+                    )
+                    return
+                self.send_error(404)
+
+            def _send_probe(self, status_code: int, status: str) -> None:
+                body = json.dumps({"status": status}).encode()
+                self.send_response(status_code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
                 route = routes.get(urlsplit(self.path).path)
                 if route is None:

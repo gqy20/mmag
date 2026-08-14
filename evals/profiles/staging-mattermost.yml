@@ -3,13 +3,14 @@ kind: EvaluationProfile
 
 metadata:
   id: staging-mattermost
-  version: 1.0.1
+  version: 1.0.2
 
 spec:
   driver: mattermost-api
   base_url_env: MM_URL
   channel_id_env: DEBUG_TEST_CHANNEL_ID
   bot_username_env: MM_E2E_BOT_USERNAME
+  readiness_url_env: MMAG_E2E_READY_URL
   enabled_env: MMAG_E2E_ENABLED
   control_plane_db_env: MEMORY_DB_PATH
   timeout_seconds: 300

@@ -94,6 +94,16 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 
 ## 可观测与告警
 
+本地 callback gateway 始终提供不含业务数据的健康探针：
+
+- `GET /health/live`：HTTP 服务线程存活时返回 `200`。
+- `GET /health/ready`：仅在 Mattermost WebSocket 鉴权成功且连接仍有效时返回 `200`；启动中、鉴权失败或断线返回 `503`。
+
+`application.ready` 事件与 readiness 使用同一鉴权门禁。真实 Mattermost E2E 应通过 Profile 的
+`readiness_url_env` 配置探针地址，在创建测试消息前等待就绪，避免把启动竞争误判为业务失败。
+交互 Action Token 同时绑定 Installation、Tenant 和当前 Bot user ID；重启升级后，旧版本按钮按失败关闭
+处理，用户可使用对应文本命令继续操作。
+
 普通运行日志使用稳定 `event`、`status`、UTC timestamp 和 `trace_id/run_id/thread_id/agent_ref/skill_ref/capability` 等关联字段。`LOG_FORMAT=json` 输出 JSON Lines；开发环境可保留 `text`。本地文件按大小轮转并带 PID，`LOG_DIR=` 可完全关闭文件输出。中心化 Filter 会遮蔽 Secret、Authorization、URL query 和异常正文，但业务代码仍不得主动记录 Prompt、消息正文、完整参数或结果。
 
 Deep Agents 通过 LangChain 原生 `AsyncCallbackHandler` 记录 `runtime.model.*` 和 `runtime.tool.*`，只投影 `langgraph_node`、`langgraph_step`、Provider、模型名、token、耗时、工具名及输入 Hash；模型和工具正文不会进入日志或 AuditEvent。业务 `CapabilityExecutor` 使用独立的 `capability.*` 事件，避免把框架 Tool transport 成功误认为业务 Capability 成功。RunnableConfig 同时携带低基数 tags、动态 run name 和受控 metadata，可供后续 LangSmith/OpenTelemetry exporter 复用；生产环境不得启用会输出完整状态的 `debug` stream。

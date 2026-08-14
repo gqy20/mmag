@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import time
@@ -336,25 +337,25 @@ class Agent:
             persona_replies=self.control_store.persona_replies,
         )
         self.capability_probe = MattermostCapabilityProbe(self.mm)
-        if self.action_tokens is not None or self.slash_commands is not None:
-            callback_path = (
-                urlsplit(config.mm_action_callback_url).path or "/actions"
+        callback_path = (
+            urlsplit(config.mm_action_callback_url).path or "/actions"
+            if self.action_tokens is not None
+            else "/actions"
+        )
+        self.action_server = ActionCallbackServer(
+            config.mm_action_listen_host,
+            config.mm_action_listen_port,
+            (
+                self.message_handler.handle_action_callback
                 if self.action_tokens is not None
-                else "/actions"
-            )
-            self.action_server = ActionCallbackServer(
-                config.mm_action_listen_host,
-                config.mm_action_listen_port,
-                (
-                    self.message_handler.handle_action_callback
-                    if self.action_tokens is not None
-                    else None
-                ),
-                path=callback_path,
-                command_callback=(
-                    self.slash_commands.handle if self.slash_commands is not None else None
-                ),
-            )
+                else None
+            ),
+            path=callback_path,
+            command_callback=(
+                self.slash_commands.handle if self.slash_commands is not None else None
+            ),
+            readiness=self._is_ready,
+        )
         self.ws: WebSocketClient | None = None
         self.pipeline: MessagePipeline | None = None
         self.running = False
@@ -365,6 +366,16 @@ class Agent:
         me = await self.mm.get_me_async()
         self.identity.user_id = me["id"]
         self.identity.username = me["username"]
+        if self.action_tokens is not None:
+            self.action_tokens.bind_owner(
+                ":".join(
+                    (
+                        config.mm_installation_id,
+                        config.mm_tenant_id,
+                        self.identity.user_id,
+                    )
+                )
+            )
         log_event(log, "mattermost.identity_loaded", status="ready")
         await self._probe_mattermost()
 
@@ -409,6 +420,18 @@ class Agent:
             on_response=self.on_ws_response,
         )
         self.running = True
+        ws_task = asyncio.create_task(self.ws.run(), name="mattermost-websocket")
+        ready_task = asyncio.create_task(self.ws.wait_until_ready(), name="mattermost-ready")
+        done, _ = await asyncio.wait(
+            {ws_task, ready_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if ws_task in done:
+            ready_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await ready_task
+            await ws_task
+            return
+        await ready_task
         log_event(
             log,
             "application.ready",
@@ -428,7 +451,10 @@ class Agent:
             ),
         )
         log.info("Agent 就绪，默认 Runtime=Deep Agents/LangGraph，等待消息")
-        await self.ws.run()
+        await ws_task
+
+    def _is_ready(self) -> bool:
+        return bool(self.running and self.ws is not None and self.ws.is_ready)
 
     async def _connect_mcp(self) -> None:
         try:

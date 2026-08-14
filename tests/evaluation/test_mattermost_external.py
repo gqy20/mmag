@@ -10,6 +10,7 @@ from mmag.control_plane import SQLiteControlPlane
 from mmag.evaluation import (
     ControlPlaneObservation,
     EvaluationAssetLoader,
+    EvaluationConfigurationError,
     EvaluationObservation,
     EvaluationRunner,
     EvaluationScenario,
@@ -17,6 +18,29 @@ from mmag.evaluation import (
     MattermostEvaluationDriver,
     SQLiteEvaluationObserver,
 )
+from mmag.evaluation.mattermost import ResolvedMattermostProfile
+
+
+def test_control_plane_assertions_require_an_observer_database():
+    scenario = EvaluationScenario(
+        id="control-plane",
+        version="1.0.0",
+        actor="requester",
+        message="test",
+        expected={"control_plane": {"agent_name": "mmchat"}},
+    )
+    profile = ResolvedMattermostProfile(
+        base_url="https://mattermost.example",
+        channel_id="channel-1",
+        bot_username="bot",
+        readiness_url="http://127.0.0.1:8787/health/ready",
+        timeout_seconds=30,
+        poll_interval_seconds=1,
+        control_plane_db_path="",
+    )
+
+    with pytest.raises(EvaluationConfigurationError, match="control-plane database"):
+        MattermostEvaluationDriver._require_control_plane_observer(scenario, profile)
 
 
 def test_control_plane_ready_requires_expected_task_and_capabilities():

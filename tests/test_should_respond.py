@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from mmag.application import BotIdentity, MessageHandler  # noqa: E402
 from mmag.application.agent_requests import AgentRequestHandler  # noqa: E402
+from mmag.config import config  # noqa: E402
 
 
 def _make_handler(bot_user_id: str, bot_username: str = "agent2") -> MessageHandler:
@@ -63,6 +66,57 @@ def test_accept_rejects_posts_from_another_mmag_bot():
         )
         is False
     )
+
+
+def test_accept_rejects_a_message_addressed_to_another_account():
+    handler = _make_handler("u_bot_self", "agent2")
+
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
+        accepted = handler._accept(
+            {
+                "user_id": "u_human",
+                "type": "",
+                "channel_id": "ch1",
+                "message": "@hz_bot 批准 approval-123",
+            }
+        )
+
+    assert accepted is False
+
+
+def test_accept_rejects_an_unknown_approval_before_ack():
+    handler = _make_handler("u_bot_self", "agent2")
+    handler.approval_coordinator = MagicMock()
+    handler.approval_coordinator.store.get_approval_request.side_effect = KeyError("unknown")
+
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
+        accepted = handler._accept(
+            {
+                "user_id": "u_human",
+                "type": "",
+                "channel_id": "ch1",
+                "message": "@agent2 批准 approval-unknown",
+            }
+        )
+
+    assert accepted is False
+
+
+@pytest.mark.asyncio
+async def test_unknown_approval_is_ignored_as_not_owned():
+    handler = _make_handler("u_bot_self", "agent2")
+    handler.approval_coordinator = MagicMock()
+    handler.approval_coordinator.resume = AsyncMock(side_effect=KeyError("unknown"))
+    handler.delivery = MagicMock()
+    handler.delivery.reply_view = AsyncMock()
+    handler.post_scope = MagicMock(return_value="mattermost:i:t:chn:ch1")
+
+    await handler._handle_approval_command(
+        {"id": "post-1", "user_id": "user-1"},
+        (True, "approval-123"),
+    )
+
+    handler.delivery.reply_view.assert_not_awaited()
 
 
 def test_approval_command_accepts_an_explicit_bot_mention():

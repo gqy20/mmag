@@ -34,6 +34,7 @@ uv run mmag-eval --root evals validate
 5. 远程 Mattermost 使用 HTTPS，或仅在受信 localhost 使用 HTTP；
 6. Bot 已独立启动并监听目标频道；
 7. 同一 Bot 凭据只有一个活动消费者，或所有副本共享同一控制面和 Inbox/Outbox；本地调试与其他部署并行时，使用独立测试 Bot 凭据。
+8. `MMAG_E2E_READY_URL` 指向 Bot 的 `/health/ready`，Driver 会在创建测试消息前等待 WebSocket 鉴权完成。
 
 ```bash
 uv run mmag-eval --root evals run suites/smoke.yml \
@@ -42,9 +43,10 @@ uv run mmag-eval --root evals run suites/smoke.yml \
   --allow-external
 ```
 
-`staging-mattermost` 从 `.env.debug` 读取 `DEBUG_TEST_CHANNEL_ID`，并使用 `MM_USERNAME` / `MM_PASSWORD`
+`staging-mattermost` 从 `.env.debug` 读取 `DEBUG_TEST_CHANNEL_ID` 和 `MMAG_E2E_READY_URL`，并使用 `MM_USERNAME` / `MM_PASSWORD`
 作为 requester；审批和越权套件按需读取独立 approver/unauthorized 账号。缺失的非当前 Case 账号不会被
-读取。登录 Session 在 Case 退出时注销。
+读取。包含 control-plane、capabilities 或 tasks 断言的 Case 还必须提供 `MEMORY_DB_PATH`，缺失时在发消息前
+失败。登录 Session 在 Case 退出时注销。
 
 ## 观察与断言
 

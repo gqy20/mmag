@@ -29,6 +29,7 @@ class EvaluationProfile:
     channel_id_env: str
     actors: Mapping[str, EvaluationActorRef]
     bot_username_env: str = ""
+    readiness_url_env: str = ""
     enabled_env: str = "MMAG_E2E_ENABLED"
     control_plane_db_env: str = ""
     timeout_seconds: float = 120.0

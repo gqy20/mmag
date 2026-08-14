@@ -125,6 +125,36 @@ async def test_callback_gateway_routes_form_to_slash_adapter():
     assert action_payloads == [{"user_id": "user-1", "context": {"token": "signed"}}]
 
 
+@pytest.mark.asyncio
+async def test_callback_gateway_reports_real_readiness_state():
+    ready = False
+    server = ActionCallbackServer("127.0.0.1", 0, readiness=lambda: ready)
+    await server.start()
+    assert server._server is not None
+    port = server._server.server_port
+
+    def get(path: str) -> tuple[int, dict]:
+        connection = HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            connection.request("GET", path)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        status, payload = await asyncio.to_thread(get, "/health/ready")
+        ready = True
+        ready_status, ready_payload = await asyncio.to_thread(get, "/health/ready")
+        live_status, live_payload = await asyncio.to_thread(get, "/health/live")
+    finally:
+        await server.close()
+
+    assert (status, payload) == (503, {"status": "not_ready"})
+    assert (ready_status, ready_payload) == (200, {"status": "ready"})
+    assert (live_status, live_payload) == (200, {"status": "live"})
+
+
 class FakeRegistry:
     def __init__(self, *items):
         self.items = tuple(items)

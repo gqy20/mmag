@@ -21,6 +21,9 @@ MMAG_E2E_ENABLED=1 uv run mmag-eval --root evals run suites/smoke.yml \
   --profile profiles/staging-mattermost.yml --env-file .env.debug --allow-external
 ```
 
+`.env.debug` 还必须提供 `MMAG_E2E_READY_URL`（本地默认可用
+`http://127.0.0.1:8787/health/ready`）；Driver 确认 Bot WebSocket 已鉴权后才发送 Case 消息。
+
 远程地址必须使用 HTTPS；只有 `localhost`、`127.0.0.1` 和 `::1` 可以使用 HTTP。
 运行真实套件时，同一 Bot 凭据只能对应一个活动消费者和一套共享控制面；并行调试请使用独立测试 Bot，
 否则审批命令和幂等投递会被另一实例抢占。

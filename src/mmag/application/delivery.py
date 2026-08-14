@@ -184,6 +184,10 @@ class MattermostDelivery:
         root_id = self.thread_root(post)
         scope_id = self.scope(post)
         run_key = delivery_key or view.run_id or str(post.get("id") or "response")
+        owner_key = self.identity.user_id or self.identity.username
+        if not owner_key:
+            raise RuntimeError("Bot identity must be loaded before rendering deliveries")
+        run_key = f"bot:{owner_key}:{run_key}"
         messages: list[OutboundMessage] = []
         for index, chunk in enumerate(rendered.chunks):
             messages.append(

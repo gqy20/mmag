@@ -139,7 +139,7 @@ def test_renderer_maps_internal_action_names_to_mattermost_route_ids():
 
 def test_action_token_is_signed_short_lived_and_one_time(tmp_path):
     store = SQLiteControlPlane(str(tmp_path / "control.db"))
-    service = ActionTokenService("s" * 32, store, ttl_seconds=60)
+    service = ActionTokenService("s" * 32, store, ttl_seconds=60, owner_id="bot:i:t:u1")
     token = service.issue(
         action="approve",
         target="approval-1",
@@ -158,6 +158,30 @@ def test_action_token_is_signed_short_lived_and_one_time(tmp_path):
         service.consume(token, actor_id="user-1")
     with pytest.raises(ActionTokenError, match="signature"):
         service.verify(token[:-1] + ("A" if token[-1] != "A" else "B"))
+    store.close()
+
+
+def test_action_token_cannot_be_consumed_by_another_bot(tmp_path):
+    store = SQLiteControlPlane(str(tmp_path / "control.db"))
+    first = ActionTokenService(
+        "s" * 32, store, ttl_seconds=60, owner_id="bot:i:t:u1"
+    )
+    second = ActionTokenService(
+        "s" * 32, store, ttl_seconds=60, owner_id="bot:i:t:u2"
+    )
+    token = first.issue(
+        action="approve",
+        target="approval-1",
+        scope_id="mattermost:i:t:chn:channel-1",
+        run_id="run-1",
+        conversation_id="channel-1",
+        root_id="post-1",
+        requested_by="user-1",
+    )
+
+    with pytest.raises(ActionTokenError, match="another Bot"):
+        second.consume(token, actor_id="user-1")
+
     store.close()
 
 

@@ -206,7 +206,9 @@ def test_personal_skill_is_rejected_outside_its_owner_dm(tmp_path):
 async def test_personal_workspace_lists_runs_and_edits_without_model_call(tmp_path):
     store = SQLiteControlPlane(str(tmp_path / "workspace.db"))
     skill = store.personal_skills.activate(_draft(store).ref, owner_id="user-1")
-    tokens = ActionTokenService("s" * 32, store, ttl_seconds=60)
+    tokens = ActionTokenService(
+        "s" * 32, store, ttl_seconds=60, owner_id="bot:i:t:u1"
+    )
     ui = PersonalWorkspaceUI(
         personal_skills=store.personal_skills,
         work_cases=store.work_cases,
@@ -340,7 +342,9 @@ def test_work_case_feedback_and_combined_draft_stay_in_personal_scope(tmp_path):
 
 def test_successful_personal_result_exposes_work_case_actions(tmp_path):
     store = SQLiteControlPlane(str(tmp_path / "result.db"))
-    tokens = ActionTokenService("s" * 32, store, ttl_seconds=60)
+    tokens = ActionTokenService(
+        "s" * 32, store, ttl_seconds=60, owner_id="bot:i:t:u1"
+    )
     ui = PersonalWorkspaceUI(
         personal_skills=store.personal_skills, work_cases=store.work_cases,
         interactions=store.interactions, action_tokens=tokens,

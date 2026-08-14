@@ -4,7 +4,7 @@ Mattermost WebSocket 客户端 — 官方协议实现
 封装内容 (按 Mattermost webapp 官方做法):
   - URL 构造 (含断线续传参数)
   - WebSocket 连接 (Bearer 认证头)
-  - Hello 握手 + authentication_challenge 认证
+  - Bearer 握手认证 + Hello 就绪确认
   - 心跳 (每 30s 主动 ping)
   - 序列号追踪 (发现不连续仅记录, Bot 场景容忍丢包)
   - 自动重连 + 指数退避
@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 import websockets
 
-from .logger import get_logger
+from .logger import get_logger, log_event
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -79,6 +79,7 @@ class WebSocketClient:
         self._last_err_code: str | None = None
         self._ping_task: asyncio.Task | None = None
         self._ws: Any = None  # 当前连接 (websockets.WebSocketClientProtocol)
+        self._ready = asyncio.Event()
 
         # 生命周期
         self._running = False
@@ -110,7 +111,16 @@ class WebSocketClient:
             log.info(f"       ⏳ {retry_s:.1f}s 后重连 (第{self._connect_fail_count}次)...")
             await asyncio.sleep(retry_s)
 
-    async def send(self, action: str, data: dict | None = None) -> None:
+    @property
+    def is_ready(self) -> bool:
+        """连接已完成 Mattermost WebSocket 鉴权。"""
+        return self._ready.is_set()
+
+    async def wait_until_ready(self) -> None:
+        """等待当前或后续连接完成鉴权。"""
+        await self._ready.wait()
+
+    async def send(self, action: str, data: dict | None = None) -> int:
         """发送任意 action 到服务端 (如 ping / authentication_challenge)
 
         Raises:
@@ -124,10 +134,12 @@ class WebSocketClient:
         if data is not None:
             msg["data"] = data
         await self._ws.send(json.dumps(msg))
+        return seq
 
     async def close(self) -> None:
         """主动停止主循环 (会关闭当前连接)"""
         self._running = False
+        self._ready.clear()
         if self._ws is not None:
             with contextlib.suppress(Exception):
                 await self._ws.close()
@@ -138,6 +150,7 @@ class WebSocketClient:
 
     async def _session(self) -> None:
         """一次完整会话: 连接 → 握手 → 认证 → 心跳 → 事件循环"""
+        self._ready.clear()
         ws_url = self._build_url()
         log.info(f"       → {ws_url[:80]}{'...' if len(ws_url) > 80 else ''}")
 
@@ -155,7 +168,7 @@ class WebSocketClient:
             hello_raw = await ws.recv()
             hello = json.loads(hello_raw)
             if hello.get("event") != "hello":
-                log.warning(f"       ⚠️ 首条非 hello: {hello.get('event', '?')}")
+                raise RuntimeError("Mattermost WebSocket did not return authenticated hello")
 
             new_conn_id = hello.get("data", {}).get("connection_id", "")
             server_ver = hello.get("data", {}).get("server_version", "?")
@@ -171,15 +184,17 @@ class WebSocketClient:
             self._connect_fail_count = 0
             self._last_err_code = None
             log.info(f"       📨 Hello | id={self._conn_id[:12]}... v{server_ver}")
+            self._ready.set()
+            log_event(
+                log,
+                "mattermost.websocket_authenticated",
+                status="ready",
+            )
 
-            # Step 2: 发送认证 (官方: onopen 时立即发)
-            await self.send("authentication_challenge", {"token": self.token})
-            log.info("       🔑 认证请求已发送")
-
-            # Step 3: 启动心跳
+            # Step 2: 启动心跳
             self._ping_task = asyncio.create_task(self._ping_loop(ws), name="ws-ping")
 
-            # Step 4: 事件循环
+            # Step 3: 事件循环
             try:
                 async for raw_msg in ws:
                     await self._dispatch(raw_msg)
@@ -233,6 +248,7 @@ class WebSocketClient:
             pass
 
     async def _cleanup_ping_task(self) -> None:
+        self._ready.clear()
         if self._ping_task and not self._ping_task.done():
             self._ping_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

@@ -253,6 +253,7 @@ async def test_pipeline_ack_is_sent_at_acceptance_and_reused_by_processor():
 
     handler.delivery.send_ack.assert_awaited_once()
     assert messages[0].update_post_id == "status-1"
+    assert messages[0].idempotency_key.startswith("bot:bot-1:")
 
 
 @pytest.mark.asyncio

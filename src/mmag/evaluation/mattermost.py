@@ -47,6 +47,7 @@ class ResolvedMattermostProfile:
     base_url: str
     channel_id: str
     bot_username: str
+    readiness_url: str
     timeout_seconds: float
     poll_interval_seconds: float
     control_plane_db_path: str
@@ -65,10 +66,16 @@ class EvaluationEnvironment:
             )
         base_url = self._required(profile.base_url_env).rstrip("/")
         self._validate_url(base_url)
+        readiness_url = (
+            self._required(profile.readiness_url_env) if profile.readiness_url_env else ""
+        )
+        if readiness_url:
+            self._validate_url(readiness_url)
         return ResolvedMattermostProfile(
             base_url=base_url,
             channel_id=self._required(profile.channel_id_env),
             bot_username=self._optional(profile.bot_username_env),
+            readiness_url=readiness_url,
             timeout_seconds=profile.timeout_seconds,
             poll_interval_seconds=profile.poll_interval_seconds,
             control_plane_db_path=self._optional(profile.control_plane_db_env),
@@ -365,11 +372,13 @@ class MattermostEvaluationDriver:
                 f"Mattermost driver cannot execute profile type {profile.driver!r}"
             )
         resolved = self.environment.resolve_profile(profile)
+        self._require_control_plane_observer(scenario, resolved)
         requester = self.environment.resolve_actor(profile, scenario.actor)
         baseline_task_ids = self.control_plane_observer.task_ids(
             resolved.control_plane_db_path
         )
         started = time.monotonic()
+        await self._wait_until_ready(resolved)
         async with AsyncExitStack() as stack:
             requester_session = await stack.enter_async_context(
                 MattermostUserSession(resolved.base_url, requester)
@@ -400,6 +409,40 @@ class MattermostEvaluationDriver:
                 started,
                 baseline_task_ids,
             )
+
+    @staticmethod
+    def _require_control_plane_observer(
+        scenario: EvaluationScenario,
+        profile: ResolvedMattermostProfile,
+    ) -> None:
+        expected = scenario.expected
+        requires_control_plane = any(
+            bool(expected.get(key)) for key in ("control_plane", "capabilities", "tasks")
+        )
+        if requires_control_plane and not profile.control_plane_db_path:
+            raise EvaluationConfigurationError(
+                "scenario requires the configured control-plane database"
+            )
+
+    @staticmethod
+    async def _wait_until_ready(profile: ResolvedMattermostProfile) -> None:
+        if not profile.readiness_url:
+            return
+        deadline = time.monotonic() + profile.timeout_seconds
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0), follow_redirects=False
+        ) as client:
+            while time.monotonic() < deadline:
+                try:
+                    response = await client.get(profile.readiness_url)
+                    if response.status_code == 200:
+                        payload = response.json()
+                        if isinstance(payload, dict) and payload.get("status") == "ready":
+                            return
+                except (httpx.HTTPError, ValueError):
+                    pass
+                await asyncio.sleep(profile.poll_interval_seconds)
+        raise TimeoutError("MMAG readiness probe did not become ready before E2E timeout")
 
     async def _observe_and_act(
         self,

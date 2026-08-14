@@ -39,6 +39,19 @@ def test_credentialed_remote_http_is_rejected():
         environment.resolve_profile(_profile())
 
 
+def test_profile_requires_the_configured_readiness_url():
+    environment = EvaluationEnvironment(
+        {
+            "MMAG_E2E_ENABLED": "1",
+            "MM_URL": "https://mattermost.example",
+            "DEBUG_TEST_CHANNEL_ID": "channel-1",
+        }
+    )
+
+    with pytest.raises(EvaluationConfigurationError, match="MMAG_E2E_READY_URL"):
+        environment.resolve_profile(_profile())
+
+
 def test_actor_secret_is_not_printable():
     environment = EvaluationEnvironment(
         {"MM_USERNAME": "eval-user", "MM_PASSWORD": "top-secret"}

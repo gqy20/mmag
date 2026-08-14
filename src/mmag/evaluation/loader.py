@@ -77,6 +77,7 @@ class EvaluationAssetLoader:
             channel_id_env=spec["channel_id_env"],
             actors=actors,
             bot_username_env=spec.get("bot_username_env", ""),
+            readiness_url_env=spec.get("readiness_url_env", ""),
             enabled_env=spec.get("enabled_env", "MMAG_E2E_ENABLED"),
             control_plane_db_env=spec.get("control_plane_db_env", ""),
             timeout_seconds=float(spec.get("timeout_seconds", 120)),
