@@ -262,6 +262,7 @@
 - [x] AuditEvent Python 模型已暴露 `created_at`，查询支持 trace/run/actor/scope/decision/时间游标；事件 Schema 全覆盖、归档、导出、访问控制和防篡改仍待完成；
 - [x] 空 `LOG_DIR`、大小轮转、UTC、PID 文件隔离和 Handler 关闭已修复；过期清理仍只在启动执行，多进程聚合交给部署日志平台；
 - [x] 已覆盖 LogContext 并发隔离/恢复、Secret/URL/异常脱敏，以及 Deep Agents model/tool 内容无关审计；完整部署验收继续保留。
+- [x] 接入 LangGraph 原生 Graph Callback 的 interrupt/resume 生命周期，记录安全 checkpoint 元数据；LangChain 原生调用 ID 已映射为 span 父子关系，不采集 graph state。
 
 ### 实施批次
 
@@ -476,6 +477,7 @@ Mattermost 身份；增加 Bot 不改变数据隔离语义，停用、轮换、�
 
 - [x] 选中 Skill 后同时收窄模型 Tool Schema、CapabilityContext 与 Runtime Request；
 - [x] 过渡 delegation 使用固定 Agent/Skill、可信 actor/scope、结构化结果与父子审计字段；
+- [x] 第一批传播 `workflow_id/parent_run_id/capability_call_id/execution_key/approval_id`，为运行日志生成 `event_id`，诊断报告输出 `run_graph`；
 - [ ] 收敛 Router 与 `delegate_*` 的双重路由，单一专业请求由 Router 直达，多阶段任务由显式 Workflow 编排；
 - [ ] 使用稳定 `execution_key` 持久化父子 AgentRun 和不可变 Package/Skill/Policy snapshot；
 - [ ] 增加 `waiting_child`，子审批只恢复子 `thread_id`，子终态后幂等恢复父 Run；

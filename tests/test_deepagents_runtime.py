@@ -4,7 +4,9 @@ import pytest
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Interrupt
 
 from mmag.capabilities import (
     CapabilityContext,
@@ -25,6 +27,7 @@ from mmag.governance import (
     PolicyRule,
     bind_governance_context,
 )
+from mmag.logger import log_context
 from mmag.runtimes import (
     DeepAgentRuntime,
     RunContext,
@@ -39,7 +42,7 @@ from mmag.runtimes.harness import (
     build_tool_visibility_middleware,
 )
 from mmag.runtimes.outputs import repair_structured_output
-from mmag.runtimes.telemetry import DeepAgentTelemetry
+from mmag.runtimes.telemetry import DeepAgentGraphTelemetry, DeepAgentTelemetry
 
 
 class ScriptedModel(BaseChatModel):
@@ -400,7 +403,78 @@ async def test_native_callback_projects_content_free_langgraph_metadata(tmp_path
     assert {audit.decision for audit in audits} == {"running", "succeeded"}
     assert all(audit.details["graph_node"] == "tools" for audit in audits)
     assert all(audit.details["graph_step"] == 3 for audit in audits)
+    assert all(audit.details["span_id"] == str(native_run_id) for audit in audits)
     assert all("private" not in str(audit.details) for audit in audits)
+
+
+def test_native_graph_callback_projects_safe_interrupt_and_resume_metadata(tmp_path, caplog):
+    store = SQLiteControlPlane(str(tmp_path / "graph-telemetry.db"))
+    runtime = _runtime([])
+    request = _request(runtime, "child-run")
+    graph_run_id = uuid4()
+    with log_context.bind(workflow_id="workflow-1", parent_run_id="parent-run"):
+        telemetry = DeepAgentGraphTelemetry(request, store)
+
+    with caplog.at_level("INFO", logger="mmag.runtimes.telemetry"):
+        telemetry.on_interrupt(
+            GraphInterruptEvent(
+                run_id=graph_run_id,
+                status="done",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ns=("private-node-name",),
+                interrupts=(Interrupt(value={"private": "approval body"}, id="interrupt-1"),),
+            )
+        )
+        telemetry.on_resume(
+            GraphResumeEvent(
+                run_id=graph_run_id,
+                status="done",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ns=("private-node-name",),
+            )
+        )
+
+    lifecycle = store.list_audits(event_type="runtime.graph.lifecycle")
+    assert {item.decision for item in lifecycle} == {"waiting_approval", "running"}
+    assert all(item.details["workflow_id"] == "workflow-1" for item in lifecycle)
+    assert all(item.details["parent_run_id"] == "parent-run" for item in lifecycle)
+    assert all(item.details["checkpoint_id"] == "checkpoint-1" for item in lifecycle)
+    interrupted = next(item for item in lifecycle if item.decision == "waiting_approval")
+    assert interrupted.details["interrupt_count"] == 1
+    assert all("approval body" not in str(item.details) for item in lifecycle)
+    assert all("private-node-name" not in str(item.details) for item in lifecycle)
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", "").startswith("runtime.graph.")
+    ]
+    assert [record.event for record in records] == [
+        "runtime.graph.interrupted",
+        "runtime.graph.resumed",
+    ]
+    assert all(record.checkpoint_id == "checkpoint-1" for record in records)
+    assert all(record.span_id == str(graph_run_id) for record in records)
+
+
+def test_runtime_config_preserves_trusted_run_correlation():
+    runtime = _runtime([])
+    original = _request(runtime, "child-run")
+    request = RunRequest(
+        original.context,
+        original.messages,
+        metadata={"trace_id": "untrusted", "parent_run_id": "untrusted"},
+    )
+
+    with log_context.bind(workflow_id="workflow-1", parent_run_id="parent-run"):
+        config = runtime._config("child-run", request)
+
+    assert config["metadata"]["trace_id"] == "trace-1"
+    assert config["metadata"]["workflow_id"] == "workflow-1"
+    assert config["metadata"]["parent_run_id"] == "parent-run"
+    assert {type(callback) for callback in config["callbacks"]} == {
+        DeepAgentTelemetry,
+        DeepAgentGraphTelemetry,
+    }
 
 
 @pytest.mark.asyncio
@@ -510,9 +584,11 @@ async def test_native_callbacks_write_content_free_model_and_tool_audits(tmp_pat
 
     model_audits = store.list_audits(event_type="model.call")
     tool_audits = store.list_audits(event_type="runtime.tool.call", target="publish")
+    graph_audits = store.list_audits(event_type="runtime.graph.lifecycle")
     policy_audits = store.list_audits(event_type="policy.decision", target="publish")
     assert {item.decision for item in model_audits} >= {"running", "succeeded"}
     assert {item.decision for item in tool_audits} == {"running", "succeeded"}
+    assert {item.decision for item in graph_audits} == {"waiting_approval", "running"}
     assert {item.decision for item in policy_audits} == {"require_approval"}
     assert all("publish" not in str(item.details) for item in model_audits)
     assert all("approved" not in str(item.details) for item in tool_audits)

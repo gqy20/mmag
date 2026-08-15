@@ -117,6 +117,7 @@ async def test_delegate_uses_fixed_registered_target(
         message="delegate",
         scope="mattermost:install:team:chn:channel-1",
         run_id="run:parent-1",
+        workflow_id="workflow-1",
     )
 
     with bind_capability_context(context):
@@ -145,6 +146,7 @@ async def test_delegate_preserves_trusted_actor_and_scope():
         message="创建任务",
         scope="mattermost:install:team:chn:channel-1",
         run_id="run:parent-1",
+        workflow_id="workflow-1",
     )
 
     with bind_capability_context(context):
@@ -172,6 +174,7 @@ async def test_delegate_preserves_trusted_actor_and_scope():
     assert all(
         event[1]["details"]["parent_run_id"] == "run:parent-1" for event in audit.events
     )
+    assert all(event[1]["details"]["workflow_id"] == "workflow-1" for event in audit.events)
 
 
 @pytest.mark.asyncio

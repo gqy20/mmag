@@ -24,6 +24,7 @@ class DiagnosticReport:
     identifier: str
     trace_id: str = ""
     run_ids: tuple[str, ...] = ()
+    run_graph: tuple[dict[str, Any], ...] = ()
     audits: tuple[dict[str, Any], ...] = ()
     logs: tuple[dict[str, Any], ...] = ()
     warnings: tuple[str, ...] = ()
@@ -37,6 +38,7 @@ class DiagnosticReport:
             "identifier": self.identifier,
             "trace_id": self.trace_id,
             "run_ids": list(self.run_ids),
+            "run_graph": list(self.run_graph),
             "audits": list(self.audits),
             "logs": list(self.logs),
             "warnings": list(self.warnings),
@@ -76,13 +78,53 @@ class DiagnosticReader:
             }
         )
         warnings = tuple(value for value in (database_warning,) if value)
+        run_graph = self._run_graph(audits, matched_logs)
         return DiagnosticReport(
             identifier=identifier,
             trace_id=trace_id,
             run_ids=tuple(run_ids),
+            run_graph=run_graph,
             audits=audits,
             logs=matched_logs,
             warnings=warnings,
+        )
+
+    @staticmethod
+    def _run_graph(
+        audits: tuple[dict[str, Any], ...], logs: tuple[dict[str, Any], ...]
+    ) -> tuple[dict[str, Any], ...]:
+        runs: dict[str, dict[str, Any]] = {}
+        for item in (*audits, *logs):
+            details = item.get("details")
+            details = details if isinstance(details, dict) else {}
+            run_id = str(item.get("run_id") or details.get("run_id") or "")
+            if not run_id:
+                continue
+            record = runs.setdefault(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "parent_run_id": "",
+                    "workflow_id": "",
+                    "status": "",
+                    "last_event": "",
+                },
+            )
+            for key in ("parent_run_id", "workflow_id"):
+                value = str(item.get(key) or details.get(key) or "")
+                if value:
+                    record[key] = value
+            status = str(item.get("status") or item.get("decision") or "")
+            if status:
+                record["status"] = status
+            event = str(item.get("event") or item.get("event_type") or "")
+            if event:
+                record["last_event"] = event
+        return tuple(
+            sorted(
+                runs.values(),
+                key=lambda item: (str(item["parent_run_id"]), str(item["run_id"])),
+            )
         )
 
     def latest_event(self, event_name: str) -> dict[str, Any] | None:

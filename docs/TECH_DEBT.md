@@ -57,9 +57,10 @@ Loader 已拒绝无 eval、重复 case、非法字段和模糊期望，但启动
 
 ### TD-08 — 结构化日志已落地，Metrics 与外部 Trace 尚未接入
 
-日志已经使用版本化事件、自动恢复的 `LogContext`、JSON Lines、中心脱敏和安全异常格式；Deep Agents 原生 Callback 也已记录模型/工具生命周期并写入内容无关的审计。当前仍没有统一 Metrics、OpenTelemetry/LangSmith exporter、Policy 决策全量事件、告警规则和目标日志平台验收。
-父子 Run 还缺少 `parent_run_id/workflow_id/execution_key` 等统一关联契约，诊断工具只能平铺
-同一 trace 的日志和 AuditEvent，不能重建运行因果树。
+日志已经使用版本化事件、自动恢复的 `LogContext`、JSON Lines、中心脱敏和安全异常格式；Deep Agents/LangGraph 原生 Callback 已记录模型、工具和 interrupt/resume 生命周期并写入内容无关的审计，原生调用 ID 已映射为 span。当前仍没有统一 Metrics、OpenTelemetry/LangSmith exporter、Policy 决策全量事件、告警规则和目标日志平台验收。
+父子 Run 的 `parent_run_id/workflow_id/execution_key` 已进入第一批日志关联与机器可读
+`run_graph`，但尚未与子 AgentRun 生命周期、CapabilityCall、Artifact 和 Delivery 在同一因果
+模型中原子持久化，诊断工具仍不能重建完整运行图。
 
 完成标准：实现 [ADR-0011](adr/0011-run-control-plane-observability.md) 的统一事件与关联
 契约；指标基数受控；可选 Trace exporter 默认不采集正文；Policy/Approval/Artifact/Delivery 事件目录完整；

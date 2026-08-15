@@ -106,12 +106,14 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 
 普通运行日志使用稳定 `event`、`status`、UTC timestamp 和 `trace_id/run_id/thread_id/agent_ref/skill_ref/capability` 等关联字段。`LOG_FORMAT=json` 输出 JSON Lines；开发环境可保留 `text`。本地文件按大小轮转并带 PID，`LOG_DIR=` 可完全关闭文件输出。中心化 Filter 会遮蔽 Secret、Authorization、URL query 和异常正文，但业务代码仍不得主动记录 Prompt、消息正文、完整参数或结果。
 
-目标可观测契约由 [ADR-0011](adr/0011-run-control-plane-observability.md) 规定，当前仍只是单
-Run 关联基线。`parent_run_id/workflow_id/span_id/capability_call_id/approval_id/artifact_id`
-等字段、原子生命周期/审计事件、父子 Run 图诊断、Metrics 和 OpenTelemetry 尚未实现，
-部署不得依赖这些 Proposed 能力。
+目标可观测契约由 [ADR-0011](adr/0011-run-control-plane-observability.md) 规定。普通日志已开始传播
+`workflow_id/parent_run_id/capability_call_id/execution_key/approval_id`，每条 `log_event()` 具有
+独立 `event_id`；诊断报告已输出机器可读 `run_graph`。模型和工具调用已把 LangChain 原生
+`run_id/parent_run_id` 投影为 `span_id/parent_span_id`。`artifact_id` 的全链传播、
+原子生命周期/审计事件、完整因果树诊断、Metrics 和 OpenTelemetry 尚未实现，部署不得
+依赖这些 Proposed 能力。
 
-Deep Agents 通过 LangChain 原生 `AsyncCallbackHandler` 记录 `runtime.model.*` 和 `runtime.tool.*`，只投影 `langgraph_node`、`langgraph_step`、Provider、模型名、token、耗时、工具名及输入 Hash；模型和工具正文不会进入日志或 AuditEvent。业务 `CapabilityExecutor` 使用独立的 `capability.*` 事件，避免把框架 Tool transport 成功误认为业务 Capability 成功。RunnableConfig 同时携带低基数 tags、动态 run name 和受控 metadata，可供后续 LangSmith/OpenTelemetry exporter 复用；生产环境不得启用会输出完整状态的 `debug` stream。
+Deep Agents 通过 LangChain 原生 `AsyncCallbackHandler` 记录 `runtime.model.*` 和 `runtime.tool.*`，并通过 LangGraph 原生 `GraphCallbackHandler` 记录 `runtime.graph.interrupted|resumed`。Graph 事件只投影 checkpoint ID、namespace Hash/深度、状态和 interrupt 数量；不记录 interrupt payload、checkpoint state 或节点名称。模型/工具事件只投影 `langgraph_node`、`langgraph_step`、Provider、模型名、token、耗时、工具名及输入 Hash；正文不会进入日志或 AuditEvent。业务 `CapabilityExecutor` 使用独立的 `capability.*` 事件，避免把框架 Tool transport 成功误认为业务 Capability 成功。RunnableConfig 同时携带低基数 tags、动态 run name 和由可信 Context 覆盖的受控 metadata，可供后续 LangSmith/OpenTelemetry exporter 复用；生产环境不得启用会输出完整状态的 `debug/tasks/checkpoints` stream。
 
 Agent 编排依次记录 `agent.route.selected`、`skill.route.selected|skipped` 和 `agent.tools.projected`，其中工具名来自受信 Catalog，不记录 Prompt。Policy 记录规则、permission、decision 和 `interrupt_check|tool_execute` 阶段。Outbox/Delivery 记录 enqueue、attempt、retry、终态、message kind 和幂等键 Hash，不记录消息正文、文件名或远端异常正文。
 

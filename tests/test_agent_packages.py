@@ -84,9 +84,11 @@ def test_nested_package_context_inherits_trusted_scope_dimensions():
         message_id="post-1",
         message="创建任务",
         scope="mattermost:install:tenant:chn:channel-1",
+        run_id="run-parent",
         installation_id="install",
         tenant_id="tenant",
         scope_kind="channel",
+        workflow_id="workflow-1",
         owner_id="owner-1",
         team_id="team-1",
         channel_type="O",
@@ -108,6 +110,8 @@ def test_nested_package_context_inherits_trusted_scope_dimensions():
     assert nested.scope_kind == "channel"
     assert nested.owner_id == "owner-1"
     assert nested.team_id == "team-1"
+    assert nested.parent_run_id == parent.run_id
+    assert nested.workflow_id == "workflow-1"
     assert nested.channel_type == "O"
 
 

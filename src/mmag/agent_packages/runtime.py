@@ -237,6 +237,22 @@ def _package_capability_context(
         ),
         allowed_capabilities=frozenset(allowed_capabilities),
         run_id=(runtime_context.run_id if runtime_context is not None else request.run_id),
+        parent_run_id=(
+            parent.run_id
+            if parent is not None and parent.run_id != request.run_id
+            else parent.parent_run_id
+            if parent is not None
+            else ""
+        ),
+        workflow_id=(
+            parent.workflow_id
+            if parent is not None and parent.workflow_id
+            else parent.run_id
+            if parent is not None
+            else runtime_context.run_id
+            if runtime_context is not None
+            else request.run_id
+        ),
         allowed_execution_profiles=frozenset(package.execution_profiles),
         installation_id=(
             runtime_context.installation_id

@@ -62,7 +62,7 @@ from .harness import (
     build_workspace_interrupt_rules,
 )
 from .outputs import repair_structured_output
-from .telemetry import AuditSink, DeepAgentTelemetry
+from .telemetry import AuditSink, DeepAgentGraphTelemetry, DeepAgentTelemetry
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -417,7 +417,11 @@ class DeepAgentRuntime:
                 if bound_context is not None
                 else nullcontext()
             )
-            with context_manager:
+            with context_manager, log_context.bind(
+                capability=name,
+                capability_call_id=tool_call_id,
+                execution_key=execution_key,
+            ):
                 with log_context.bind(authorization_phase="tool_execute"):
                     authorization = self.capability_registry.authorization(name, arguments)
                 if authorization.decision is AuthorizationDecision.DENY:
@@ -606,6 +610,10 @@ class DeepAgentRuntime:
     def _config(self, thread_id: str, request: RunRequest) -> RunnableConfig:
         agent_ref = request.metadata.get("agent_ref", "mmag-agent")
         skill_ref = request.metadata.get("skill_ref", "")
+        workflow_id = log_context.get(
+            "workflow_id", request.context.run_id or request.context.trace_id
+        )
+        parent_run_id = log_context.get("parent_run_id")
         return {
             "configurable": {"thread_id": thread_id},
             "recursion_limit": max(20, request.max_rounds * 8),
@@ -616,17 +624,22 @@ class DeepAgentRuntime:
                 f"agent:{agent_ref}",
                 *([f"skill:{skill_ref}"] if skill_ref else []),
             ],
-            "callbacks": [DeepAgentTelemetry(request, self.audit_sink)],
+            "callbacks": [
+                DeepAgentTelemetry(request, self.audit_sink),
+                DeepAgentGraphTelemetry(request, self.audit_sink),
+            ],
             "metadata": {
+                **dict(request.metadata),
                 "trace_id": request.context.trace_id,
+                "workflow_id": workflow_id,
                 "run_id": request.context.run_id,
+                "parent_run_id": parent_run_id,
                 "thread_id": thread_id,
                 "actor_id": request.context.actor_id,
                 "scope": request.context.scope,
                 "installation_id": request.context.installation_id,
                 "tenant_id": request.context.tenant_id,
                 "scope_kind": request.context.scope_kind,
-                **dict(request.metadata),
             },
         }
 

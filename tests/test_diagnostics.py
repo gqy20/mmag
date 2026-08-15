@@ -17,6 +17,17 @@ def test_diagnostic_reader_resolves_exact_run_and_aggregates_rotated_logs(tmp_pa
         details={"run_id": "mattermost:post-1"},
     )
     store.append_audit(
+        "agent.delegated",
+        trace_id="trace-exact",
+        target="project",
+        decision="running",
+        details={
+            "run_id": "delegate:project:child-1",
+            "parent_run_id": "mattermost:post-1",
+            "workflow_id": "mattermost:post-1",
+        },
+    )
+    store.append_audit(
         "agent.route",
         trace_id="trace-other",
         target="mmchat",
@@ -36,7 +47,23 @@ def test_diagnostic_reader_resolves_exact_run_and_aggregates_rotated_logs(tmp_pa
     report = DiagnosticReader(database, logs).report("mattermost:post-1")
 
     assert report.trace_id == "trace-exact"
-    assert report.run_ids == ("mattermost:post-1",)
+    assert report.run_ids == ("delegate:project:child-1", "mattermost:post-1")
+    assert report.run_graph == (
+        {
+            "run_id": "mattermost:post-1",
+            "parent_run_id": "",
+            "workflow_id": "",
+            "status": "selected",
+            "last_event": "delivery.dispatch.completed",
+        },
+        {
+            "run_id": "delegate:project:child-1",
+            "parent_run_id": "mattermost:post-1",
+            "workflow_id": "mattermost:post-1",
+            "status": "running",
+            "last_event": "agent.delegated",
+        },
+    )
     assert [item["event"] for item in report.logs] == [
         "message.accepted",
         "delivery.dispatch.completed",

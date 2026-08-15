@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from mmag.logger import ContextFilter, JSONFormatter, log_context
+from mmag.logger import ContextFilter, JSONFormatter, log_context, log_event
 
 
 @pytest.mark.asyncio
@@ -46,3 +46,26 @@ def test_json_logging_redacts_secrets_url_queries_and_exception_messages():
     assert "secret" not in payload["message"]
     assert "private body" not in payload["message"]
     assert "RuntimeError" in payload["message"]
+
+
+def test_log_event_adds_event_id_and_projects_run_correlation(caplog):
+    logger = logging.getLogger("mmag.test.correlation")
+    with (
+        caplog.at_level(logging.INFO, logger=logger.name),
+        log_context.bind(
+            workflow_id="workflow-1",
+            run_id="run-child",
+            parent_run_id="run-parent",
+            capability_call_id="call-1",
+        ),
+    ):
+        log_event(logger, "agent.run.started", status="running")
+        record = caplog.records[-1]
+        ContextFilter().filter(record)
+        payload = json.loads(JSONFormatter().format(record))
+
+    assert len(payload["event_id"]) == 32
+    assert payload["workflow_id"] == "workflow-1"
+    assert payload["run_id"] == "run-child"
+    assert payload["parent_run_id"] == "run-parent"
+    assert payload["capability_call_id"] == "call-1"

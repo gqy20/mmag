@@ -32,6 +32,8 @@ class CapabilityContext:
     channel_type: str = ""
     tool_call_id: str = ""
     execution_key: str = ""
+    parent_run_id: str = ""
+    workflow_id: str = ""
 
 
 _CURRENT_CONTEXT: ContextVar[CapabilityContext | None] = ContextVar(

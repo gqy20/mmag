@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..capabilities import CapabilityContext, bind_capability_context
 from ..governance import GovernanceContext, bind_governance_context
+from ..logger import log_context
 from ..runtimes import RuntimeStatus
 from ..skill_packages import SkillContext, bind_skill_context
 from .context import scope_resource_id
@@ -65,6 +66,8 @@ class LangGraphApprovalCoordinator:
                 "message_id": capability_context.message_id,
                 "message": capability_context.message,
                 "run_id": capability_context.run_id,
+                "parent_run_id": capability_context.parent_run_id,
+                "workflow_id": capability_context.workflow_id,
                 "installation_id": capability_context.installation_id,
                 "tenant_id": capability_context.tenant_id,
                 "scope_kind": capability_context.scope_kind,
@@ -158,6 +161,12 @@ class LangGraphApprovalCoordinator:
             message=str(original_context.get("message") or "approval resume"),
             scope=request.scope_id,
             run_id=str(original_context.get("run_id") or thread_id),
+            parent_run_id=str(original_context.get("parent_run_id") or ""),
+            workflow_id=str(
+                original_context.get("workflow_id")
+                or original_context.get("run_id")
+                or thread_id
+            ),
             installation_id=str(original_context.get("installation_id") or ""),
             tenant_id=str(original_context.get("tenant_id") or ""),
             scope_kind=str(original_context.get("scope_kind") or ""),
@@ -194,6 +203,8 @@ class LangGraphApprovalCoordinator:
                 str(name) for name in allowed_capabilities if isinstance(name, str) and name
             ),
             run_id=context.run_id,
+            parent_run_id=context.parent_run_id,
+            workflow_id=context.workflow_id,
             allowed_execution_profiles=frozenset(
                 str(ref) for ref in execution_profiles if isinstance(ref, str) and ref
             ),
@@ -207,6 +218,13 @@ class LangGraphApprovalCoordinator:
         self._transition_run(thread_id, "running", request_id)
         try:
             with (
+                log_context.bind(
+                    trace_id=context.trace_id,
+                    workflow_id=context.workflow_id,
+                    run_id=context.run_id,
+                    parent_run_id=context.parent_run_id,
+                    approval_id=request_id,
+                ),
                 bind_capability_context(context),
                 skill_scope,
                 bind_governance_context(

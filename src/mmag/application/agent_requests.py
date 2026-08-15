@@ -357,6 +357,7 @@ class AgentRequestHandler:
                 scope=scope.id,
                 allowed_capabilities=frozenset(allowed_capabilities),
                 run_id=self.run_id(post),
+                workflow_id=self.run_id(post),
                 allowed_execution_profiles=frozenset(allowed_execution_profiles),
                 installation_id=scope.installation_id,
                 tenant_id=scope.tenant_id,
@@ -433,6 +434,7 @@ class AgentRequestHandler:
             scope=runtime_request.context.scope,
             allowed_capabilities=frozenset(capabilities),
             run_id=runtime_request.context.run_id,
+            workflow_id=runtime_request.context.run_id,
             allowed_execution_profiles=frozenset(
                 package.execution_profiles if package is not None else ()
             ),

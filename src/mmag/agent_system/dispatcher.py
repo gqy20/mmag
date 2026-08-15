@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Protocol
 
+from ..logger import log_context
 from .core import AgentOutput, AgentRegistry, AgentRequest
 
 if TYPE_CHECKING:
@@ -92,6 +93,7 @@ class AgentDispatcher:
         agent = self.agents.get(target.agent_name)
         package = self.packages.get(target.agent_name)
         parent_run_id = context.run_id or context.trace_id
+        workflow_id = context.workflow_id or parent_run_id
         run_id = f"delegate:{target.agent_name}:{uuid.uuid4().hex[:16]}"
         request = AgentRequest(
             intent=target.intent,
@@ -120,7 +122,13 @@ class AgentDispatcher:
             skill_ref=request.skill.ref if request.skill is not None else "",
         )
         try:
-            output = await agent.run(request)
+            with log_context.bind(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+                execution_key=context.execution_key,
+            ):
+                output = await agent.run(request)
         except Exception as error:
             self._audit(
                 context,
@@ -180,11 +188,15 @@ class AgentDispatcher:
             details={
                 "schema_version": "1.0",
                 "parent_run_id": parent_run_id,
+                "workflow_id": context.workflow_id or parent_run_id,
                 "run_id": run_id,
                 "agent": target.agent_name,
                 "skill_ref": skill_ref,
                 "artifact_count": artifact_count,
                 "error_code": error_code,
+                "execution_key_sha256": context.execution_key[:16]
+                if context.execution_key
+                else "",
             },
         )
 

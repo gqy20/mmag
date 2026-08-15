@@ -7,8 +7,9 @@ import time
 from typing import TYPE_CHECKING, Any, Protocol
 
 from langchain_core.callbacks import AsyncCallbackHandler
+from langgraph.callbacks import GraphCallbackHandler, GraphInterruptEvent, GraphResumeEvent
 
-from ..logger import get_logger, log_event, safe_hash
+from ..logger import get_logger, log_context, log_event, safe_hash
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -41,6 +42,10 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
     def __init__(self, request: RunRequest, audit_sink: AuditSink | None = None) -> None:
         self.request = request
         self.audit_sink = audit_sink
+        self.workflow_id = log_context.get(
+            "workflow_id", request.context.run_id or request.context.trace_id
+        )
+        self.parent_run_id = log_context.get("parent_run_id")
         self._started: dict[UUID, float] = {}
         self._tool_names: dict[UUID, str] = {}
         self._native_fields: dict[UUID, dict[str, Any]] = {}
@@ -70,6 +75,8 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         self._event(
             "runtime.model.started",
             "running",
+            span_id=str(run_id),
+            parent_span_id=str(parent_run_id or ""),
             model=model,
             message_count=msg_count,
             prior_tool_calls=prior_tool_calls,
@@ -127,6 +134,8 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         self._event(
             "runtime.model.completed",
             "succeeded",
+            span_id=str(run_id),
+            parent_span_id=str(parent_run_id or ""),
             duration_ms=duration_ms,
             stop_reason=",".join(stop_reasons) if stop_reasons else "",
             response_tool_calls=response_tool_calls or None,
@@ -160,6 +169,8 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
             "runtime.model.failed",
             "failed",
             level=logging.ERROR,
+            span_id=str(run_id),
+            parent_span_id=str(parent_run_id or ""),
             duration_ms=duration_ms,
             error_code=type(error).__name__,
             **native_fields,
@@ -196,6 +207,8 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         self._event(
             "runtime.tool.started",
             "running",
+            span_id=str(run_id),
+            parent_span_id=str(parent_run_id or ""),
             capability=name,
             input_sha256=input_sha256,
             **native_fields,
@@ -234,6 +247,8 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         self._event(
             "runtime.tool.completed",
             "succeeded",
+            span_id=str(run_id),
+            parent_span_id=str(parent_run_id or ""),
             capability=name,
             duration_ms=duration_ms,
             output_size=output_size,
@@ -266,6 +281,8 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
             "runtime.tool.failed",
             "failed",
             level=logging.ERROR,
+            span_id=str(run_id),
+            parent_span_id=str(parent_run_id or ""),
             capability=name,
             duration_ms=duration_ms,
             error_code=type(error).__name__,
@@ -290,8 +307,10 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
             level=level,
             status=status,
             trace_id=context.trace_id,
+            workflow_id=self.workflow_id,
             task_id=self.request.metadata.get("task_id", ""),
             run_id=context.run_id,
+            parent_run_id=self.parent_run_id,
             thread_id=context.run_id or context.trace_id,
             actor_id=context.actor_id,
             conversation_id=context.conversation_id,
@@ -315,9 +334,13 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
         context = self.request.context
         payload = {
             "schema_version": "1.0",
+            "workflow_id": self.workflow_id,
             "run_id": context.run_id,
+            "parent_run_id": self.parent_run_id,
             "runtime_call_id": str(native_run_id),
             "parent_runtime_call_id": str(parent_run_id or ""),
+            "span_id": str(native_run_id),
+            "parent_span_id": str(parent_run_id or ""),
             "agent_ref": self.request.metadata.get("agent_ref", ""),
             "skill_ref": self.request.metadata.get("skill_ref", ""),
             **details,
@@ -343,6 +366,94 @@ class DeepAgentTelemetry(AsyncCallbackHandler):
     def _duration(self, run_id: UUID) -> int:
         started = self._started.pop(run_id, time.monotonic())
         return round((time.monotonic() - started) * 1000)
+
+
+class DeepAgentGraphTelemetry(GraphCallbackHandler):
+    """Project LangGraph interrupt/resume lifecycle without graph state content."""
+
+    def __init__(self, request: RunRequest, audit_sink: AuditSink | None = None) -> None:
+        self.request = request
+        self.audit_sink = audit_sink
+        self.workflow_id = log_context.get(
+            "workflow_id", request.context.run_id or request.context.trace_id
+        )
+        self.parent_run_id = log_context.get("parent_run_id")
+
+    def on_interrupt(self, event: GraphInterruptEvent) -> None:
+        self._record(
+            "runtime.graph.interrupted",
+            "waiting_approval",
+            event,
+            interrupt_count=len(event.interrupts),
+        )
+
+    def on_resume(self, event: GraphResumeEvent) -> None:
+        self._record("runtime.graph.resumed", "running", event)
+
+    def _record(
+        self,
+        event_name: str,
+        status: str,
+        event: GraphInterruptEvent | GraphResumeEvent,
+        *,
+        interrupt_count: int = 0,
+    ) -> None:
+        context = self.request.context
+        namespace = tuple(str(item) for item in event.checkpoint_ns)
+        fields: dict[str, Any] = {
+            "trace_id": context.trace_id,
+            "workflow_id": self.workflow_id,
+            "task_id": self.request.metadata.get("task_id", ""),
+            "run_id": context.run_id,
+            "parent_run_id": self.parent_run_id,
+            "thread_id": context.run_id or context.trace_id,
+            "checkpoint_id": event.checkpoint_id,
+            "span_id": str(event.run_id or ""),
+            "actor_id": context.actor_id,
+            "conversation_id": context.conversation_id,
+            "agent_ref": self.request.metadata.get("agent_ref", ""),
+            "skill_ref": self.request.metadata.get("skill_ref", ""),
+            "policy_ref": self.request.metadata.get("policy_ref", ""),
+            "graph_status": event.status,
+            "checkpoint_ns_sha256": safe_hash(namespace),
+            "checkpoint_ns_depth": len(namespace),
+            "interrupt_count": interrupt_count,
+        }
+        log_event(log, event_name, status=status, **fields)
+        if self.audit_sink is None:
+            return
+        try:
+            self.audit_sink.append_audit(
+                "runtime.graph.lifecycle",
+                actor_id=context.actor_id,
+                scope_id=context.scope,
+                trace_id=context.trace_id,
+                target=event.checkpoint_id,
+                decision=status,
+                details={
+                    "schema_version": "1.0",
+                    "event": event_name,
+                    "workflow_id": fields["workflow_id"],
+                    "run_id": context.run_id,
+                    "parent_run_id": fields["parent_run_id"],
+                    "thread_id": fields["thread_id"],
+                    "checkpoint_id": event.checkpoint_id,
+                    "span_id": fields["span_id"],
+                    "graph_status": event.status,
+                    "checkpoint_ns_sha256": fields["checkpoint_ns_sha256"],
+                    "checkpoint_ns_depth": fields["checkpoint_ns_depth"],
+                    "interrupt_count": interrupt_count,
+                },
+            )
+        except Exception as error:
+            log_event(
+                log,
+                "audit.write_failed",
+                level=logging.ERROR,
+                status="degraded",
+                error_code=type(error).__name__,
+                checkpoint_id=event.checkpoint_id,
+            )
 
 
 def _component_name(serialized: Mapping[str, Any], default: str) -> str:

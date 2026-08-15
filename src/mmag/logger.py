@@ -24,19 +24,30 @@ _DEFAULT_LOG_DIR = "logs"
 _DEFAULT_RETAIN_DAYS = 30
 _CONTEXT_FIELDS = (
     "trace_id",
+    "workflow_id",
     "task_id",
     "run_id",
+    "parent_run_id",
     "thread_id",
+    "checkpoint_id",
+    "span_id",
+    "parent_span_id",
     "conversation_id",
     "actor_id",
+    "scope_id",
     "agent_ref",
     "skill_ref",
     "capability",
+    "capability_call_id",
+    "approval_id",
+    "artifact_id",
+    "execution_key",
     "policy_ref",
     "delivery_id",
 )
 _EVENT_FIELDS = (
     "schema_version",
+    "event_id",
     "event",
     "status",
     "duration_ms",
@@ -115,6 +126,7 @@ def log_event(
     reserved = set((*_CONTEXT_FIELDS, *_EVENT_FIELDS))
     extra = {
         "schema_version": "1.0",
+        "event_id": uuid.uuid4().hex,
         "event": event,
         "status": status,
         **{key: value for key, value in fields.items() if key in reserved},
