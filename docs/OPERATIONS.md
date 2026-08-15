@@ -15,6 +15,8 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 ```
 
 - `MEMORY_DB_PATH` 保存业务/control-plane 状态，`CHECKPOINT_DB_PATH` 只保存 LangGraph checkpoint；
+- schema v24 在 `lifecycle_entities` 上为 AgentRun 的 `execution_key` 建立唯一索引，并为
+  `parent_run_id/workflow_id` 建立查询索引；迁移失败时必须保持服务未就绪，不能绕过唯一性门禁启动；
   两者必须是不同文件。每个 SQLite 数据库只运行一个 mmag 写实例；横向扩展前必须先更换支持租约的存储。
 - 数据目录与 `ARTIFACT_STORE_PATH` 使用同一故障域内的持久卷，数据库开启 WAL、foreign keys、busy timeout 和 NORMAL synchronous。
 - 出站网络只允许 Mattermost、配置的模型端点和显式授权的 MCP Server。

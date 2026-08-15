@@ -2,19 +2,94 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from .models import AgentRunRecord, AgentRunSpec, AgentRunState, EntityType
+
+if TYPE_CHECKING:
+    from .lifecycle import LifecycleService
+    from .store import SQLiteControlPlane
 
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
 
 
+def delegation_execution_key(spec: AgentRunSpec) -> str:
+    """Derive the stable child-run key exclusively from governed identity fields."""
+    if not spec.parent_run_id or not spec.parent_tool_call_id:
+        return ""
+    identity = {
+        "parent_run_id": spec.parent_run_id,
+        "parent_tool_call_id": spec.parent_tool_call_id,
+        "agent_ref": spec.agent_ref,
+        "skill_ref": spec.skill_ref,
+        "package_snapshot": spec.package_snapshot,
+    }
+    encoded = json.dumps(
+        identity,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+class AgentRunConflictError(RuntimeError):
+    """A run identifier or replay key was reused with different trusted identity."""
+
+
 class AgentRunStore:
     def __init__(self, connection: Any, lock: Any) -> None:
         self._connection = connection
         self._lock = lock
+
+    def create_or_get(self, spec: AgentRunSpec) -> tuple[AgentRunRecord, bool]:
+        """Atomically create a run or return its replay-stable existing record."""
+        execution_key = delegation_execution_key(spec)
+        payload = self._identity_payload(spec, execution_key)
+        with self._lock:
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                existing = self._find_row(execution_key=execution_key) if execution_key else None
+                if existing is None:
+                    existing = self._find_row(run_id=spec.run_id)
+                if existing is not None:
+                    self._assert_same_identity(existing, payload, requested_run_id=spec.run_id)
+                    self._connection.commit()
+                    return self._record(existing), False
+                self._assert_parent(spec)
+                now = time.time()
+                self._connection.execute(
+                    """INSERT INTO lifecycle_entities
+                    (entity_type, entity_id, scope_id, state, payload, created_at, updated_at)
+                    VALUES ('agent_run', ?, ?, 'queued', ?, ?, ?)""",
+                    (spec.run_id, spec.scope_id, _json(payload), now, now),
+                )
+                row = self._find_row(run_id=spec.run_id)
+                if row is None:  # pragma: no cover - guarded by the insert above
+                    raise RuntimeError("created AgentRun could not be read")
+                self._connection.commit()
+                return self._record(row), True
+            except Exception:
+                self._connection.rollback()
+                raise
+
+    def get(self, run_id: str) -> AgentRunRecord:
+        row = self._find_row(run_id=run_id)
+        if row is None:
+            raise KeyError(f"agent_run:{run_id}")
+        return self._record(row)
+
+    def find_by_execution_key(self, execution_key: str) -> AgentRunRecord | None:
+        if not execution_key:
+            return None
+        row = self._find_row(execution_key=execution_key)
+        return self._record(row) if row is not None else None
 
     def bind_snapshot(
         self,
@@ -101,3 +176,138 @@ class AgentRunStore:
             "WHERE entity_type='agent_run' AND entity_id=?",
             (_json(payload), time.time(), entity_id),
         )
+
+    def _assert_parent(self, spec: AgentRunSpec) -> None:
+        if not spec.parent_run_id:
+            return
+        parent = self._find_row(run_id=spec.parent_run_id)
+        if parent is None:
+            raise AgentRunConflictError("parent AgentRun does not exist")
+        payload = dict(json.loads(parent["payload"]))
+        if (
+            str(parent["scope_id"]) != spec.scope_id
+            or str(payload.get("workflow_id") or "") != spec.workflow_id
+            or str(payload.get("actor_id") or "") != spec.actor_id
+        ):
+            raise AgentRunConflictError("child AgentRun does not inherit parent identity")
+
+    def _find_row(self, *, run_id: str = "", execution_key: str = "") -> Any | None:
+        if execution_key:
+            return self._connection.execute(
+                """SELECT * FROM lifecycle_entities
+                WHERE entity_type='agent_run'
+                  AND json_extract(payload, '$.execution_key')=?""",
+                (execution_key,),
+            ).fetchone()
+        return self._connection.execute(
+            """SELECT * FROM lifecycle_entities
+            WHERE entity_type='agent_run' AND entity_id=?""",
+            (run_id,),
+        ).fetchone()
+
+    @staticmethod
+    def _identity_payload(spec: AgentRunSpec, execution_key: str) -> dict[str, Any]:
+        return {
+            "schema_version": "1.0",
+            "workflow_id": spec.workflow_id,
+            "scope_id": spec.scope_id,
+            "parent_run_id": spec.parent_run_id,
+            "parent_tool_call_id": spec.parent_tool_call_id,
+            "execution_key": execution_key,
+            "thread_id": spec.thread_id,
+            "actor_id": spec.actor_id,
+            "trace_id": spec.trace_id,
+            "agent_ref": spec.agent_ref,
+            "skill_ref": spec.skill_ref,
+            "snapshot": dict(spec.package_snapshot),
+        }
+
+    @staticmethod
+    def _assert_same_identity(
+        row: Any,
+        expected: dict[str, Any],
+        *,
+        requested_run_id: str,
+    ) -> None:
+        actual = dict(json.loads(row["payload"]))
+        immutable = (
+            "workflow_id",
+            "scope_id",
+            "parent_run_id",
+            "parent_tool_call_id",
+            "execution_key",
+            "actor_id",
+            "agent_ref",
+            "skill_ref",
+            "snapshot",
+        )
+        if str(row["scope_id"]) != expected["scope_id"]:
+            raise AgentRunConflictError("AgentRun scope is immutable")
+        if any(actual.get(field) != expected.get(field) for field in immutable):
+            raise AgentRunConflictError("AgentRun replay identity does not match")
+        if str(row["entity_id"]) == requested_run_id and any(
+            actual.get(field) != expected.get(field) for field in ("trace_id", "thread_id")
+        ):
+            raise AgentRunConflictError("AgentRun thread identity is immutable")
+
+    @staticmethod
+    def _record(row: Any) -> AgentRunRecord:
+        payload = dict(json.loads(row["payload"]))
+        return AgentRunRecord(
+            run_id=str(row["entity_id"]),
+            workflow_id=str(payload.get("workflow_id") or ""),
+            actor_id=str(payload.get("actor_id") or ""),
+            scope_id=str(row["scope_id"]),
+            trace_id=str(payload.get("trace_id") or ""),
+            thread_id=str(payload.get("thread_id") or ""),
+            agent_ref=str(payload.get("agent_ref") or ""),
+            package_snapshot=dict(payload.get("snapshot") or {}),
+            state=AgentRunState(str(row["state"])),
+            version=int(row["version"]),
+            execution_key=str(payload.get("execution_key") or ""),
+            parent_run_id=str(payload.get("parent_run_id") or ""),
+            parent_tool_call_id=str(payload.get("parent_tool_call_id") or ""),
+            skill_ref=str(payload.get("skill_ref") or ""),
+        )
+
+
+class AgentRunService:
+    """Typed creation and transition boundary for durable AgentRuns."""
+
+    def __init__(
+        self,
+        store: SQLiteControlPlane,
+        lifecycle: LifecycleService | None = None,
+    ) -> None:
+        if lifecycle is None:
+            from .lifecycle import LifecycleService
+
+            lifecycle = LifecycleService(store)
+        self.store = store
+        self.lifecycle = lifecycle
+
+    def create_or_get(self, spec: AgentRunSpec) -> tuple[AgentRunRecord, bool]:
+        return self.store.runs.create_or_get(spec)
+
+    def transition(
+        self,
+        run_id: str,
+        state: AgentRunState,
+        *,
+        command_id: str,
+        expected_version: int | None = None,
+        reason: str = "",
+        actor_id: str = "",
+        trace_id: str = "",
+    ) -> AgentRunRecord:
+        self.lifecycle.transition(
+            EntityType.AGENT_RUN,
+            run_id,
+            state.value,
+            command_id=command_id,
+            expected_version=expected_version,
+            reason=reason,
+            actor_id=actor_id,
+            trace_id=trace_id,
+        )
+        return self.store.runs.get(run_id)

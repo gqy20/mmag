@@ -735,6 +735,25 @@ def _v023_add_task_drafts(connection: sqlite3.Connection) -> None:
     )
 
 
+def _v024_add_agent_run_identity_indexes(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE UNIQUE INDEX idx_agent_runs_execution_key "
+        "ON lifecycle_entities(json_extract(payload, '$.execution_key')) "
+        "WHERE entity_type='agent_run' "
+        "AND coalesce(json_extract(payload, '$.execution_key'), '') <> ''"
+    )
+    connection.execute(
+        "CREATE INDEX idx_agent_runs_parent "
+        "ON lifecycle_entities(json_extract(payload, '$.parent_run_id')) "
+        "WHERE entity_type='agent_run'"
+    )
+    connection.execute(
+        "CREATE INDEX idx_agent_runs_workflow "
+        "ON lifecycle_entities(json_extract(payload, '$.workflow_id')) "
+        "WHERE entity_type='agent_run'"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -873,6 +892,12 @@ DEFAULT_MIGRATIONS = (
         name="add meeting task drafts",
         checksum=_checksum("v023-add-meeting-task-drafts-20260814"),
         upgrade=_v023_add_task_drafts,
+    ),
+    Migration(
+        version=24,
+        name="add durable agent run identity",
+        checksum=_checksum("v024-add-durable-agent-run-identity-20260815"),
+        upgrade=_v024_add_agent_run_identity_indexes,
     ),
 )
 

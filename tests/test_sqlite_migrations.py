@@ -110,6 +110,14 @@ def test_fresh_database_migrates_to_latest_schema():
     }
     assert "execution_key" in task_columns
     assert {"idx_tasks_execution_key", "idx_tasks_scope"} <= task_indexes
+    run_indexes = {
+        row["name"] for row in conn.execute("PRAGMA index_list(lifecycle_entities)")
+    }
+    assert {
+        "idx_agent_runs_execution_key",
+        "idx_agent_runs_parent",
+        "idx_agent_runs_workflow",
+    } <= run_indexes
     conn.close()
 
 

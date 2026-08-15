@@ -139,6 +139,7 @@ class TaskState(StrEnum):
 class AgentRunState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
+    WAITING_CHILD = "waiting_child"
     WAITING_APPROVAL = "waiting_approval"
     SUCCEEDED = "succeeded"
     EXHAUSTED = "exhausted"
@@ -194,6 +195,58 @@ class StateTransition:
     reason: str = ""
     actor_id: str = ""
     trace_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AgentRunSpec:
+    """Immutable trusted identity used to create one durable AgentRun."""
+
+    run_id: str
+    workflow_id: str
+    actor_id: str
+    scope_id: str
+    trace_id: str
+    thread_id: str
+    agent_ref: str
+    package_snapshot: Mapping[str, Any]
+    parent_run_id: str = ""
+    parent_tool_call_id: str = ""
+    skill_ref: str = ""
+
+    def __post_init__(self) -> None:
+        required = (
+            self.run_id,
+            self.workflow_id,
+            self.actor_id,
+            self.scope_id,
+            self.trace_id,
+            self.thread_id,
+            self.agent_ref,
+        )
+        if not all(value.strip() for value in required) or not self.package_snapshot:
+            raise ValueError("AgentRun identity and package snapshot are required")
+        if bool(self.parent_run_id) != bool(self.parent_tool_call_id):
+            raise ValueError("child AgentRun requires parent run and parent tool call together")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentRunRecord:
+    """Durable AgentRun identity and lifecycle projection."""
+
+    run_id: str
+    workflow_id: str
+    actor_id: str
+    scope_id: str
+    trace_id: str
+    thread_id: str
+    agent_ref: str
+    package_snapshot: Mapping[str, Any]
+    state: AgentRunState
+    version: int
+    execution_key: str = ""
+    parent_run_id: str = ""
+    parent_tool_call_id: str = ""
+    skill_ref: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -39,7 +39,17 @@ _TRANSITIONS: dict[EntityType, dict[str, frozenset[str]]] = {
     },
     EntityType.AGENT_RUN: {
         "queued": frozenset({"running", "cancelled"}),
-        "running": frozenset({"waiting_approval", "succeeded", "exhausted", "failed", "cancelled"}),
+        "running": frozenset(
+            {
+                "waiting_child",
+                "waiting_approval",
+                "succeeded",
+                "exhausted",
+                "failed",
+                "cancelled",
+            }
+        ),
+        "waiting_child": frozenset({"queued", "failed", "cancelled"}),
         "waiting_approval": frozenset({"queued", "failed", "cancelled"}),
     },
     EntityType.CAPABILITY_CALL: {

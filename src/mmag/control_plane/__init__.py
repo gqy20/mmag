@@ -28,6 +28,8 @@ from .lifecycle import (
 )
 from .memory_items import MemoryItemStore
 from .models import (
+    AgentRunRecord,
+    AgentRunSpec,
     AgentRunState,
     ApprovalRequest,
     ApprovalRequestState,
@@ -67,11 +69,16 @@ from .persona_replies import PersonaReplyStore
 from .personal_skills import PersonalSkillStore
 from .personas import DigitalPersonaStore
 from .pipeline import MessagePipeline, PartitionedScheduler
+from .runs import AgentRunConflictError, AgentRunService, delegation_execution_key
 from .store import SQLiteControlPlane
 from .task_drafts import TaskDraft, TaskDraftState, TaskDraftStore
 from .work_cases import InteractionSessionStore, WorkCaseStore
 
 __all__ = [
+    "AgentRunConflictError",
+    "AgentRunRecord",
+    "AgentRunService",
+    "AgentRunSpec",
     "AgentRunState",
     "ApprovalRequest",
     "ApprovalAlreadyDecidedError",
@@ -136,4 +143,5 @@ __all__ = [
     "WorkCaseStore",
     "StaticApprovalAuthorizer",
     "VersionConflictError",
+    "delegation_execution_key",
 ]
