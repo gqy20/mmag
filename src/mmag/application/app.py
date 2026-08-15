@@ -17,7 +17,7 @@ from ..agent_packages import (
     DeepAgentProvider,
     DirectAgentProvider,
 )
-from ..agent_system import AgentRegistry, AgentRouter
+from ..agent_system import AgentDispatcher, AgentRegistry, AgentRouter
 from ..capabilities import (
     CapabilityExecutor,
     CapabilityRegistry,
@@ -226,16 +226,22 @@ class Agent:
         self.agent_registry = AgentRegistry(
             self.agent_factory.create_all(self.agent_package_registry.list())
         )
-        for delegate_spec in create_delegate_capabilities(self.agent_registry):
-            self.capability_registry.register(
-                bind_langgraph_capability(delegate_spec, executor=self.capability_executor)
-            )
         self.agent_router = AgentRouter(self.agent_registry)
         self.skill_resolver = SkillResolver(
             self.skill_package_registry,
             self.capability_registry,
             personal_skills=self.control_store.personal_skills,
         )
+        self.agent_dispatcher = AgentDispatcher(
+            self.agent_registry,
+            self.agent_package_registry,
+            self.skill_resolver,
+            audit_sink=self.control_store,
+        )
+        for delegate_spec in create_delegate_capabilities(self.agent_dispatcher):
+            self.capability_registry.register(
+                bind_langgraph_capability(delegate_spec, executor=self.capability_executor)
+            )
         default_agent = self.agent_registry.default()
         default_package = self.agent_package_registry.get(default_agent.descriptor.name)
 

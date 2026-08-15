@@ -101,6 +101,9 @@ class DeepAgentProvider:
         def build(request: AgentRequest, descriptor: AgentDescriptor) -> RunRequest:
             del descriptor
             now = datetime.now(ZoneInfo("Asia/Shanghai"))
+            effective_names = (
+                request.skill.capabilities if request.skill is not None else names
+            )
             prepared = request.runtime_request
             if prepared is not None and not isinstance(prepared, RunRequest):
                 raise AgentPackageError("prepared runtime request has an invalid type")
@@ -129,7 +132,7 @@ class DeepAgentProvider:
             personalization = _personalization_instruction(request)
             if personalization:
                 system_prompt = f"{system_prompt.rstrip()}\n\n{personalization}"
-            capabilities = tuple(self.capabilities.get_schema_list(names))
+            capabilities = tuple(self.capabilities.get_schema_list(effective_names))
             runtime_metadata = {
                 "task_id": request.task_id,
                 "agent_ref": (
@@ -150,7 +153,7 @@ class DeepAgentProvider:
                 "model_policy_ref": model_policy.ref,
                 "model_policy_hash": model_policy.sha256,
                 "package_hash": package.snapshot.package_hash,
-                "capabilities": ",".join(names),
+                "capabilities": ",".join(effective_names),
                 "execution_profiles": ",".join(package.execution_profiles),
                 "max_cost_usd": str(package.manifest.budget.max_cost_usd),
                 **self.platform_provenance,

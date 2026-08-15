@@ -732,6 +732,8 @@ class AgentRequestHandler:
 
     @staticmethod
     def _effective_capabilities(request: AgentRequest, agent: ManagedAgent) -> tuple[str, ...]:
+        if request.skill is not None:
+            return request.skill.capabilities
         return agent.descriptor.capabilities
 
     @staticmethod

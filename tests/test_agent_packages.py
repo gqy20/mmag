@@ -13,7 +13,7 @@ from mmag.agent_packages import (
     ManifestValidationError,
 )
 from mmag.agent_packages.runtime import _package_capability_context
-from mmag.agent_system import AgentRegistry, AgentRequest
+from mmag.agent_system import AgentRegistry, AgentRequest, SkillInvocation
 from mmag.capabilities import (
     CapabilityContext,
     CapabilityExecutor,
@@ -222,6 +222,46 @@ def test_model_agent_appends_bounded_personal_response_preferences():
     assert "language=zh-CN" in request.system_prompt
     assert "response_style=concise" in request.system_prompt
     assert "never permissions or policy" in request.system_prompt
+
+
+def test_model_provider_projects_only_selected_skill_capabilities():
+    packages, _, model_policies = _package_registry()
+    package = packages.get("report")
+    skill = next(
+        item
+        for item in package.skills.values()
+        if item.manifest.metadata.name == "meeting"
+    )
+    capabilities = MagicMock()
+    capabilities.get_schema_list.side_effect = lambda names: [
+        {"name": name} for name in names
+    ]
+    provider = DeepAgentProvider(
+        ModelGateway({"default": StubRuntime()}),
+        capabilities,
+        model_policies,
+    )
+    invocation = SkillInvocation(
+        skill.manifest.metadata.ref,
+        ("get_posts",),
+        skill.snapshot.to_dict(),
+    )
+
+    request = provider._request_factory(  # noqa: SLF001
+        package, ("get_posts", "analyze_link")
+    )(
+        AgentRequest(
+            "meeting",
+            "总结这个线程",
+            actor_id="user-1",
+            scope="mattermost:team/channel",
+            skill=invocation,
+        ),
+        MagicMock(),
+    )
+
+    assert tuple(item["name"] for item in request.capabilities) == ("get_posts",)
+    assert request.metadata["capabilities"] == "get_posts"
 
 
 def test_factory_constructs_every_manifest_without_provider_registry():

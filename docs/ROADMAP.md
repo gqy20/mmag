@@ -470,6 +470,23 @@ Scope / Policy       实际的数据与动作边界
 退出标准：一个 MMAG 部署既能保留统一 `@mmag` 入口，也能按需为正式发布的 Persona/部门数字员工提供独立
 Mattermost 身份；增加 Bot 不改变数据隔离语义，停用、轮换、成员变化和审批仍可追溯且默认拒绝。
 
+## 下一步 15：Run Control Plane 与统一可观测模型
+
+优先级：P0，目标设计见 [ADR-0011](adr/0011-run-control-plane-observability.md)（Proposed）。
+
+- [x] 选中 Skill 后同时收窄模型 Tool Schema、CapabilityContext 与 Runtime Request；
+- [x] 过渡 delegation 使用固定 Agent/Skill、可信 actor/scope、结构化结果与父子审计字段；
+- [ ] 收敛 Router 与 `delegate_*` 的双重路由，单一专业请求由 Router 直达，多阶段任务由显式 Workflow 编排；
+- [ ] 使用稳定 `execution_key` 持久化父子 AgentRun 和不可变 Package/Skill/Policy snapshot；
+- [ ] 增加 `waiting_child`，子审批只恢复子 `thread_id`，子终态后幂等恢复父 Run；
+- [ ] 定义统一事件 Envelope、状态词汇、事件目录和 attributes Schema；
+- [ ] 关键 Lifecycle 变更与 AuditEvent 在控制面原子提交，再投影 Log/Metrics/Trace；
+- [ ] `debug-trace` 输出父子 Run、Capability、Approval、Artifact 和 Delivery 因果树与状态矛盾；
+- [ ] 接入低基数 Metrics 与可选 OpenTelemetry，默认不采集正文和完整参数。
+
+退出标准：崩溃、checkpoint 重放和重复审批不会创建重复子 Run 或副作用；任意请求可从
+可信标识重建完整运行因果树；日志、审计、指标和 Trace 共享关联契约但不混淆事实存储。
+
 ## 目标业务场景
 
 以下场景先作为产品与架构对接目标，具体交互、数据来源和验收用例后续分别细化。

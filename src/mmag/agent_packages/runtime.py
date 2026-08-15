@@ -462,12 +462,15 @@ class ContractAgentDecorator:
             input_envelope,
             direction="input",
         )
+        skill_capabilities = (
+            request.skill.capabilities if request.skill is not None else None
+        )
         constrained = replace(
             request,
             runtime_request=_constrain_runtime_request(
                 self.package,
                 request.runtime_request,
-                None,
+                skill_capabilities,
             ),
         )
         skill_context = _create_skill_context(
@@ -479,7 +482,11 @@ class ContractAgentDecorator:
             if skill_context is not None
             else nullcontext()
         )
-        allowed_capabilities = self.descriptor.capabilities
+        allowed_capabilities = (
+            self.descriptor.capabilities
+            if skill_capabilities is None
+            else skill_capabilities
+        )
         with (
             log_context.bind(
                 trace_id=(

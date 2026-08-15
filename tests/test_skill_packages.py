@@ -177,8 +177,11 @@ class StubRuntime:
 
 
 class MeetingRuntime:
+    def __init__(self):
+        self.request = None
+
     async def run(self, request):
-        del request
+        self.request = request
         return AgentResult(
             "meeting summary",
             "stub",
@@ -272,6 +275,7 @@ async def test_agent_envelope_accepts_the_selected_skills_valid_result_contract(
         ),
         package.manifest.capabilities.allow,
     )
+    runtime = MeetingRuntime()
     agent = ContractAgentDecorator(
         package,
         RuntimeAgent(
@@ -281,13 +285,14 @@ async def test_agent_envelope_accepts_the_selected_skills_valid_result_contract(
                 capabilities=package.manifest.capabilities.allow,
                 scopes=("mattermost:*",),
             ),
-            MeetingRuntime(),
+            runtime,
             request_factory=lambda request, descriptor: request.runtime_request,
         ),
     )
     runtime_request = RunRequest(
         RunContext("trace", "actor", "channel-1", "mattermost:team/channel", run_id="run-1"),
         ({"role": "user", "content": "总结这个线程"},),
+        capabilities=({"name": "get_posts"}, {"name": "analyze_link"}),
     )
 
     output = await agent.run(
@@ -306,3 +311,4 @@ async def test_agent_envelope_accepts_the_selected_skills_valid_result_contract(
 
     assert output.envelope["result"]["decisions"][0]["source_post_ids"] == ["post-1"]
     assert output.envelope["provenance"]["skill_name"] == "meeting"
+    assert tuple(item["name"] for item in runtime.request.capabilities) == ("get_posts",)
