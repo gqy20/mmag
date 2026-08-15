@@ -30,6 +30,7 @@ class TaskDraftCoordinator:
         *,
         store: TaskDraftStore,
         memory: Memory,
+        mm_client,
         capability_registry,
         access_guard: MattermostAccessGuard,
         scope_resolver,
@@ -38,13 +39,14 @@ class TaskDraftCoordinator:
     ) -> None:
         self.store = store
         self.memory = memory
+        self.mm = mm_client
         self.capability_registry = capability_registry
         self.access_guard = access_guard
         self.scope_resolver = scope_resolver
         self.action_tokens = action_tokens
         self.audit_store = audit_store
 
-    def attach(self, post: dict, output: AgentOutput, view: ResponseView) -> ResponseView:
+    async def attach(self, post: dict, output: AgentOutput, view: ResponseView) -> ResponseView:
         result = output.result if isinstance(output.result, dict) else {}
         if (
             output.agent_name != "report"
@@ -53,7 +55,14 @@ class TaskDraftCoordinator:
         ):
             return view
         scope = self.scope_resolver.resolve_post(post)
-        items, rejected_count = self._items(result, post=post, scope=scope)
+        members, directory_available = await self._scope_members(post, scope)
+        items, rejected_count = self._items(
+            result,
+            post=post,
+            scope=scope,
+            members=members,
+            directory_available=directory_available,
+        )
         if not items:
             warning = "行动项缺少当前会话内可验证的来源，因此未生成任务草案。"
             return replace(view, warnings=(*view.warnings, warning))
@@ -77,7 +86,11 @@ class TaskDraftCoordinator:
             trace_id=draft.run_id,
             target=draft.id,
             decision="drafted",
-            details={"schema_version": "1.0", "item_count": len(draft.items)},
+            details={
+                "schema_version": "1.0",
+                "item_count": len(draft.items),
+                "person_match_counts": self._match_counts(draft.items),
+            },
         )
         log_event(
             log,
@@ -86,11 +99,13 @@ class TaskDraftCoordinator:
             draft_id=draft.id,
             item_count=len(draft.items),
             rejected_item_count=rejected_count,
+            member_count=len(members),
+            person_match_counts=self._match_counts(draft.items),
         )
         commands = (
             f"确认创建：`确认任务草案 {draft.id}`",
             f"放弃草案：`放弃任务草案 {draft.id}`",
-            "确认后会创建无负责人（assignee 为空）的正式任务；相关人物仅作为文本保留。",
+            "人物候选仅用于核对；确认后仍创建无负责人（assignee 为空）的正式任务，不会自动 @ 人员。",
         )
         warnings = view.warnings
         if rejected_count:
@@ -98,9 +113,18 @@ class TaskDraftCoordinator:
                 *warnings,
                 f"有 {rejected_count} 个行动项缺少当前会话内可验证来源，未纳入草案。",
             )
+        if not directory_available:
+            warnings = (*warnings, "当前成员目录暂不可用，相关人物已保留但未进行候选匹配。")
         return replace(
             view,
-            sections=(*view.sections, ResponseSection("任务草案", items=commands)),
+            sections=(
+                *view.sections,
+                ResponseSection(
+                    "人物候选（系统按当前频道成员目录核对）",
+                    items=self._person_lines(draft.items),
+                ),
+                ResponseSection("任务草案", items=commands),
+            ),
             warnings=warnings,
             actions=self._actions(draft),
         )
@@ -238,10 +262,13 @@ class TaskDraftCoordinator:
         scope: Scope,
     ) -> dict[str, Any]:
         related_person = str(item.get("related_person") or "未提及")
+        person_match = item.get("person_match")
+        match_text = self._match_description(person_match if isinstance(person_match, dict) else {})
         due_text = str(item.get("due_text") or "未提及")
         source_ids = tuple(str(value) for value in item.get("source_post_ids") or ())
         description = (
             f"相关人物：{related_person}\n"
+            f"人物匹配：{match_text}\n"
             f"截止时间原文：{due_text}\n"
             f"来源 Post：{', '.join(source_ids)}\n"
             f"任务草案：{draft.id}"
@@ -283,7 +310,13 @@ class TaskDraftCoordinator:
         return dict(result.data["task"])
 
     def _items(
-        self, result: dict[str, Any], *, post: dict, scope: Scope
+        self,
+        result: dict[str, Any],
+        *,
+        post: dict,
+        scope: Scope,
+        members: tuple[dict[str, Any], ...],
+        directory_available: bool,
     ) -> tuple[tuple[dict[str, Any], ...], int]:
         raw_items = result.get("action_items")
         candidates = raw_items if isinstance(raw_items, list) else []
@@ -321,9 +354,132 @@ class TaskDraftCoordinator:
                     "related_person": related or "未提及",
                     "due_text": due or "未提及",
                     "source_post_ids": refs,
+                    "person_match": self._match_person(
+                        related or "未提及",
+                        members,
+                        directory_available=directory_available,
+                    ),
                 }
             )
         return tuple(items), rejected
+
+    async def _scope_members(
+        self, post: dict, scope: Scope
+    ) -> tuple[tuple[dict[str, Any], ...], bool]:
+        actor_id = str(post.get("user_id") or "")
+        try:
+            await self.access_guard.require(
+                actor_id,
+                scope.id,
+                channel_id=scope.conversation_id,
+            )
+            users = await self.mm.list_channel_users_async(scope.conversation_id)
+        except Exception as error:
+            log_event(
+                log,
+                "task_draft.person_directory_failed",
+                level=30,
+                status="unavailable",
+                error_code=type(error).__name__,
+            )
+            return (), False
+        members = tuple(
+            self._member_record(user)
+            for user in users
+            if str(user.get("id") or "")
+            and not bool(user.get("is_bot"))
+            and not int(user.get("delete_at") or 0)
+        )
+        return members, True
+
+    @classmethod
+    def _match_person(
+        cls,
+        mention: str,
+        members: tuple[dict[str, Any], ...],
+        *,
+        directory_available: bool,
+    ) -> dict[str, Any]:
+        normalized = cls._normalize_person(mention)
+        if not directory_available:
+            return {"mention": mention, "status": "unavailable", "candidates": []}
+        if not normalized or mention == "未提及":
+            return {"mention": mention, "status": "unresolved", "candidates": []}
+        candidates = [
+            member
+            for member in members
+            if normalized
+            in {
+                cls._normalize_person(member.get("username")),
+                cls._normalize_person(member.get("nickname")),
+                cls._normalize_person(member.get("display_name")),
+            }
+        ]
+        candidates.sort(key=lambda item: (str(item.get("username") or ""), str(item["user_id"])))
+        status = "resolved" if len(candidates) == 1 else "ambiguous" if candidates else "unresolved"
+        return {"mention": mention, "status": status, "candidates": candidates[:10]}
+
+    @classmethod
+    def _member_record(cls, user: dict[str, Any]) -> dict[str, str]:
+        first_name = cls._plain(user.get("first_name"))
+        last_name = cls._plain(user.get("last_name"))
+        full_name = " ".join(value for value in (first_name, last_name) if value)
+        return {
+            "user_id": str(user.get("id") or ""),
+            "username": cls._plain(user.get("username")),
+            "nickname": cls._plain(user.get("nickname")),
+            "display_name": full_name or cls._plain(user.get("nickname")),
+        }
+
+    @classmethod
+    def _person_lines(cls, items: tuple[dict[str, Any], ...]) -> tuple[str, ...]:
+        lines: list[str] = []
+        for item in items:
+            match = item.get("person_match")
+            match = match if isinstance(match, dict) else {}
+            lines.append(
+                f"{cls._plain(item.get('content'))}：{cls._plain(item.get('related_person'))}"
+                f" → {cls._match_description(match)}；负责人仍未分配"
+            )
+        return tuple(lines)
+
+    @classmethod
+    def _match_description(cls, match: dict[str, Any]) -> str:
+        candidates = match.get("candidates")
+        candidates = candidates if isinstance(candidates, list) else []
+        labels = [cls._candidate_label(item) for item in candidates if isinstance(item, dict)]
+        status = str(match.get("status") or "unresolved")
+        if status == "resolved" and labels:
+            return f"唯一候选 {labels[0]}"
+        if status == "ambiguous" and labels:
+            return f"多个候选：{'、'.join(labels)}"
+        if status == "unavailable":
+            return "成员目录不可用"
+        return "未匹配到当前频道成员"
+
+    @classmethod
+    def _candidate_label(cls, candidate: dict[str, Any]) -> str:
+        username = cls._plain(candidate.get("username")) or "未知用户"
+        display_name = cls._plain(candidate.get("display_name"))
+        return f"`{username}`（{display_name}）" if display_name and display_name != username else f"`{username}`"
+
+    @classmethod
+    def _normalize_person(cls, value: Any) -> str:
+        return "".join(cls._plain(value).lstrip("@").casefold().split())
+
+    @staticmethod
+    def _plain(value: Any) -> str:
+        return " ".join(str(value or "").replace("`", "'").split())[:128]
+
+    @staticmethod
+    def _match_counts(items: tuple[dict[str, Any], ...]) -> dict[str, int]:
+        counts = {"resolved": 0, "ambiguous": 0, "unresolved": 0, "unavailable": 0}
+        for item in items:
+            match = item.get("person_match")
+            status = str(match.get("status") or "unresolved") if isinstance(match, dict) else "unresolved"
+            if status in counts:
+                counts[status] += 1
+        return counts
 
     def _actions(self, draft: TaskDraft) -> tuple[ResponseAction, ...]:
         if self.action_tokens is None or draft.state is not TaskDraftState.DRAFT:

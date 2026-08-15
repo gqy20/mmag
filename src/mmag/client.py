@@ -39,6 +39,8 @@ PROP_TRUE = "true"
 
 _POST_MAX_ATTEMPTS = 3
 _POST_RETRY_BASE_SECONDS = 0.25
+_CHANNEL_MEMBER_PAGE_SIZE = 200
+_MAX_CHANNEL_MEMBER_PAGES = 25
 
 
 def _is_retryable_post_error(error: Exception) -> bool:
@@ -157,6 +159,47 @@ class MMClient:
         """Fetch authoritative channel membership and roles."""
         response = await self._request_async("GET", f"/channels/{channel_id}/members/{user_id}")
         return response.json()
+
+    async def list_channel_users_async(self, channel_id: str) -> tuple[dict[str, Any], ...]:
+        """Return bounded authoritative user records for the current channel."""
+        if not channel_id:
+            raise ValueError("channel_id is required")
+        users: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for page in range(_MAX_CHANNEL_MEMBER_PAGES):
+            response = await self._request_async(
+                "GET",
+                f"/channels/{channel_id}/members",
+                params={"page": page, "per_page": _CHANNEL_MEMBER_PAGE_SIZE},
+            )
+            memberships = response.json()
+            if not isinstance(memberships, list):
+                raise RuntimeError("Mattermost returned an invalid channel member list")
+            member_ids = [
+                str(member.get("user_id") or "")
+                for member in memberships
+                if isinstance(member, dict)
+                and str(member.get("user_id") or "")
+                and str(member.get("user_id") or "") not in seen
+            ]
+            if member_ids:
+                user_response = await self._request_async("POST", "/users/ids", json=member_ids)
+                page_users = user_response.json()
+                if not isinstance(page_users, list):
+                    raise RuntimeError("Mattermost returned invalid channel user records")
+                allowed_ids = set(member_ids)
+                for user in page_users:
+                    if not isinstance(user, dict):
+                        continue
+                    user_id = str(user.get("id") or "")
+                    if user_id not in allowed_ids:
+                        raise RuntimeError("Mattermost channel user response is inconsistent")
+                    if user_id not in seen:
+                        seen.add(user_id)
+                        users.append(dict(user))
+            if len(memberships) < _CHANNEL_MEMBER_PAGE_SIZE:
+                return tuple(users)
+        raise RuntimeError("Mattermost channel member directory exceeds the configured limit")
 
     async def get_channel_authorization_async(self, channel_id: str) -> dict:
         """Fetch uncached channel metadata for an authorization decision."""

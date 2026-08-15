@@ -116,6 +116,7 @@ class MessageHandler:
             TaskDraftCoordinator(
                 store=task_drafts,
                 memory=memory,
+                mm_client=mm_client,
                 capability_registry=capability_registry,
                 access_guard=access_guard,
                 scope_resolver=self.scope_resolver,

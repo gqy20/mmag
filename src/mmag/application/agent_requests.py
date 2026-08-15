@@ -191,7 +191,7 @@ class AgentRequestHandler:
                     ),
                 )
             if self.task_drafts is not None and runtime_result.status is RuntimeStatus.COMPLETED:
-                response = self.task_drafts.attach(post, output, response)
+                response = await self.task_drafts.attach(post, output, response)
         except (AgentPackageError, AgentRuntimeError, SkillPackageError) as error:
             log_event(
                 log,

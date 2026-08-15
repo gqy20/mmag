@@ -101,8 +101,8 @@ Deep Agents 的 `StateBackend` 只保存当前 graph/thread 的小型工作文�
 - `/mmag help`、`/mmag agents`、`/mmag skills [agent]` 和 `/mmag status [run-id]` 提供可发现入口；
 - `/mmag summary today [--tasks]`、`summary --since HH:MM [--tasks]` 和
   `summary thread --root <post-id> [--tasks]` 提交受治理的频道总结；
-- 会议纪要中的行动项会列出相关人物、截止时间原文和来源 Post；用户通过按钮或
-  `确认任务草案 <草案ID>` 明确确认后才创建正式任务，首版不会自动映射或 `@` 人员；
+- 会议纪要中的行动项会列出相关人物、截止时间原文和来源 Post，并以当前 Scope 的成员目录展示精确人物候选；
+  用户通过按钮或 `确认任务草案 <草案ID>` 明确确认后才创建正式任务，当前不会自动分配或 `@` 人员；
 - 需要副作用时优先展示签名、短时、一次性的批准/拒绝按钮；按钮不可用时仍可使用文本命令。
 
 “我的 Skills”“我的案例”“我的记忆”等个人入口使用意图识别，不要求用户死记固定句式。交互按钮只更新

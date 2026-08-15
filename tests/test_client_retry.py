@@ -76,6 +76,41 @@ async def test_send_post_async_uses_caller_idempotency_key():
 
 
 @pytest.mark.asyncio
+async def test_list_channel_users_uses_authoritative_membership_and_batched_users():
+    client = MMClient(base_url="https://mattermost.example", token="token")
+    first_members = MagicMock()
+    first_members.json.return_value = [{"user_id": "u1"}, {"user_id": "u2"}]
+    users = MagicMock()
+    users.json.return_value = [
+        {"id": "u1", "username": "alice"},
+        {"id": "u2", "username": "bob"},
+    ]
+    client._request_async = AsyncMock(side_effect=[first_members, users])
+
+    result = await client.list_channel_users_async("channel-1")
+
+    assert tuple(user["id"] for user in result) == ("u1", "u2")
+    calls = client._request_async.await_args_list
+    assert calls[0].args == ("GET", "/channels/channel-1/members")
+    assert calls[0].kwargs["params"] == {"page": 0, "per_page": 200}
+    assert calls[1].args == ("POST", "/users/ids")
+    assert calls[1].kwargs["json"] == ["u1", "u2"]
+
+
+@pytest.mark.asyncio
+async def test_list_channel_users_rejects_users_outside_membership_response():
+    client = MMClient(base_url="https://mattermost.example", token="token")
+    members = MagicMock()
+    members.json.return_value = [{"user_id": "u1"}]
+    users = MagicMock()
+    users.json.return_value = [{"id": "u2", "username": "mallory"}]
+    client._request_async = AsyncMock(side_effect=[members, users])
+
+    with pytest.raises(RuntimeError, match="inconsistent"):
+        await client.list_channel_users_async("channel-1")
+
+
+@pytest.mark.asyncio
 async def test_upload_file_async_uses_channel_query_and_multipart_filename():
     client = MMClient(base_url="https://mattermost.example", token="token")
     response = MagicMock()
