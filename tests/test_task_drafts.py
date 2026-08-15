@@ -1,4 +1,6 @@
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -44,11 +46,21 @@ class _MemberDirectory:
             {"id": "bot-1", "username": "hz_bot", "is_bot": True},
         )
 
+    async def get_channel_member_async(self, channel_id, user_id):
+        assert channel_id == "channel-1"
+        return {"user_id": user_id}
+
 
 class _UnavailableDirectory:
     async def list_channel_users_async(self, channel_id):
         del channel_id
         raise ConnectionError("offline")
+
+
+class _DepartedMemberDirectory(_MemberDirectory):
+    async def get_channel_member_async(self, channel_id, user_id):
+        del channel_id, user_id
+        raise KeyError("member left channel")
 
 
 def _meeting_output() -> AgentOutput:
@@ -63,7 +75,8 @@ def _meeting_output() -> AgentOutput:
                 {
                     "content": "整理发布说明",
                     "owner_username": "@alice",
-                    "due_date": "周五",
+                    "due_text": "周五",
+                    "due_at": "2026-08-21T23:59:00+08:00",
                     "source_post_ids": ["post1"],
                 }
             ],
@@ -97,12 +110,13 @@ def _coordinator(tmp_path, *, member_directory=None):
     guard.require = AsyncMock()
     registry = CapabilityRegistry()
     executor = CapabilityExecutor(_UnexpectedAuthorizer())
-    for spec in create_task_capabilities(memory, access_guard=guard):
+    directory = member_directory or _MemberDirectory()
+    for spec in create_task_capabilities(memory, directory, access_guard=guard):
         registry.register(CapabilityBinding(spec, executor))
     coordinator = TaskDraftCoordinator(
         store=control.task_drafts,
         memory=memory,
-        mm_client=member_directory or _MemberDirectory(),
+        mm_client=directory,
         capability_registry=registry,
         access_guard=guard,
         scope_resolver=_ScopeResolver(scope),
@@ -113,7 +127,7 @@ def _coordinator(tmp_path, *, member_directory=None):
 
 
 @pytest.mark.asyncio
-async def test_meeting_actions_become_persistent_draft_then_unassigned_tasks(tmp_path):
+async def test_meeting_actions_confirm_unique_assignee_and_due_time(tmp_path):
     coordinator, memory, control, scope, guard = _coordinator(tmp_path)
     coordinator.action_tokens = ActionTokenService(
         "task-draft-test-signing-secret-32-bytes",
@@ -136,6 +150,8 @@ async def test_meeting_actions_become_persistent_draft_then_unassigned_tasks(tmp
         "root_id": "root1",
         "channel_id": "channel-1",
         "user_id": "requester-1",
+        "create_at": datetime(2026, 8, 15, 9, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+        * 1000,
     }
     output = _meeting_output()
     view = await coordinator.attach(
@@ -163,8 +179,10 @@ async def test_meeting_actions_become_persistent_draft_then_unassigned_tasks(tmp
             }
         ],
     }
+    assert draft.items[0]["due_candidate"]["status"] == "resolved"
+    assert draft.items[0]["due_candidate"]["display"] == "2026-08-21 23:59"
     assert "唯一候选 `alice`（Alice Chen）" in view.sections[-2].items[0]
-    assert "负责人仍未分配" in view.sections[-2].items[0]
+    assert "截止时间候选：2026-08-21 23:59" in view.sections[-2].items[0]
     assert "确认任务草案" in view.sections[-1].items[0]
     assert {action.action for action in view.actions} == {
         "task_draft_commit",
@@ -190,12 +208,17 @@ async def test_meeting_actions_become_persistent_draft_then_unassigned_tasks(tmp
     tasks = memory.repositories.tasks.list(scope_id="scope-1")
     assert committed.state is TaskDraftState.COMMITTED
     assert repeated.task_ids == committed.task_ids
-    assert message == "已创建 1 个正式任务，当前均未分配负责人。"
+    assert message == (
+        "已创建 1 个正式任务；已确认负责人 1 个，已确定截止时间 1 个。"
+        "歧义或缺失字段保持为空。"
+    )
     assert len(tasks) == 1
-    assert tasks[0]["assignee_id"] == ""
+    assert tasks[0]["assignee_id"] == "user-2"
+    assert tasks[0]["due_time"] == draft.items[0]["due_candidate"]["due_time"]
     assert tasks[0]["type"] == "meeting"
     assert "相关人物：alice" in tasks[0]["description"]
     assert "人物匹配：唯一候选 `alice`（Alice Chen）" in tasks[0]["description"]
+    assert "截止时间确认：2026-08-21 23:59" in tasks[0]["description"]
     assert "来源 Post：post1" in tasks[0]["description"]
     assert guard.require.await_count == 3
     control.close()
@@ -302,6 +325,99 @@ def test_person_matching_distinguishes_ambiguous_and_unresolved_mentions():
     assert unavailable == {"mention": "Alice", "status": "unavailable", "candidates": []}
 
 
+def test_due_candidates_use_shanghai_local_time_without_timezone_label():
+    reference = datetime(2026, 8, 15, 9, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    valid = TaskDraftCoordinator._due_candidate(
+        "明天下午3点",
+        due_at="2026-08-16T15:00:00+08:00",
+        reference_time=reference,
+    )
+    wrong_offset = TaskDraftCoordinator._due_candidate(
+        "明天下午3点",
+        due_at="2026-08-16T07:00:00+00:00",
+        reference_time=reference,
+    )
+    past = TaskDraftCoordinator._due_candidate(
+        "今天上午8点",
+        due_at="2026-08-15T08:00:00+08:00",
+        reference_time=reference,
+    )
+    invented = TaskDraftCoordinator._due_candidate(
+        "未提及",
+        due_at="2026-08-20T23:59:00+08:00",
+        reference_time=reference,
+    )
+
+    assert valid["display"] == "2026-08-16 15:00"
+    assert "上海" not in valid["display"]
+    assert wrong_offset["status"] == "unresolved"
+    assert past["status"] == "unresolved"
+    assert invented["status"] == "unresolved"
+
+
+def test_legacy_draft_items_do_not_gain_new_confirmation_semantics():
+    legacy_item = {
+        "person_match": {
+            "status": "resolved",
+            "candidates": [{"user_id": "user-2"}],
+        },
+        "due_candidate": {"status": "resolved", "due_time": 123.0},
+    }
+
+    assert TaskDraftCoordinator._resolved_assignee(legacy_item) == ""
+    assert TaskDraftCoordinator._resolved_due_time(legacy_item) == 0
+
+
+@pytest.mark.asyncio
+async def test_confirmation_skips_assignee_who_left_channel(tmp_path):
+    coordinator, memory, control, scope, _ = _coordinator(
+        tmp_path, member_directory=_DepartedMemberDirectory()
+    )
+    memory.log_message(
+        {
+            "id": "post1",
+            "channel_id": "channel-1",
+            "user_id": "user-2",
+            "message": "我周五前整理发布说明",
+            "create_at": 1_000,
+            "_scope_id": "scope-1",
+        }
+    )
+    post = {
+        "id": "request1",
+        "root_id": "root1",
+        "channel_id": "channel-1",
+        "user_id": "requester-1",
+        "create_at": datetime(2026, 8, 15, 9, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+        * 1000,
+    }
+    await coordinator.attach(
+        post,
+        _meeting_output(),
+        ResponsePresenter().present(_meeting_output(), run_id="mattermost:request1"),
+    )
+    draft = control.task_drafts.get_by_run(
+        "mattermost:request1",
+        installation_id="installation-1",
+        tenant_id="tenant-1",
+    )
+
+    _, message = await coordinator.decide(
+        draft.id,
+        actor_id="requester-1",
+        scope=scope,
+        approved=True,
+    )
+
+    task = memory.repositories.tasks.list(scope_id="scope-1")[0]
+    assert task["assignee_id"] == ""
+    assert task["due_time"] == draft.items[0]["due_candidate"]["due_time"]
+    assert "已确认负责人 0 个" in message
+    control.close()
+    memory.close()
+
+
 @pytest.mark.asyncio
 async def test_task_draft_keeps_raw_person_when_member_directory_is_unavailable(tmp_path):
     coordinator, memory, control, _, _ = _coordinator(
@@ -336,6 +452,7 @@ async def test_task_draft_keeps_raw_person_when_member_directory_is_unavailable(
 
     assert draft.items[0]["person_match"]["status"] == "unavailable"
     assert "成员目录暂不可用" in view.warnings[-1]
-    assert "负责人仍未分配" in view.sections[-2].items[0]
+    assert "成员目录不可用" in view.sections[-2].items[0]
+    assert "截止时间候选：" in view.sections[-2].items[0]
     control.close()
     memory.close()

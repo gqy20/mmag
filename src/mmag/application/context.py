@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ..agent_packages.assets import render_prompt
 from ..config import config
@@ -394,7 +395,9 @@ class ContextBuilder:
                 ),
                 "recent_speakers": self._recent_speakers(window, current_user_id),
                 "channel_members": self._channel_members(channel_id, current_user_id),
-                "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S (%A)"),
+                "current_time": datetime.now(ZoneInfo("Asia/Shanghai")).strftime(
+                    "%Y-%m-%d %H:%M:%S (%A)"
+                ),
             },
         )
         persona = None

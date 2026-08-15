@@ -5,8 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from ..capabilities import CapabilityContext, CapabilityStatus, bind_capability_context
 from ..control_plane import Scope, TaskDraft, TaskDraftState
@@ -20,6 +23,10 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 _COMMAND = re.compile(r"^(确认|放弃)任务草案\s+([0-9a-f]{32})$")
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
+_DUE_AT = re.compile(
+    r"\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\+08:00"
+)
 
 
 class TaskDraftCoordinator:
@@ -56,12 +63,14 @@ class TaskDraftCoordinator:
             return view
         scope = self.scope_resolver.resolve_post(post)
         members, directory_available = await self._scope_members(post, scope)
+        reference_time = self._post_time(post)
         items, rejected_count = self._items(
             result,
             post=post,
             scope=scope,
             members=members,
             directory_available=directory_available,
+            reference_time=reference_time,
         )
         if not items:
             warning = "行动项缺少当前会话内可验证的来源，因此未生成任务草案。"
@@ -105,7 +114,7 @@ class TaskDraftCoordinator:
         commands = (
             f"确认创建：`确认任务草案 {draft.id}`",
             f"放弃草案：`放弃任务草案 {draft.id}`",
-            "人物候选仅用于核对；确认后仍创建无负责人（assignee 为空）的正式任务，不会自动 @ 人员。",
+            "确认后会写入唯一负责人候选和可确定的截止时间；有歧义的字段保持为空，不会自动 @ 人员。",
         )
         warnings = view.warnings
         if rejected_count:
@@ -189,10 +198,12 @@ class TaskDraftCoordinator:
             details={"item_count": len(claimed.items)},
         )
         task_ids: list[str] = []
+        created_tasks: list[dict[str, Any]] = []
         try:
             for index, item in enumerate(claimed.items):
                 task = await self._create_task(claimed, item, index=index, scope=scope)
                 task_ids.append(str(task["id"]))
+                created_tasks.append(task)
         except Exception as error:
             self._audit(
                 claimed,
@@ -227,11 +238,20 @@ class TaskDraftCoordinator:
             draft_id=draft_id,
             task_count=len(task_ids),
         )
-        return committed, f"已创建 {len(task_ids)} 个正式任务，当前均未分配负责人。"
+        assigned = sum(bool(task.get("assignee_id")) for task in created_tasks)
+        scheduled = sum(bool(task.get("due_time")) for task in created_tasks)
+        return committed, self._commit_message(len(task_ids), assigned, scheduled)
 
     def result_view(self, draft: TaskDraft, message: str) -> ResponseView:
         committed = draft.state is TaskDraftState.COMMITTED
-        items = tuple(f"`{task_id}`" for task_id in draft.task_ids)
+        items = tuple(
+            self._task_result_line(
+                task_id,
+                item,
+                self.memory.repositories.tasks.get(task_id, scope_id=draft.scope_id),
+            )
+            for task_id, item in zip(draft.task_ids, draft.items, strict=False)
+        )
         return ResponseView(
             kind=ResponseKind.RESULT,
             title="任务草案已确认" if committed else "任务草案已放弃",
@@ -265,11 +285,18 @@ class TaskDraftCoordinator:
         person_match = item.get("person_match")
         match_text = self._match_description(person_match if isinstance(person_match, dict) else {})
         due_text = str(item.get("due_text") or "未提及")
+        due_candidate = item.get("due_candidate")
+        due_description = self._due_description(
+            due_candidate if isinstance(due_candidate, dict) else {}
+        )
+        assignee_id = await self._authorized_assignee(draft, item)
+        due_time = self._resolved_due_time(item)
         source_ids = tuple(str(value) for value in item.get("source_post_ids") or ())
         description = (
             f"相关人物：{related_person}\n"
             f"人物匹配：{match_text}\n"
             f"截止时间原文：{due_text}\n"
+            f"截止时间确认：{due_description}\n"
             f"来源 Post：{', '.join(source_ids)}\n"
             f"任务草案：{draft.id}"
         )
@@ -295,10 +322,10 @@ class TaskDraftCoordinator:
                 "create_task",
                 {
                     "title": str(item["content"]),
-                    "assignee_id": "",
+                    "assignee_id": assignee_id,
                     "description": description,
                     "task_type": "meeting",
-                    "due_time": 0,
+                    "due_time": due_time,
                     "priority": 1,
                 },
                 preauthorized=True,
@@ -317,6 +344,7 @@ class TaskDraftCoordinator:
         scope: Scope,
         members: tuple[dict[str, Any], ...],
         directory_available: bool,
+        reference_time: datetime,
     ) -> tuple[tuple[dict[str, Any], ...], int]:
         raw_items = result.get("action_items")
         candidates = raw_items if isinstance(raw_items, list) else []
@@ -347,17 +375,25 @@ class TaskDraftCoordinator:
                 rejected += 1
                 continue
             related = str(raw.get("owner_username") or "").strip().lstrip("@")[:128]
-            due = str(raw.get("due_date") or "").strip()[:128]
+            due = str(raw.get("due_text") or "").strip()[:128]
+            due_at = str(raw.get("due_at") or "").strip()[:64]
+            due_text = due or "未提及"
             items.append(
                 {
                     "content": content,
                     "related_person": related or "未提及",
-                    "due_text": due or "未提及",
+                    "due_text": due_text,
                     "source_post_ids": refs,
+                    "confirmation_version": 1,
                     "person_match": self._match_person(
                         related or "未提及",
                         members,
                         directory_available=directory_available,
+                    ),
+                    "due_candidate": self._due_candidate(
+                        due_text,
+                        due_at=due_at,
+                        reference_time=reference_time,
                     ),
                 }
             )
@@ -439,7 +475,7 @@ class TaskDraftCoordinator:
             match = match if isinstance(match, dict) else {}
             lines.append(
                 f"{cls._plain(item.get('content'))}：{cls._plain(item.get('related_person'))}"
-                f" → {cls._match_description(match)}；负责人仍未分配"
+                f" → {cls._match_description(match)}；{cls._due_description_for_item(item)}"
             )
         return tuple(lines)
 
@@ -480,6 +516,147 @@ class TaskDraftCoordinator:
             if status in counts:
                 counts[status] += 1
         return counts
+
+    @classmethod
+    def _due_candidate(
+        cls,
+        value: str,
+        *,
+        due_at: str,
+        reference_time: datetime,
+    ) -> dict[str, Any]:
+        raw = cls._plain(value)
+        normalized = due_at.strip()
+        if not raw or raw == "未提及" or _DUE_AT.fullmatch(normalized) is None:
+            return {"raw": raw or "未提及", "status": "unresolved", "due_time": 0, "display": ""}
+        try:
+            candidate = datetime.fromisoformat(normalized)
+        except ValueError:
+            return {"raw": raw, "status": "unresolved", "due_time": 0, "display": ""}
+        if candidate.utcoffset() != timedelta(hours=8) or candidate <= reference_time.astimezone(
+            _SHANGHAI
+        ):
+            return {"raw": raw, "status": "unresolved", "due_time": 0, "display": ""}
+        candidate = candidate.astimezone(_SHANGHAI)
+        return {
+            "raw": raw,
+            "status": "resolved",
+            "due_time": candidate.timestamp(),
+            "display": candidate.strftime("%Y-%m-%d %H:%M"),
+        }
+
+    @staticmethod
+    def _post_time(post: dict) -> datetime:
+        raw = post.get("create_at")
+        try:
+            raw_timestamp = float(str(raw))
+            timestamp = (
+                raw_timestamp / 1000
+                if raw_timestamp > 10_000_000_000
+                else raw_timestamp
+            )
+        except (TypeError, ValueError):
+            timestamp = time.time()
+        return datetime.fromtimestamp(timestamp, tz=_SHANGHAI)
+
+    @staticmethod
+    def _resolved_assignee(item: dict[str, Any]) -> str:
+        if item.get("confirmation_version") != 1:
+            return ""
+        match = item.get("person_match")
+        if not isinstance(match, dict) or match.get("status") != "resolved":
+            return ""
+        candidates = match.get("candidates")
+        if not isinstance(candidates, list) or len(candidates) != 1:
+            return ""
+        candidate = candidates[0]
+        return str(candidate.get("user_id") or "") if isinstance(candidate, dict) else ""
+
+    @staticmethod
+    def _resolved_due_time(item: dict[str, Any]) -> float:
+        if item.get("confirmation_version") != 1:
+            return 0
+        candidate = item.get("due_candidate")
+        if not isinstance(candidate, dict) or candidate.get("status") != "resolved":
+            return 0
+        try:
+            return max(float(candidate.get("due_time") or 0), 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _due_description_for_item(cls, item: dict[str, Any]) -> str:
+        candidate = item.get("due_candidate")
+        return f"截止时间候选：{cls._due_description(candidate if isinstance(candidate, dict) else {})}"
+
+    @classmethod
+    def _due_description(cls, candidate: dict[str, Any]) -> str:
+        if candidate.get("status") == "resolved" and candidate.get("display"):
+            return cls._plain(candidate["display"])
+        return "未确定"
+
+    @classmethod
+    def _task_result_line(
+        cls,
+        task_id: str,
+        item: dict[str, Any],
+        task: dict[str, Any] | None,
+    ) -> str:
+        persisted = task or {}
+        match = item.get("person_match")
+        match = match if isinstance(match, dict) else {}
+        candidates = match.get("candidates")
+        due_candidate = item.get("due_candidate")
+        due_candidate = due_candidate if isinstance(due_candidate, dict) else {}
+        assignee = (
+            cls._candidate_label(candidates[0])
+            if persisted.get("assignee_id")
+            and isinstance(candidates, list)
+            and candidates
+            and isinstance(candidates[0], dict)
+            else "未分配"
+        )
+        due = (
+            cls._due_description(due_candidate)
+            if persisted.get("due_time")
+            else "未确定"
+        )
+        return f"`{task_id}`；负责人：{assignee}；截止：{due}"
+
+    async def _authorized_assignee(self, draft: TaskDraft, item: dict[str, Any]) -> str:
+        assignee_id = self._resolved_assignee(item)
+        if not assignee_id:
+            return ""
+        try:
+            member = await self.mm.get_channel_member_async(draft.channel_id, assignee_id)
+        except Exception as error:
+            log_event(
+                log,
+                "task_draft.assignee_skipped",
+                level=30,
+                status="unavailable",
+                draft_id=draft.id,
+                error_code=type(error).__name__,
+            )
+            return ""
+        if str(member.get("user_id") or "") != assignee_id:
+            log_event(
+                log,
+                "task_draft.assignee_skipped",
+                level=30,
+                status="rejected",
+                draft_id=draft.id,
+                error_code="MembershipMismatch",
+            )
+            return ""
+        return assignee_id
+
+    @staticmethod
+    def _commit_message(task_count: int, assigned: int, scheduled: int) -> str:
+        return (
+            f"已创建 {task_count} 个正式任务；已确认负责人 {assigned} 个，"
+            f"已确定截止时间 {scheduled} 个。歧义或缺失字段保持为空。"
+        )
 
     def _actions(self, draft: TaskDraft) -> tuple[ResponseAction, ...]:
         if self.action_tokens is None or draft.state is not TaskDraftState.DRAFT:

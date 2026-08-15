@@ -86,7 +86,7 @@ Deep Agents 的 `StateBackend` 只保存当前 graph/thread 的小型工作文�
 |---|---|---|
 | `mmchat@2.2.2` | `web-research@1.2.1` | 默认 Mattermost 协同入口、个人/共享上下文和网络研究 |
 | `link@2.0.1` | — | 确定性分析单个 URL，不启动不必要的模型循环 |
-| `report@2.2.1` | `report@1.3.1`、`meeting@1.0.1` | 证据账本式研究报告与可追溯会议总结 |
+| `report@2.3.0` | `report@1.3.1`、`meeting@1.1.0` | 证据账本式研究报告与可追溯会议总结 |
 | `ppt@3.1.2` | `slides@3.1.1` | 从受治理 Markdown 生成可编辑 PPTX、源文件和 PNG 预览 |
 | `project@2.0.3` | `project@1.2.1` | 项目计划、状态简报、任务拆解和当前 Scope 内的本地任务跟踪 |
 
@@ -102,7 +102,8 @@ Deep Agents 的 `StateBackend` 只保存当前 graph/thread 的小型工作文�
 - `/mmag summary today [--tasks]`、`summary --since HH:MM [--tasks]` 和
   `summary thread --root <post-id> [--tasks]` 提交受治理的频道总结；
 - 会议纪要中的行动项会列出相关人物、截止时间原文和来源 Post，并以当前 Scope 的成员目录展示精确人物候选；
-  用户通过按钮或 `确认任务草案 <草案ID>` 明确确认后才创建正式任务，当前不会自动分配或 `@` 人员；
+  用户通过按钮或 `确认任务草案 <草案ID>` 明确确认后，唯一负责人候选和可确定的上海本地截止时间会一并
+  写入正式任务，歧义字段保持为空且不会自动 `@` 人员；
 - 需要副作用时优先展示签名、短时、一次性的批准/拒绝按钮；按钮不可用时仍可使用文本命令。
 
 “我的 Skills”“我的案例”“我的记忆”等个人入口使用意图识别，不要求用户死记固定句式。交互按钮只更新

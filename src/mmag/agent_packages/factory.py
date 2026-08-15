@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from ..agent_system import AgentDescriptor, CapabilityAgent, RuntimeAgent
 from ..capabilities import CapabilityEffect
@@ -99,7 +100,7 @@ class DeepAgentProvider:
 
         def build(request: AgentRequest, descriptor: AgentDescriptor) -> RunRequest:
             del descriptor
-            now = datetime.now(UTC)
+            now = datetime.now(ZoneInfo("Asia/Shanghai"))
             prepared = request.runtime_request
             if prepared is not None and not isinstance(prepared, RunRequest):
                 raise AgentPackageError("prepared runtime request has an invalid type")

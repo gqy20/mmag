@@ -192,7 +192,8 @@ class MeetingRuntime:
                     {
                         "content": "整理发布说明",
                         "owner_username": "alice",
-                        "due_date": None,
+                        "due_text": None,
+                        "due_at": None,
                         "source_post_ids": ["post-2"],
                     }
                 ],

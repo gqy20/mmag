@@ -258,7 +258,7 @@ class ResponsePresenter:
         for item in self._mappings(result.get("action_items")):
             content = self._text(item.get("content"))
             owner = self._text(item.get("owner_username")) or "未提及"
-            due = self._text(item.get("due_date")) or "未指定"
+            due = self._text(item.get("due_text")) or "未指定"
             refs = self._strings(item.get("source_post_ids"))
             if content:
                 source = f"；来源：{', '.join(refs)}" if refs else ""

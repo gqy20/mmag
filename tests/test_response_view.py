@@ -66,7 +66,8 @@ def test_meeting_presenter_labels_owner_as_related_person_without_mentioning():
                 {
                     "content": "整理文档",
                     "owner_username": "@alice",
-                    "due_date": None,
+                    "due_text": None,
+                    "due_at": None,
                     "source_post_ids": ["p1"],
                 }
             ],

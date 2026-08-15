@@ -3,7 +3,7 @@ kind: ManagedAgent
 
 metadata:
   name: report
-  version: 2.2.1
+  version: 2.3.0
   description: 在当前作用域内生成重视证据的结构化研究报告。
 
 spec:
@@ -40,7 +40,7 @@ spec:
   skills:
     allow:
       - report@1.3.1
-      - meeting@1.0.1
+      - meeting@1.1.0
     deny: []
 
   context:

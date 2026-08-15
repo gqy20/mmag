@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mmag.ai/skills/meeting/output/1.0.0",
-  "x-version": "1.0.0",
+  "$id": "https://mmag.ai/skills/meeting/output/1.1.0",
+  "x-version": "1.1.0",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,11 +17,19 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["content", "owner_username", "due_date", "source_post_ids"],
+        "required": ["content", "owner_username", "due_text", "due_at", "source_post_ids"],
         "properties": {
           "content": {"type": "string", "minLength": 1},
           "owner_username": {"type": ["string", "null"]},
-          "due_date": {"type": ["string", "null"]},
+          "due_text": {
+            "type": ["string", "null"],
+            "description": "讨论中明确出现的截止时间原文；不得改写或规范化"
+          },
+          "due_at": {
+            "type": ["string", "null"],
+            "description": "可唯一确定时，由模型规范化的上海本地截止时间",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\+08:00$"
+          },
           "source_post_ids": {"$ref": "#/$defs/source_post_ids"}
         }
       }
