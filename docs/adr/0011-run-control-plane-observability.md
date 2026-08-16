@@ -131,12 +131,17 @@ error_code 等低基数标签。
 - 可按 trace、父/子 Run、CapabilityCall、审批、Artifact 或 Delivery ID 重建内容无关的运行因果投影，
   并检查父子、等待审批与交付引用状态矛盾；
 - `RunCoordinator` 是唯一子运行生命周期协调入口，旧 Dispatcher 类型和兼容别名已删除；
+- AgentRun、Approval、Delivery 及通用 Lifecycle 的创建与状态迁移，会在同一 SQLite 事务中写入
+  `lifecycle.<entity>.<created|transitioned>` AuditEvent；事件只投影版本、状态、关联 ID 和受信身份，
+  不包含业务正文、审批参数、Package snapshot 或错误正文；
+- Approval 的决定人/原因投影，以及 Delivery 的发送状态、attempt、重试时间、错误与 remote ID，和对应
+  Lifecycle/transition/AuditEvent 原子提交；重启恢复也使用同一迁移入口，不再先修业务表再修 Lifecycle；
 - 内容无关 Runtime Callback、结构化日志、AuditEvent 和按 trace/run 查询。
 
 尚未实现：
 
 - 在现有 `RunCoordinator` 之上实现显式、可异步恢复的多阶段 Product Workflow；
-- 原子生命周期/审计事件记录器；
+- CapabilityCall 的独立持久化生命周期；
 - 完整事件目录与 attributes Schema；
 - Metrics 和 OpenTelemetry exporter。
 

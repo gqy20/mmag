@@ -106,7 +106,6 @@ class MessagePipeline:
         self._stopping = False
 
     async def start(self) -> None:
-        self.store.recover_deliveries()
         self.lifecycle.reconcile()
         self._delivery_task = asyncio.create_task(self._delivery_loop(), name="delivery-worker")
         for record in self.store.recover_inbox():
@@ -145,7 +144,7 @@ class MessagePipeline:
         return delivery_id
 
     def retry_delivery(self, idempotency_key: str) -> bool:
-        delivery_id = self.store.retry_delivery(idempotency_key)
+        delivery_id = self.store.find_failed_delivery(idempotency_key)
         if delivery_id:
             self.lifecycle.transition(
                 EntityType.DELIVERY,
@@ -153,6 +152,9 @@ class MessagePipeline:
                 "retrying",
                 command_id=f"delivery-manual-retry:{delivery_id}:{time.time_ns()}",
                 reason="manual retry requested",
+                delivery_error="",
+                delivery_retry_at=0,
+                delivery_attempts="reset",
             )
             delivery = self.store.get_delivery(delivery_id)
             self._append_delivery_audit(delivery, "retrying", source="manual")
@@ -339,7 +341,7 @@ class MessagePipeline:
 
     async def _delivery_loop(self) -> None:
         while True:
-            delivery = self.store.claim_delivery()
+            delivery = self.store.next_delivery()
             if delivery is None:
                 if self._stopping:
                     return
@@ -351,6 +353,16 @@ class MessagePipeline:
 
     async def _deliver_one(self, delivery: DeliveryRecord) -> None:
         started = time.monotonic()
+        cycle = self.store.get_lifecycle_entity(EntityType.DELIVERY, delivery.id).version
+        self.lifecycle.transition(
+            EntityType.DELIVERY,
+            delivery.id,
+            "sending",
+            command_id=f"delivery-send:{delivery.id}:{delivery.attempts + 1}:v{cycle}",
+            delivery_retry_at=0,
+            delivery_attempts="increment",
+        )
+        delivery = self.store.get_delivery(delivery.id)
         log_event(
             log,
             "delivery.started",
@@ -360,13 +372,6 @@ class MessagePipeline:
             attempt=delivery.attempts,
             message_kind=delivery.message.message_kind,
         )
-        cycle = self.store.get_lifecycle_entity(EntityType.DELIVERY, delivery.id).version
-        self.lifecycle.transition(
-            EntityType.DELIVERY,
-            delivery.id,
-            "sending",
-            command_id=f"delivery-send:{delivery.id}:{delivery.attempts}:v{cycle}",
-        )
         try:
             remote_id = await self.deliverer(delivery.message)
             if not remote_id:
@@ -374,12 +379,14 @@ class MessagePipeline:
         except Exception as error:
             self._handle_delivery_failure(delivery, error)
             return
-        self.store.mark_delivery_delivered(delivery.id, remote_id)
         self.lifecycle.transition(
             EntityType.DELIVERY,
             delivery.id,
             "delivered",
             command_id=f"delivery-success:{delivery.id}:{delivery.attempts}:v{cycle}",
+            delivery_error="",
+            delivery_retry_at=0,
+            delivery_remote_id=remote_id,
         )
         self._settle_parent_task(delivery.message.agent_run_id)
         self._append_delivery_audit(delivery, "delivered", remote_id=remote_id)
@@ -397,7 +404,6 @@ class MessagePipeline:
 
     def _handle_delivery_failure(self, delivery: DeliveryRecord, error: Exception) -> None:
         if delivery.attempts >= self.max_delivery_attempts:
-            self.store.mark_delivery_failed(delivery.id, str(error))
             self.lifecycle.transition(
                 EntityType.DELIVERY,
                 delivery.id,
@@ -406,6 +412,8 @@ class MessagePipeline:
                     f"delivery-failed:{delivery.id}:{delivery.attempts}:"
                     f"v{self.store.get_lifecycle_entity(EntityType.DELIVERY, delivery.id).version}"
                 ),
+                delivery_error=str(error),
+                delivery_retry_at=0,
             )
             self._settle_parent_task(delivery.message.agent_run_id, failed=True)
             self._append_delivery_audit(
@@ -427,7 +435,6 @@ class MessagePipeline:
             self._settle_persona_reply(delivery, delivered=False, error=error)
             return
         delay = self.delivery_retry_base_seconds * 2 ** (delivery.attempts - 1)
-        self.store.mark_delivery_retry(delivery.id, str(error), time.time() + delay)
         self.lifecycle.transition(
             EntityType.DELIVERY,
             delivery.id,
@@ -436,6 +443,8 @@ class MessagePipeline:
                 f"delivery-retry:{delivery.id}:{delivery.attempts}:"
                 f"v{self.store.get_lifecycle_entity(EntityType.DELIVERY, delivery.id).version}"
             ),
+            delivery_error=str(error),
+            delivery_retry_at=time.time() + delay,
         )
         log_event(
             log,

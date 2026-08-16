@@ -6,7 +6,7 @@ import json
 import threading
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..infrastructure.sqlite import SQLiteDatabase
 from ..logger import get_logger, log_event
@@ -54,7 +54,11 @@ class SQLiteControlPlane:
         self._lock = threading.RLock()
         self.quota = QuotaStore(self._connection, self._lock)
         self.releases = ReleaseStore(self._connection, self._lock)
-        self.runs = AgentRunStore(self._connection, self._lock)
+        self.runs = AgentRunStore(
+            self._connection,
+            self._lock,
+            self._record_lifecycle_audit,
+        )
         self.personal_skills = PersonalSkillStore(self._connection, self._lock)
         self.work_cases = WorkCaseStore(self._connection, self._lock)
         self.interactions = InteractionSessionStore(self._connection, self._lock)
@@ -210,11 +214,35 @@ class SQLiteControlPlane:
                         ),
                     )
                     stage = "lifecycle_insert"
+                    lifecycle_payload = {
+                        "run_id": agent_run_id,
+                        "message_kind": message.message_kind,
+                        "actor_id": message.actor_id or self._inbox_actor(event_id),
+                    }
                     self._connection.execute(
                         """INSERT INTO lifecycle_entities
                         (entity_type, entity_id, scope_id, state, payload, created_at, updated_at)
-                        VALUES ('delivery', ?, ?, 'pending', '{}', ?, ?)""",
-                        (delivery_id, message.conversation_id, now, now),
+                        VALUES ('delivery', ?, ?, 'pending', ?, ?, ?)""",
+                        (
+                            delivery_id,
+                            message.scope_id or message.conversation_id,
+                            _json(lifecycle_payload),
+                            now,
+                            now,
+                        ),
+                    )
+                    self._record_lifecycle_audit(
+                        entity_type=EntityType.DELIVERY,
+                        entity_id=delivery_id,
+                        action="created",
+                        from_state="",
+                        to_state="pending",
+                        version=0,
+                        scope_id=message.scope_id or message.conversation_id,
+                        actor_id=message.actor_id or self._inbox_actor(event_id),
+                        trace_id="",
+                        payload=lifecycle_payload,
+                        created_at=now,
                     )
                     delivery_ids.append(delivery_id)
                 stage = "inbox_update"
@@ -244,7 +272,7 @@ class SQLiteControlPlane:
                 raise
         return tuple(delivery_ids)
 
-    def claim_delivery(self) -> DeliveryRecord | None:
+    def next_delivery(self) -> DeliveryRecord | None:
         now = time.time()
         with self._lock:
             row = self._connection.execute(
@@ -255,13 +283,7 @@ class SQLiteControlPlane:
             ).fetchone()
             if row is None:
                 return None
-            self._connection.execute(
-                """UPDATE outbox_deliveries SET status='sending', attempts=attempts+1,
-                updated_at=? WHERE id=?""",
-                (now, row["id"]),
-            )
-            self._connection.commit()
-        return self.get_delivery(str(row["id"]))
+            return self._delivery_record(row)
 
     def enqueue_delivery(self, message: OutboundMessage) -> str:
         """Persist one application-owned delivery without an Inbox parent."""
@@ -272,60 +294,73 @@ class SQLiteControlPlane:
         channel_id = message.channel_id or message.conversation_id
         now = time.time()
         with self._lock:
-            self._connection.execute(
-                """INSERT OR IGNORE INTO outbox_deliveries
-                (id, conversation_id, channel_id, message, props, status,
-                 agent_run_id, root_id, message_kind, scope_id, artifact_refs,
-                 file_ids, actions, update_post_id, idempotency_key,
-                 actor_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    delivery_id,
-                    message.conversation_id,
-                    channel_id,
-                    message.text,
-                    _json(dict(message.props)),
-                    message.agent_run_id,
-                    message.root_id,
-                    message.message_kind,
-                    message.scope_id,
-                    _json(list(message.artifact_refs)),
-                    _json(list(message.file_ids)),
-                    _json([dict(action) for action in message.actions]),
-                    message.update_post_id,
-                    stable_key,
-                    message.actor_id,
-                    now,
-                    now,
-                ),
-            )
-            self._connection.execute(
-                """INSERT OR IGNORE INTO lifecycle_entities
-                (entity_type, entity_id, scope_id, state, payload, created_at, updated_at)
-                VALUES ('delivery', ?, ?, 'pending', '{}', ?, ?)""",
-                (delivery_id, message.scope_id, now, now),
-            )
-            self._connection.commit()
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                self._connection.execute(
+                    """INSERT OR IGNORE INTO outbox_deliveries
+                    (id, conversation_id, channel_id, message, props, status,
+                     agent_run_id, root_id, message_kind, scope_id, artifact_refs,
+                     file_ids, actions, update_post_id, idempotency_key,
+                     actor_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        delivery_id,
+                        message.conversation_id,
+                        channel_id,
+                        message.text,
+                        _json(dict(message.props)),
+                        message.agent_run_id,
+                        message.root_id,
+                        message.message_kind,
+                        message.scope_id,
+                        _json(list(message.artifact_refs)),
+                        _json(list(message.file_ids)),
+                        _json([dict(action) for action in message.actions]),
+                        message.update_post_id,
+                        stable_key,
+                        message.actor_id,
+                        now,
+                        now,
+                    ),
+                )
+                lifecycle_payload = {
+                    "run_id": message.agent_run_id,
+                    "message_kind": message.message_kind,
+                    "actor_id": message.actor_id,
+                }
+                lifecycle_insert = self._connection.execute(
+                    """INSERT OR IGNORE INTO lifecycle_entities
+                    (entity_type, entity_id, scope_id, state, payload, created_at, updated_at)
+                    VALUES ('delivery', ?, ?, 'pending', ?, ?, ?)""",
+                    (delivery_id, message.scope_id, _json(lifecycle_payload), now, now),
+                )
+                if lifecycle_insert.rowcount == 1:
+                    self._record_lifecycle_audit(
+                        entity_type=EntityType.DELIVERY,
+                        entity_id=delivery_id,
+                        action="created",
+                        from_state="",
+                        to_state="pending",
+                        version=0,
+                        scope_id=message.scope_id,
+                        actor_id=message.actor_id,
+                        trace_id="",
+                        payload=lifecycle_payload,
+                        created_at=now,
+                    )
+                self._connection.commit()
+            except Exception:
+                self._connection.rollback()
+                raise
         return delivery_id
 
-    def retry_delivery(self, idempotency_key: str) -> str:
-        with self._lock:
-            cursor = self._connection.execute(
-                """UPDATE outbox_deliveries SET status='retrying', attempts=0,
-                next_attempt_at=0, last_error='', updated_at=?
-                WHERE idempotency_key=? AND status='failed'""",
-                (time.time(), idempotency_key),
-            )
-            delivery_id = ""
-            if cursor.rowcount:
-                delivery_id = str(
-                    self._connection.execute(
-                        "SELECT id FROM outbox_deliveries WHERE idempotency_key=?",
-                        (idempotency_key,),
-                    ).fetchone()["id"]
-                )
-            self._connection.commit()
-        return delivery_id
+    def find_failed_delivery(self, idempotency_key: str) -> str:
+        row = self._connection.execute(
+            """SELECT id FROM outbox_deliveries
+            WHERE idempotency_key=? AND status='failed'""",
+            (idempotency_key,),
+        ).fetchone()
+        return str(row["id"]) if row is not None else ""
 
     def get_delivery(self, delivery_id: str) -> DeliveryRecord:
         row = self._connection.execute(
@@ -352,18 +387,6 @@ class SQLiteControlPlane:
             (agent_run_id,),
         ).fetchall()
         return [self._delivery_record(row) for row in rows]
-
-    def recover_deliveries(self) -> None:
-        with self._lock:
-            self._connection.execute(
-                """UPDATE outbox_deliveries SET status='retrying', next_attempt_at=0,
-                updated_at=? WHERE status='sending'""",
-                (time.time(),),
-            )
-            self._connection.commit()
-
-    def mark_delivery_delivered(self, delivery_id: str, remote_id: str) -> None:
-        self._update_delivery(delivery_id, "delivered", remote_id=remote_id)
 
     def save_delivery_files(self, delivery_key: str, file_ids: tuple[str, ...]) -> None:
         with self._lock:
@@ -403,12 +426,6 @@ class SQLiteControlPlane:
             self._connection.commit()
             return cursor.rowcount == 1
 
-    def mark_delivery_retry(self, delivery_id: str, error: str, retry_at: float) -> None:
-        self._update_delivery(delivery_id, "retrying", error=error, retry_at=retry_at)
-
-    def mark_delivery_failed(self, delivery_id: str, error: str) -> None:
-        self._update_delivery(delivery_id, "failed", error=error)
-
     def create_lifecycle_entity(
         self,
         entity_type: EntityType,
@@ -419,13 +436,31 @@ class SQLiteControlPlane:
     ) -> LifecycleEntity:
         now = time.time()
         with self._lock:
-            self._connection.execute(
-                """INSERT INTO lifecycle_entities
-                (entity_type, entity_id, scope_id, state, payload, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (entity_type.value, entity_id, scope_id, state, _json(payload), now, now),
-            )
-            self._connection.commit()
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                self._connection.execute(
+                    """INSERT INTO lifecycle_entities
+                    (entity_type, entity_id, scope_id, state, payload, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (entity_type.value, entity_id, scope_id, state, _json(payload), now, now),
+                )
+                self._record_lifecycle_audit(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    action="created",
+                    from_state="",
+                    to_state=state,
+                    version=0,
+                    scope_id=scope_id,
+                    actor_id=str(payload.get("actor_id") or ""),
+                    trace_id=str(payload.get("trace_id") or ""),
+                    payload=payload,
+                    created_at=now,
+                )
+                self._connection.commit()
+            except Exception:
+                self._connection.rollback()
+                raise
         return self.get_lifecycle_entity(entity_type, entity_id)
 
     def get_lifecycle_entity(self, entity_type: EntityType, entity_id: str) -> LifecycleEntity:
@@ -452,12 +487,28 @@ class SQLiteControlPlane:
         actor_id: str,
         trace_id: str,
         payload_patch: dict[str, Any] | None = None,
+        recovery: bool = False,
+        delivery_error: str | None = None,
+        delivery_retry_at: float | None = None,
+        delivery_remote_id: str | None = None,
+        delivery_attempts: Literal["preserve", "increment", "reset"] = "preserve",
     ) -> LifecycleEntity:
         now = time.time()
         payload = {**dict(current.payload), **(payload_patch or {})}
         with self._lock:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
+                self._update_lifecycle_projection(
+                    current,
+                    to_state,
+                    actor_id=actor_id,
+                    reason=reason,
+                    delivery_error=delivery_error,
+                    delivery_retry_at=delivery_retry_at,
+                    delivery_remote_id=delivery_remote_id,
+                    delivery_attempts=delivery_attempts,
+                    updated_at=now,
+                )
                 changed = self._connection.execute(
                     """UPDATE lifecycle_entities
                     SET state=?, version=version+1, payload=?, updated_at=?
@@ -491,11 +542,75 @@ class SQLiteControlPlane:
                         now,
                     ),
                 )
+                self._record_lifecycle_audit(
+                    entity_type=current.entity_type,
+                    entity_id=current.entity_id,
+                    action="transitioned",
+                    from_state=current.state,
+                    to_state=to_state,
+                    version=current.version + 1,
+                    scope_id=current.scope_id,
+                    actor_id=actor_id or str(payload.get("actor_id") or ""),
+                    trace_id=trace_id or str(payload.get("trace_id") or ""),
+                    payload=payload,
+                    command_id=command_id,
+                    recovery=recovery,
+                    created_at=now,
+                )
                 self._connection.commit()
             except Exception:
                 self._connection.rollback()
                 raise
         return self.get_lifecycle_entity(current.entity_type, current.entity_id)
+
+    def _update_lifecycle_projection(
+        self,
+        current: LifecycleEntity,
+        to_state: str,
+        *,
+        actor_id: str,
+        reason: str,
+        delivery_error: str | None,
+        delivery_retry_at: float | None,
+        delivery_remote_id: str | None,
+        delivery_attempts: Literal["preserve", "increment", "reset"],
+        updated_at: float,
+    ) -> None:
+        if current.entity_type is EntityType.DELIVERY:
+            if delivery_attempts not in {"preserve", "increment", "reset"}:
+                raise ValueError("invalid delivery attempt mutation")
+            changed = self._connection.execute(
+                """UPDATE outbox_deliveries
+                SET status=?,
+                    attempts=CASE WHEN ?='increment' THEN attempts+1
+                                  WHEN ?='reset' THEN 0 ELSE attempts END,
+                    last_error=COALESCE(?, last_error),
+                    next_attempt_at=COALESCE(?, next_attempt_at),
+                    remote_id=COALESCE(?, remote_id),
+                    updated_at=?
+                WHERE id=? AND status=?""",
+                (
+                    to_state,
+                    delivery_attempts,
+                    delivery_attempts,
+                    delivery_error,
+                    delivery_retry_at,
+                    delivery_remote_id,
+                    updated_at,
+                    current.entity_id,
+                    current.state,
+                ),
+            )
+            if changed.rowcount != 1:
+                raise RuntimeError("delivery_projection_conflict")
+        elif current.entity_type is EntityType.APPROVAL_REQUEST:
+            changed = self._connection.execute(
+                """UPDATE approval_requests
+                SET decided_by=?, decision_reason=?, updated_at=? WHERE id=?""",
+                (actor_id, reason, updated_at, current.entity_id),
+            )
+            if changed.rowcount != 1:
+                raise RuntimeError("approval_projection_conflict")
 
     def list_transitions(self, entity_type: EntityType, entity_id: str) -> list[StateTransition]:
         rows = self._connection.execute(
@@ -607,25 +722,114 @@ class SQLiteControlPlane:
         decision: str = "",
         details: dict[str, Any] | None = None,
     ) -> str:
-        event_id = uuid.uuid4().hex
         with self._lock:
-            self._connection.execute(
-                """INSERT INTO audit_events
-                (id, event_type, actor_id, scope_id, trace_id, target, decision, details, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    event_id,
+            try:
+                event_id = self._insert_audit(
                     event_type,
-                    actor_id,
-                    scope_id,
-                    trace_id,
-                    target,
-                    decision,
-                    _json(details or {}),
-                    time.time(),
-                ),
-            )
-            self._connection.commit()
+                    actor_id=actor_id,
+                    scope_id=scope_id,
+                    trace_id=trace_id,
+                    target=target,
+                    decision=decision,
+                    details=details or {},
+                )
+                self._connection.commit()
+                return event_id
+            except Exception:
+                self._connection.rollback()
+                raise
+
+    def _record_lifecycle_audit(
+        self,
+        *,
+        entity_type: EntityType,
+        entity_id: str,
+        action: str,
+        from_state: str,
+        to_state: str,
+        version: int,
+        scope_id: str,
+        actor_id: str,
+        trace_id: str,
+        payload: dict[str, Any],
+        command_id: str = "",
+        recovery: bool = False,
+        created_at: float | None = None,
+    ) -> str:
+        run_reference = payload.get("run_id")
+        if not trace_id and isinstance(run_reference, str) and run_reference:
+            row = self._connection.execute(
+                """SELECT json_extract(payload, '$.trace_id')
+                FROM lifecycle_entities
+                WHERE entity_type='agent_run' AND entity_id=?""",
+                (run_reference,),
+            ).fetchone()
+            if row is not None:
+                trace_id = str(row[0] or "")
+        details: dict[str, Any] = {
+            "schema_version": "1.0",
+            "entity_type": entity_type.value,
+            "entity_id": entity_id,
+            "from_state": from_state,
+            "to_state": to_state,
+            "version": version,
+            "command_id": command_id,
+            "recovery": recovery,
+        }
+        for key in (
+            "workflow_id",
+            "parent_run_id",
+            "thread_id",
+            "agent_ref",
+            "skill_ref",
+            "run_id",
+            "message_kind",
+        ):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                details[key] = value
+        if entity_type is EntityType.AGENT_RUN:
+            details["run_id"] = entity_id
+        return self._insert_audit(
+            f"lifecycle.{entity_type.value}.{action}",
+            actor_id=actor_id,
+            scope_id=scope_id,
+            trace_id=trace_id,
+            target=entity_id,
+            decision=to_state,
+            details=details,
+            created_at=created_at,
+        )
+
+    def _insert_audit(
+        self,
+        event_type: str,
+        *,
+        actor_id: str,
+        scope_id: str,
+        trace_id: str,
+        target: str,
+        decision: str,
+        details: dict[str, Any],
+        created_at: float | None = None,
+    ) -> str:
+        event_id = uuid.uuid4().hex
+        self._connection.execute(
+            """INSERT INTO audit_events
+            (id, event_type, actor_id, scope_id, trace_id, target, decision, details, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event_id,
+                event_type,
+                actor_id,
+                scope_id,
+                trace_id,
+                target,
+                decision,
+                _json(details),
+                created_at if created_at is not None else time.time(),
+            ),
+        )
         return event_id
 
     def create_artifact(self, artifact: Artifact) -> None:
@@ -734,7 +938,9 @@ class SQLiteControlPlane:
             for row in rows
         ]
 
-    def create_approval_request(self, request: ApprovalRequest) -> None:
+    def create_approval_request(
+        self, request: ApprovalRequest, *, trace_id: str = ""
+    ) -> None:
         now = time.time()
         with self._lock:
             try:
@@ -746,7 +952,13 @@ class SQLiteControlPlane:
                     (
                         request.id,
                         request.scope_id,
-                        _json({"resume_token": request.resume_token}),
+                        _json(
+                            {
+                                "resume_token": request.resume_token,
+                                "actor_id": request.requested_by,
+                                "trace_id": trace_id,
+                            }
+                        ),
                         now,
                         now,
                     ),
@@ -767,6 +979,19 @@ class SQLiteControlPlane:
                         now,
                         now,
                     ),
+                )
+                self._record_lifecycle_audit(
+                    entity_type=EntityType.APPROVAL_REQUEST,
+                    entity_id=request.id,
+                    action="created",
+                    from_state="",
+                    to_state="pending",
+                    version=0,
+                    scope_id=request.scope_id,
+                    actor_id=request.requested_by,
+                    trace_id=trace_id,
+                    payload={},
+                    created_at=now,
                 )
                 self._connection.commit()
             except Exception:
@@ -796,38 +1021,12 @@ class SQLiteControlPlane:
             ApprovalRequestState(row["state"]),
         )
 
-    def record_approval_decision(self, request_id: str, actor_id: str, reason: str) -> None:
-        with self._lock:
-            self._connection.execute(
-                """UPDATE approval_requests SET decided_by=?, decision_reason=?, updated_at=?
-                WHERE id=?""",
-                (actor_id, reason, time.time(), request_id),
-            )
-            self._connection.commit()
-
     def _update_inbox(self, event_id: str, status: str, error: str = "") -> None:
         with self._lock:
             self._connection.execute(
                 """UPDATE inbox_events SET status=?, version=version+1, last_error=?,
                 updated_at=? WHERE event_id=?""",
                 (status, error, time.time(), event_id),
-            )
-            self._connection.commit()
-
-    def _update_delivery(
-        self,
-        delivery_id: str,
-        status: str,
-        *,
-        error: str = "",
-        retry_at: float = 0,
-        remote_id: str = "",
-    ) -> None:
-        with self._lock:
-            self._connection.execute(
-                """UPDATE outbox_deliveries SET status=?, last_error=?, next_attempt_at=?,
-                remote_id=?, updated_at=? WHERE id=?""",
-                (status, error, retry_at, remote_id, time.time(), delivery_id),
             )
             self._connection.commit()
 

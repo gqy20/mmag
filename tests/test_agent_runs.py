@@ -61,6 +61,15 @@ def test_child_run_creation_is_replay_idempotent(tmp_path):
     assert replay.thread_id == "child-run-1"
     assert replay.execution_key == delegation_execution_key(child_spec)
     assert store.runs.find_by_execution_key(child.execution_key) == child
+    created_audits = store.list_audits(event_type="lifecycle.agent_run.created")
+    assert {audit.target for audit in created_audits} == {"parent-run", "child-run-1"}
+    child_audit = next(audit for audit in created_audits if audit.target == "child-run-1")
+    assert child_audit.actor_id == "user-1"
+    assert child_audit.scope_id == "scope-1"
+    assert child_audit.trace_id == "trace-1"
+    assert child_audit.details["parent_run_id"] == "parent-run"
+    assert child_audit.details["agent_ref"] == "task-agent@2.0.0"
+    assert "snapshot" not in child_audit.details
     store.close()
 
 

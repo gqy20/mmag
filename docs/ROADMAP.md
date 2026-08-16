@@ -483,7 +483,9 @@ Mattermost 身份；增加 Bot 不改变数据隔离语义，停用、轮换、�
 - [x] 使用稳定 `execution_key` 持久化父子 AgentRun 和不可变 Package/Skill/Policy snapshot；
 - [x] 父 Run 在子执行期间进入 `waiting_child`；子审批只恢复原子 `thread_id`，结构化子终态提交后再恢复父 Run 与父 LangGraph checkpoint；
 - [ ] 定义统一事件 Envelope、状态词汇、事件目录和 attributes Schema；
-- [ ] 关键 Lifecycle 变更与 AuditEvent 在控制面原子提交，再投影 Log/Metrics/Trace；
+- [x] AgentRun、Approval、Delivery 和通用 Lifecycle 的创建/迁移与内容无关 AuditEvent 在控制面原子提交；普通日志继续作为事务后投影；
+- [x] Approval 决策投影、Delivery 认领/结果/重试/恢复与对应 Lifecycle、transition、AuditEvent 在同一事务提交；
+- [ ] 将 CapabilityCall 从内容无关 Audit 投影提升为独立持久化生命周期，再投影 Metrics/Trace；
 - [x] `debug-trace` 可按 trace、父/子 Run、CapabilityCall、Approval、Artifact 或 Delivery ID 输出安全的 AgentRun、Capability、Approval、Artifact、Delivery 因果投影与状态矛盾；
 - [ ] 接入低基数 Metrics 与可选 OpenTelemetry，默认不采集正文和完整参数。
 

@@ -194,6 +194,23 @@ async def test_standalone_delivery_can_be_replayed_without_rerunning_an_agent(tm
     assert attempts == 2
     assert store.get_delivery(delivery_id).status == "delivered"
     assert store.get_lifecycle_entity(EntityType.DELIVERY, delivery_id).state == "delivered"
+    created = store.list_audits(
+        event_type="lifecycle.delivery.created", target=delivery_id
+    )
+    transitions = store.list_audits(
+        event_type="lifecycle.delivery.transitioned", target=delivery_id
+    )
+    assert len(created) == 1
+    assert [event.decision for event in reversed(transitions)] == [
+        "sending",
+        "failed",
+        "retrying",
+        "sending",
+        "delivered",
+    ]
+    assert created[0].actor_id == "user-1"
+    assert created[0].scope_id == "scope-1"
+    assert "durable response" not in str(created[0].details)
     store.close()
 
 

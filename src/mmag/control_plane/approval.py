@@ -39,6 +39,7 @@ class ApprovalService:
         scope_id: str = "",
         ttl_seconds: float | None = 3600,
         resume_token: str | None = None,
+        trace_id: str = "",
     ) -> ApprovalRequest:
         now = time.time()
         request = ApprovalRequest(
@@ -50,7 +51,7 @@ class ApprovalService:
             scope_id=scope_id,
             expires_at=now + ttl_seconds if ttl_seconds is not None else None,
         )
-        self.store.create_approval_request(request)
+        self.store.create_approval_request(request, trace_id=trace_id)
         return request
 
     def decide(
@@ -75,9 +76,6 @@ class ApprovalService:
                 actor_id=actor_id,
                 reason="approval expired before decision",
             )
-            self.store.record_approval_decision(
-                request_id, actor_id, reason or "approval expired before decision"
-            )
             raise ApprovalExpiredError(f"approval {request_id!r} has expired")
         target = "approved" if approved else "rejected"
         self.lifecycle.transition(
@@ -88,5 +86,4 @@ class ApprovalService:
             actor_id=actor_id,
             reason=reason,
         )
-        self.store.record_approval_decision(request_id, actor_id, reason)
         return self.store.get_approval_request(request_id)

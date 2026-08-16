@@ -89,6 +89,12 @@ class LangGraphApprovalCoordinator:
                 )
             elif not isinstance(existing_context, dict) or not existing_context:
                 payload["capability_context"] = supplied_context
+        approval_context = payload.get("capability_context")
+        approval_trace_id = (
+            str(approval_context.get("trace_id") or "")
+            if isinstance(approval_context, dict)
+            else ""
+        )
         approval = self.approvals.request(
             names or "langgraph_tool_batch",
             {
@@ -119,6 +125,7 @@ class LangGraphApprovalCoordinator:
             requested_by=requested_by,
             scope_id=scope_id,
             resume_token=str(interruption["id"]),
+            trace_id=approval_trace_id,
         )
         self._transition_run(
             _approval_run_id(payload), "waiting_approval", str(interruption["id"])
@@ -127,6 +134,7 @@ class LangGraphApprovalCoordinator:
             "approval.requested",
             actor_id=requested_by,
             scope_id=scope_id,
+            trace_id=approval_trace_id,
             target=approval.id,
             decision="pending",
             details={"capability": approval.capability_name},

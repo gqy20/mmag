@@ -278,7 +278,7 @@ def test_diagnostic_reader_restores_control_plane_run_and_approval_graph(tmp_pat
             "agent_ref": "mmchat@1.0.0",
             "skill_ref": "",
             "status": "waiting_child",
-            "last_event": "control_plane.agent_run",
+            "last_event": "lifecycle.agent_run.transitioned",
         },
         {
             "run_id": child.run_id,
@@ -288,7 +288,7 @@ def test_diagnostic_reader_restores_control_plane_run_and_approval_graph(tmp_pat
             "agent_ref": "project@1.0.0",
             "skill_ref": "",
             "status": "waiting_approval",
-            "last_event": "runtime.tool.call",
+            "last_event": "lifecycle.delivery.created",
         },
     )
     assert by_child.approvals == by_approval.approvals == (

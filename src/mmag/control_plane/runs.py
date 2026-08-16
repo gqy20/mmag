@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .models import AgentRunRecord, AgentRunSpec, AgentRunState, EntityType
 
@@ -51,10 +51,36 @@ class AgentRunTerminalError(RuntimeError):
     """A failed or cancelled child AgentRun cannot be executed again."""
 
 
+class LifecycleAuditWriter(Protocol):
+    def __call__(
+        self,
+        *,
+        entity_type: EntityType,
+        entity_id: str,
+        action: str,
+        from_state: str,
+        to_state: str,
+        version: int,
+        scope_id: str,
+        actor_id: str,
+        trace_id: str,
+        payload: dict[str, Any],
+        command_id: str = "",
+        recovery: bool = False,
+        created_at: float | None = None,
+    ) -> str: ...
+
+
 class AgentRunStore:
-    def __init__(self, connection: Any, lock: Any) -> None:
+    def __init__(
+        self,
+        connection: Any,
+        lock: Any,
+        lifecycle_audit: LifecycleAuditWriter,
+    ) -> None:
         self._connection = connection
         self._lock = lock
+        self._lifecycle_audit = lifecycle_audit
 
     def create_or_get(self, spec: AgentRunSpec) -> tuple[AgentRunRecord, bool]:
         """Atomically create a run or return its replay-stable existing record."""
@@ -77,6 +103,19 @@ class AgentRunStore:
                     (entity_type, entity_id, scope_id, state, payload, created_at, updated_at)
                     VALUES ('agent_run', ?, ?, 'queued', ?, ?, ?)""",
                     (spec.run_id, spec.scope_id, _json(payload), now, now),
+                )
+                self._lifecycle_audit(
+                    entity_type=EntityType.AGENT_RUN,
+                    entity_id=spec.run_id,
+                    action="created",
+                    from_state="",
+                    to_state=AgentRunState.QUEUED.value,
+                    version=0,
+                    scope_id=spec.scope_id,
+                    actor_id=spec.actor_id,
+                    trace_id=spec.trace_id,
+                    payload=payload,
+                    created_at=now,
                 )
                 row = self._find_row(run_id=spec.run_id)
                 if row is None:  # pragma: no cover - guarded by the insert above

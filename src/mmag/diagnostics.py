@@ -294,8 +294,9 @@ class DiagnosticReader:
             with self._connect() as connection:
                 row = connection.execute(
                     """SELECT trace_id FROM audit_events
-                    WHERE trace_id=? OR json_extract(details, '$.run_id')=?
-                       OR json_extract(details, '$.runtime_call_id')=?
+                    WHERE trace_id<>'' AND (
+                        trace_id=? OR json_extract(details, '$.run_id')=?
+                        OR json_extract(details, '$.runtime_call_id')=?)
                     ORDER BY created_at DESC LIMIT 1""",
                     (identifier, identifier, identifier),
                 ).fetchone()
@@ -351,7 +352,7 @@ class DiagnosticReader:
             return str(row[0] or "")
         row = connection.execute(
             """SELECT trace_id FROM audit_events
-            WHERE json_extract(details, '$.run_id')=?
+            WHERE trace_id<>'' AND json_extract(details, '$.run_id')=?
             ORDER BY created_at DESC LIMIT 1""",
             (reference,),
         ).fetchone()

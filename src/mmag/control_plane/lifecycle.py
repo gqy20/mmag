@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from .models import EntityType, LifecycleEntity
 
@@ -107,6 +107,10 @@ class LifecycleService:
         trace_id: str = "",
         recovery: bool = False,
         payload_patch: dict[str, Any] | None = None,
+        delivery_error: str | None = None,
+        delivery_retry_at: float | None = None,
+        delivery_remote_id: str | None = None,
+        delivery_attempts: Literal["preserve", "increment", "reset"] = "preserve",
     ) -> LifecycleEntity:
         prior = self.store.find_transition(command_id)
         if prior:
@@ -133,6 +137,11 @@ class LifecycleService:
                 actor_id,
                 trace_id,
                 payload_patch,
+                recovery,
+                delivery_error,
+                delivery_retry_at,
+                delivery_remote_id,
+                delivery_attempts,
             )
         except RuntimeError as error:
             if str(error) == "version_conflict":

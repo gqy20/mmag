@@ -63,8 +63,10 @@ Loader 已拒绝无 eval、重复 case、非法字段和模糊期望，但启动
 `waiting_child`；`RunCoordinator` 已通过该服务幂等启动子 Run、联动父子状态并原子提交结构化终态，子审批
 只恢复子 checkpoint，子终态后再恢复父图。诊断工具已能从 trace、父/子 Run 或审批 ID 重建持久化
 AgentRun 与审批关系，也能从 CapabilityCall、Artifact 或 Delivery ID 关联并输出安全投影和状态矛盾。
-CapabilityCall 当前仍由内容无关 AuditEvent 投影，生命周期、审计、Artifact 和 Delivery 尚未在统一事务中
-原子持久化，因此诊断结果是跨事实存储的只读关联，而不是单一强一致事件流。
+CapabilityCall 当前仍由内容无关 AuditEvent 投影。AgentRun、Approval、Delivery 和通用 Lifecycle 的创建与
+迁移已经和版本化 AuditEvent 在同一事务中提交；Approval 决策投影及 Delivery 的认领、结果、重试和恢复
+也与 Lifecycle 原子提交。Artifact 和尚未生命周期化的 CapabilityCall 仍需跨事实存储只读关联，因此完整
+诊断还不是单一强一致事件流。
 
 完成标准：实现 [ADR-0011](adr/0011-run-control-plane-observability.md) 的统一事件与关联
 契约；指标基数受控；可选 Trace exporter 默认不采集正文；Policy/Approval/Artifact/Delivery 事件目录完整；
