@@ -3,11 +3,20 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from mmag.control_plane import (
+    AgentRunService,
+    AgentRunSpec,
+    AgentRunState,
     ApprovalRequest,
+    ApprovalService,
+    EntityType,
     LangGraphApprovalCoordinator,
+    LifecycleService,
     MattermostAccessGuard,
     MattermostApprovalAuthorizer,
+    SQLiteControlPlane,
+    StaticApprovalAuthorizer,
 )
+from mmag.runtimes import AgentResult, RuntimeStatus
 
 
 def _request(requested_by: str = "requester-1") -> ApprovalRequest:
@@ -163,3 +172,158 @@ async def test_checkpoint_resume_stops_after_original_actor_loses_access():
 
     approvals.decide.assert_not_called()
     gateway.resume.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delegated_approval_resumes_child_before_parent(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "nested-approval.db")
+    lifecycle = LifecycleService(store)
+    runs = AgentRunService(store, lifecycle)
+    scope = "mattermost:install-1:tenant-1:chn:channel-1"
+    parent, _ = runs.create_or_get(
+        AgentRunSpec(
+            run_id="run:event-1",
+            workflow_id="mattermost:root-1",
+            actor_id="user-1",
+            scope_id=scope,
+            trace_id="trace-1",
+            thread_id="mattermost:root-1",
+            agent_ref="mmchat@1.0.0",
+            package_snapshot={"package_hash": "parent"},
+        )
+    )
+    parent = runs.transition(
+        parent.run_id,
+        AgentRunState.RUNNING,
+        command_id="parent-running",
+        expected_version=parent.version,
+    )
+    task = lifecycle.create(EntityType.TASK, "task:event-1", scope_id=scope)
+    lifecycle.transition(
+        EntityType.TASK,
+        task.entity_id,
+        "running",
+        command_id="task-running",
+        expected_version=task.version,
+    )
+    child, _ = runs.create_or_get(
+        AgentRunSpec(
+            run_id="delegate:project:child-1",
+            workflow_id=parent.workflow_id,
+            parent_run_id=parent.run_id,
+            parent_tool_call_id="tool-1",
+            actor_id="user-1",
+            scope_id=scope,
+            trace_id="trace-1",
+            thread_id="delegate:project:child-1",
+            agent_ref="project@1.0.0",
+            package_snapshot={"package_hash": "child"},
+        )
+    )
+    child = runs.transition(
+        child.run_id,
+        AgentRunState.RUNNING,
+        command_id="child-running",
+        expected_version=child.version,
+    )
+    runs.transition(
+        child.run_id,
+        AgentRunState.WAITING_APPROVAL,
+        command_id="child-waiting",
+        expected_version=child.version,
+    )
+    runs.transition(
+        parent.run_id,
+        AgentRunState.WAITING_CHILD,
+        command_id="parent-waiting",
+        expected_version=parent.version,
+    )
+    parent_snapshot = {
+        "context": {
+            "trace_id": "trace-1",
+            "actor_id": "user-1",
+            "conversation_id": "channel-1",
+            "scope": scope,
+            "run_id": "mattermost:root-1",
+        }
+    }
+    child_resume = {
+        "runtime": "deepagents",
+        "thread_id": child.run_id,
+        "tool_calls": [{"capability": "create_task", "tool_call_id": "action-0"}],
+        "runtime_snapshot": {
+            "context": {
+                "trace_id": "trace-1",
+                "actor_id": "user-1",
+                "conversation_id": "channel-1",
+                "scope": scope,
+                "run_id": child.run_id,
+            }
+        },
+        "governance_context": {"allowed_capabilities": ["create_task"]},
+    }
+    paused = AgentResult(
+        "",
+        "deepagents",
+        status=RuntimeStatus.WAITING_APPROVAL,
+        interruptions=(
+            {
+                "id": "parent-interrupt-1",
+                "value": {
+                    "runtime": "deepagents",
+                    "thread_id": "mattermost:root-1",
+                    "tool_calls": child_resume["tool_calls"],
+                    "runtime_snapshot": parent_snapshot,
+                    "capability_context": {
+                        "trace_id": "trace-1",
+                        "conversation_id": "channel-1",
+                        "run_id": "mattermost:root-1",
+                        "workflow_id": "mattermost:root-1",
+                        "lifecycle_run_id": "run:event-1",
+                    },
+                    "delegated_child": {
+                        "run_id": child.run_id,
+                        "interrupt_id": "child-interrupt-1",
+                        "resume": child_resume,
+                    },
+                },
+            },
+        ),
+    )
+    gateway = MagicMock(
+        resume=AsyncMock(
+            side_effect=[
+                AgentResult("child done", "deepagents", output={"tasks": []}),
+                AgentResult("parent done", "deepagents", output={"answer": "ok"}),
+            ]
+        )
+    )
+    coordinator = LangGraphApprovalCoordinator(
+        store,
+        lifecycle,
+        ApprovalService(store, lifecycle),
+        gateway,
+        authorizer=StaticApprovalAuthorizer(frozenset({"user-1"})),
+        access_guard=MagicMock(require=AsyncMock()),
+        skill_registry=MagicMock(),
+    )
+
+    approval = coordinator.register(paused, requested_by="user-1", scope_id=scope)
+    result = await coordinator.resume(
+        approval.id,
+        approved=True,
+        actor_id="user-1",
+        scope_id=scope,
+        trace_id="trace-1",
+    )
+
+    assert result.output == {"answer": "ok"}
+    assert [call.args[0] for call in gateway.resume.await_args_list] == [
+        child.run_id,
+        "mattermost:root-1",
+    ]
+    assert store.runs.get(child.run_id).state is AgentRunState.SUCCEEDED
+    assert store.runs.get(child.run_id).result_envelope["result"] == {"tasks": []}
+    assert store.runs.get(parent.run_id).state is AgentRunState.SUCCEEDED
+    assert store.get_lifecycle_entity(EntityType.TASK, "task:event-1").state == "succeeded"
+    store.close()

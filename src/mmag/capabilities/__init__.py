@@ -9,6 +9,7 @@ from .base import (
     CapabilityResult,
     CapabilitySpec,
     CapabilityStatus,
+    CapabilitySuspension,
     SourcePolicy,
 )
 from .bindings import bind_langgraph_capability
@@ -47,6 +48,7 @@ __all__ = [
     "CapabilityRegistry",
     "CapabilitySpec",
     "CapabilityStatus",
+    "CapabilitySuspension",
     "SourcePolicy",
     "bind_langgraph_capability",
     "bind_capability_context",

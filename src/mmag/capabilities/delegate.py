@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from ..agent_system import AgentDispatcher, AgentDispatchTarget
+from ..agent_system import AgentDispatchTarget, RunCoordinator
 from ..logger import get_logger, log_context, log_event, safe_hash
-from .base import CapabilityEffect, CapabilitySpec, SourcePolicy
+from .base import CapabilityEffect, CapabilitySpec, CapabilitySuspension, SourcePolicy
 from .context import get_capability_context
 
 log = get_logger(__name__)
@@ -44,9 +44,9 @@ def _create_delegate_capability(
     description: str,
     intent: str,
     skill_name: str,
-    dispatcher: AgentDispatcher,
+    coordinator: RunCoordinator,
 ) -> CapabilitySpec:
-    async def delegate(task: str) -> dict:
+    async def delegate(task: str) -> dict | CapabilitySuspension:
         parent_context = get_capability_context()
         if parent_context is None or not parent_context.actor_id or not parent_context.scope:
             return {"status": "error", "error": "缺少可信的子智能体委托上下文"}
@@ -60,7 +60,7 @@ def _create_delegate_capability(
         )
 
         try:
-            result = await dispatcher.dispatch(
+            result = await coordinator.dispatch(
                 AgentDispatchTarget(agent_name, intent, skill_name),
                 task=task,
                 context=parent_context,
@@ -85,6 +85,28 @@ def _create_delegate_capability(
             child_run_id=result.run_id,
             artifact_count=len(result.artifact_refs),
         )
+        if result.status == "waiting_approval":
+            if not result.interruptions:
+                raise RuntimeError("child Agent paused without an interrupt payload")
+            child_interrupt = dict(result.interruptions[0])
+            child_resume = child_interrupt.get("value", {})
+            if not isinstance(child_resume, dict):
+                raise RuntimeError("child Agent interrupt payload is invalid")
+            native_request = child_resume.get("native_request", {})
+            action_requests = (
+                list(native_request.get("action_requests", ()))
+                if isinstance(native_request, dict)
+                else []
+            )
+            return CapabilitySuspension(
+                {
+                    "kind": "delegated_agent_approval",
+                    "action_requests": action_requests,
+                    "child_run_id": result.run_id,
+                    "child_interrupt_id": str(child_interrupt.get("id") or ""),
+                    "child_resume": child_resume,
+                }
+            )
         return result.to_capability_result()
 
     return CapabilitySpec(
@@ -108,8 +130,8 @@ def _create_delegate_capability(
     )
 
 
-def create_delegate_capabilities(dispatcher: AgentDispatcher) -> list[CapabilitySpec]:
+def create_delegate_capabilities(coordinator: RunCoordinator) -> list[CapabilitySpec]:
     return [
-        _create_delegate_capability(cap_name, agent_name, desc, intent, skill_name, dispatcher)
+        _create_delegate_capability(cap_name, agent_name, desc, intent, skill_name, coordinator)
         for cap_name, (agent_name, desc, intent, skill_name) in _SUBAGENTS.items()
     ]

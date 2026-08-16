@@ -69,17 +69,25 @@ from .persona_replies import PersonaReplyStore
 from .personal_skills import PersonalSkillStore
 from .personas import DigitalPersonaStore
 from .pipeline import MessagePipeline, PartitionedScheduler
-from .runs import AgentRunConflictError, AgentRunService, delegation_execution_key
+from .runs import (
+    AgentRunConflictError,
+    AgentRunInProgressError,
+    AgentRunService,
+    AgentRunTerminalError,
+    delegation_execution_key,
+)
 from .store import SQLiteControlPlane
 from .task_drafts import TaskDraft, TaskDraftState, TaskDraftStore
 from .work_cases import InteractionSessionStore, WorkCaseStore
 
 __all__ = [
     "AgentRunConflictError",
+    "AgentRunInProgressError",
     "AgentRunRecord",
     "AgentRunService",
     "AgentRunSpec",
     "AgentRunState",
+    "AgentRunTerminalError",
     "ApprovalRequest",
     "ApprovalAlreadyDecidedError",
     "ApprovalAuthorizer",

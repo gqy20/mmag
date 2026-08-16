@@ -358,6 +358,7 @@ class AgentRequestHandler:
                 allowed_capabilities=frozenset(allowed_capabilities),
                 run_id=self.run_id(post),
                 workflow_id=self.run_id(post),
+                lifecycle_run_id=f"run:{post.get('id') or log_context.get('trace_id', 'unknown')}",
                 allowed_execution_profiles=frozenset(allowed_execution_profiles),
                 installation_id=scope.installation_id,
                 tenant_id=scope.tenant_id,
@@ -435,6 +436,7 @@ class AgentRequestHandler:
             allowed_capabilities=frozenset(capabilities),
             run_id=runtime_request.context.run_id,
             workflow_id=runtime_request.context.run_id,
+            lifecycle_run_id=f"run:{post.get('id') or runtime_request.context.trace_id}",
             allowed_execution_profiles=frozenset(
                 package.execution_profiles if package is not None else ()
             ),
@@ -464,7 +466,7 @@ class AgentRequestHandler:
                 )
             ),
         ):
-            lifecycle_id = self._lifecycle_run_id(context.run_id)
+            lifecycle_id = context.lifecycle_run_id or self._lifecycle_run_id(context.run_id)
             provenance = self._request_provenance(request, package, agent)
             self.audit_store.runs.bind_snapshot(
                 lifecycle_id,
@@ -473,6 +475,7 @@ class AgentRequestHandler:
                 trace_id=context.trace_id,
                 intent=request.intent,
                 capabilities=capabilities,
+                workflow_id=context.workflow_id,
             )
             log_event(
                 log,

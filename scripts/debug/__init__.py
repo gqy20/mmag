@@ -308,6 +308,57 @@ def _reply_exit_code(post: dict | None) -> int:
 
 def _print_timeline(trace_id: str, log_file: Path | None = None) -> None:
     report = _diagnostics().report(trace_id)
+    if report.run_graph:
+        print("\n🌳 AgentRun 运行图:")
+        for run in report.run_graph:
+            parent = str(run.get("parent_run_id") or "-")
+            print(
+                "   "
+                f"{str(run.get('run_id') or ''):36s} "
+                f"{str(run.get('status') or ''):18s} "
+                f"parent={parent}"
+            )
+    if report.approvals:
+        print("\n⏸️  审批:")
+        for approval in report.approvals:
+            print(
+                "   "
+                f"{str(approval.get('approval_id') or ''):34s} "
+                f"{str(approval.get('status') or ''):12s} "
+                f"cap={str(approval.get('capability') or '-'):20s} "
+                f"child={str(approval.get('child_run_id') or '-')}"
+            )
+    if report.capability_calls:
+        print("\n🛠️  Capability 调用:")
+        for call in report.capability_calls:
+            print(
+                "   "
+                f"{str(call.get('capability_call_id') or ''):36s} "
+                f"{str(call.get('status') or ''):12s} "
+                f"cap={str(call.get('capability') or '-'):20s} "
+                f"run={str(call.get('run_id') or '-')}"
+            )
+    if report.artifacts:
+        print("\n📦 Artifact:")
+        for artifact in report.artifacts:
+            print(
+                "   "
+                f"{str(artifact.get('ref') or ''):44s} "
+                f"kind={str(artifact.get('kind') or '-'):16s} "
+                f"run={str(artifact.get('run_id') or '-')}"
+            )
+    if report.deliveries:
+        print("\n📤 Delivery:")
+        for delivery in report.deliveries:
+            print(
+                "   "
+                f"{str(delivery.get('delivery_id') or ''):34s} "
+                f"{str(delivery.get('status') or ''):12s} "
+                f"kind={str(delivery.get('message_kind') or '-'):12s} "
+                f"run={str(delivery.get('run_id') or '-')}"
+            )
+    for warning in report.warnings:
+        print(f"\n⚠️  {warning}")
     audit = list(report.audits)
     print(f"\n🧭 执行时间线 (trace={trace_id}):")
     if not audit:
@@ -344,7 +395,10 @@ def show_trace(identifier: str, *, json_output: bool = False) -> int:
         print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if report.found else 1
     if not report.found:
-        print(f"❌ 未找到 trace/run: {identifier}", file=sys.stderr)
+        print(
+            f"❌ 未找到 trace/run/call/approval/artifact/delivery: {identifier}",
+            file=sys.stderr,
+        )
         for warning in report.warnings:
             print(f"   {warning}", file=sys.stderr)
         return 1

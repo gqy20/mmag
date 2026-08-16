@@ -60,8 +60,11 @@ Loader 已拒绝无 eval、重复 case、非法字段和模糊期望，但启动
 日志已经使用版本化事件、自动恢复的 `LogContext`、JSON Lines、中心脱敏和安全异常格式；Deep Agents/LangGraph 原生 Callback 已记录模型、工具和 interrupt/resume 生命周期并写入内容无关的审计，原生调用 ID 已映射为 span。当前仍没有统一 Metrics、OpenTelemetry/LangSmith exporter、Policy 决策全量事件、告警规则和目标日志平台验收。
 父子 Run 的 `parent_run_id/workflow_id/execution_key` 已进入第一批日志关联与机器可读
 `run_graph`；Control Plane 已具备持久化 AgentRun 身份、唯一 delegation key、严格状态迁移和
-`waiting_child`，但 Dispatcher 尚未通过该服务启动/恢复子 Run，CapabilityCall、Artifact 和
-Delivery 也未在同一因果模型中原子持久化，诊断工具仍不能重建完整运行图。
+`waiting_child`；`RunCoordinator` 已通过该服务幂等启动子 Run、联动父子状态并原子提交结构化终态，子审批
+只恢复子 checkpoint，子终态后再恢复父图。诊断工具已能从 trace、父/子 Run 或审批 ID 重建持久化
+AgentRun 与审批关系，也能从 CapabilityCall、Artifact 或 Delivery ID 关联并输出安全投影和状态矛盾。
+CapabilityCall 当前仍由内容无关 AuditEvent 投影，生命周期、审计、Artifact 和 Delivery 尚未在统一事务中
+原子持久化，因此诊断结果是跨事实存储的只读关联，而不是单一强一致事件流。
 
 完成标准：实现 [ADR-0011](adr/0011-run-control-plane-observability.md) 的统一事件与关联
 契约；指标基数受控；可选 Trace exporter 默认不采集正文；Policy/Approval/Artifact/Delivery 事件目录完整；

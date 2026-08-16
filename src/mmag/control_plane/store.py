@@ -451,16 +451,20 @@ class SQLiteControlPlane:
         reason: str,
         actor_id: str,
         trace_id: str,
+        payload_patch: dict[str, Any] | None = None,
     ) -> LifecycleEntity:
         now = time.time()
+        payload = {**dict(current.payload), **(payload_patch or {})}
         with self._lock:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
                 changed = self._connection.execute(
-                    """UPDATE lifecycle_entities SET state=?, version=version+1, updated_at=?
+                    """UPDATE lifecycle_entities
+                    SET state=?, version=version+1, payload=?, updated_at=?
                     WHERE entity_type=? AND entity_id=? AND version=?""",
                     (
                         to_state,
+                        _json(payload),
                         now,
                         current.entity_type.value,
                         current.entity_id,

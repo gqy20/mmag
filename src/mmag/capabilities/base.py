@@ -97,6 +97,13 @@ class CapabilityResult:
 
 
 @dataclass(frozen=True)
+class CapabilitySuspension:
+    """Runtime-neutral request to pause the current capability invocation."""
+
+    value: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class CapabilityAuthorization:
     """Policy decision returned before a capability handler runs."""
 

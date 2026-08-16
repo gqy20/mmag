@@ -477,14 +477,14 @@ Mattermost 身份；增加 Bot 不改变数据隔离语义，停用、轮换、�
 
 - [x] 选中 Skill 后同时收窄模型 Tool Schema、CapabilityContext 与 Runtime Request；
 - [x] 过渡 delegation 使用固定 Agent/Skill、可信 actor/scope、结构化结果与父子审计字段；
-- [x] 第一批传播 `workflow_id/parent_run_id/capability_call_id/execution_key/approval_id`，为运行日志生成 `event_id`，诊断报告输出 `run_graph`；
-- [x] 在 Control Plane 中持久化严格 `AgentRunSpec/AgentRunRecord`，按父 Run、父 Tool call、Agent/Skill 和 Package snapshot 生成唯一 `execution_key`，支持幂等创建与 `waiting_child` 状态迁移；尚未接入 Dispatcher；
+- [x] 第一批传播 `workflow_id/parent_run_id/capability_call_id/execution_key/approval_id`，为运行日志生成 `event_id`；
+- [x] 在 Control Plane 中持久化严格 `AgentRunSpec/AgentRunRecord`，按父 Run、父 Tool call、Agent/Skill 和 Package snapshot 生成唯一 `execution_key`；`RunCoordinator` 已接入幂等子 Run，结构化结果与终态原子提交，重放不重复执行已完成或失败的子 Agent；
 - [ ] 收敛 Router 与 `delegate_*` 的双重路由，单一专业请求由 Router 直达，多阶段任务由显式 Workflow 编排；
-- [ ] 使用稳定 `execution_key` 持久化父子 AgentRun 和不可变 Package/Skill/Policy snapshot；
-- [ ] 增加 `waiting_child`，子审批只恢复子 `thread_id`，子终态后幂等恢复父 Run；
+- [x] 使用稳定 `execution_key` 持久化父子 AgentRun 和不可变 Package/Skill/Policy snapshot；
+- [x] 父 Run 在子执行期间进入 `waiting_child`；子审批只恢复原子 `thread_id`，结构化子终态提交后再恢复父 Run 与父 LangGraph checkpoint；
 - [ ] 定义统一事件 Envelope、状态词汇、事件目录和 attributes Schema；
 - [ ] 关键 Lifecycle 变更与 AuditEvent 在控制面原子提交，再投影 Log/Metrics/Trace；
-- [ ] `debug-trace` 输出父子 Run、Capability、Approval、Artifact 和 Delivery 因果树与状态矛盾；
+- [x] `debug-trace` 可按 trace、父/子 Run、CapabilityCall、Approval、Artifact 或 Delivery ID 输出安全的 AgentRun、Capability、Approval、Artifact、Delivery 因果投影与状态矛盾；
 - [ ] 接入低基数 Metrics 与可选 OpenTelemetry，默认不采集正文和完整参数。
 
 退出标准：崩溃、checkpoint 重放和重复审批不会创建重复子 Run 或副作用；任意请求可从

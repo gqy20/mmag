@@ -92,12 +92,12 @@ AgentRouter
 - 返回后校验 Skill output、Agent result、Artifact 和预算；
 - provenance 由平台注入，模型不能填写。
 
-Agent 间委托统一经过 `AgentDispatcher`：注册的 delegate Capability 只能选择固定目标
+Agent 间委托统一经过 `RunCoordinator`：注册的 delegate Capability 只能选择固定目标
 Agent/Skill，子运行继承可信 actor 和 scope，Skill Capability 在目标 Agent Package 内再次
 收窄。委托结果返回结构化 `child_run` 关系、Skill 结果、Artifact refs 和 provenance，
 不再使用截断的 Agent 自由文本作为 handoff 契约。父子 run 关系记入 `agent.delegated`
-审计事件。该 Dispatcher 仍是直接等待子 Agent 的过渡实现；子运行独立业务生命周期、
-稳定幂等键、`waiting_child` 和跨 Agent 审批恢复仍未实现。目标边界见
+审计事件。Coordinator 已持久化独立子 AgentRun、稳定幂等键和 `waiting_child`，子审批使用原
+`thread_id` 恢复子图并在子终态后恢复父图；当前仍是同步协调单个子 Run，显式多阶段 Workflow 尚未实现。目标边界见
 [ADR-0011](adr/0011-run-control-plane-observability.md)。
 
 ## 当前 Package

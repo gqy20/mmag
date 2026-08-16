@@ -253,6 +253,13 @@ def _package_capability_context(
             if runtime_context is not None
             else request.run_id
         ),
+        lifecycle_run_id=(
+            request.run_id
+            if parent is not None and parent.run_id != request.run_id
+            else parent.lifecycle_run_id
+            if parent is not None
+            else ""
+        ),
         allowed_execution_profiles=frozenset(package.execution_profiles),
         installation_id=(
             runtime_context.installation_id

@@ -5,6 +5,7 @@ from mmag.control_plane import (
     AgentRunService,
     AgentRunSpec,
     AgentRunState,
+    EntityType,
     InvalidTransitionError,
     SQLiteControlPlane,
     delegation_execution_key,
@@ -125,4 +126,37 @@ def test_agent_run_identity_is_immutable_and_state_machine_supports_waiting_chil
             AgentRunState.SUCCEEDED,
             command_id="skip-child-run-1",
         )
+    store.close()
+
+
+def test_agent_run_result_and_terminal_state_commit_together(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    runs = AgentRunService(store)
+    queued, _ = runs.create_or_get(_spec("run-atomic"))
+    running = runs.transition(
+        queued.run_id,
+        AgentRunState.RUNNING,
+        command_id="start-atomic",
+        expected_version=queued.version,
+    )
+
+    completed = runs.finish(
+        running.run_id,
+        AgentRunState.SUCCEEDED,
+        result_envelope={"status": "succeeded", "result": {"value": 1}},
+        command_id="finish-atomic",
+        expected_version=running.version,
+        actor_id="user-1",
+        trace_id="trace-1",
+    )
+
+    assert completed.state is AgentRunState.SUCCEEDED
+    assert completed.result_envelope == {"status": "succeeded", "result": {"value": 1}}
+    assert [
+        item.to_state
+        for item in store.list_transitions(EntityType.AGENT_RUN, completed.run_id)
+    ] == ["running", "succeeded"]
+    assert store.get_lifecycle_entity(EntityType.AGENT_RUN, completed.run_id).payload[
+        "dispatch_result"
+    ] == completed.result_envelope
     store.close()

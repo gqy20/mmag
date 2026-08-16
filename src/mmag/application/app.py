@@ -17,7 +17,7 @@ from ..agent_packages import (
     DeepAgentProvider,
     DirectAgentProvider,
 )
-from ..agent_system import AgentDispatcher, AgentRegistry, AgentRouter
+from ..agent_system import AgentRegistry, AgentRouter, RunCoordinator
 from ..capabilities import (
     CapabilityExecutor,
     CapabilityRegistry,
@@ -29,6 +29,7 @@ from ..capabilities import (
 from ..client import MMClient
 from ..config import _log_config_loading, config
 from ..control_plane import (
+    AgentRunService,
     ApprovalService,
     LangGraphApprovalCoordinator,
     LifecycleService,
@@ -232,13 +233,14 @@ class Agent:
             self.capability_registry,
             personal_skills=self.control_store.personal_skills,
         )
-        self.agent_dispatcher = AgentDispatcher(
+        self.run_coordinator = RunCoordinator(
             self.agent_registry,
             self.agent_package_registry,
             self.skill_resolver,
+            AgentRunService(self.control_store, lifecycle),
             audit_sink=self.control_store,
         )
-        for delegate_spec in create_delegate_capabilities(self.agent_dispatcher):
+        for delegate_spec in create_delegate_capabilities(self.run_coordinator):
             self.capability_registry.register(
                 bind_langgraph_capability(delegate_spec, executor=self.capability_executor)
             )

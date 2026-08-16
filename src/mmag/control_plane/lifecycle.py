@@ -106,6 +106,7 @@ class LifecycleService:
         actor_id: str = "",
         trace_id: str = "",
         recovery: bool = False,
+        payload_patch: dict[str, Any] | None = None,
     ) -> LifecycleEntity:
         prior = self.store.find_transition(command_id)
         if prior:
@@ -125,7 +126,13 @@ class LifecycleService:
             )
         try:
             return self.store.transition_lifecycle(
-                current, to_state, command_id, reason, actor_id, trace_id
+                current,
+                to_state,
+                command_id,
+                reason,
+                actor_id,
+                trace_id,
+                payload_patch,
             )
         except RuntimeError as error:
             if str(error) == "version_conflict":

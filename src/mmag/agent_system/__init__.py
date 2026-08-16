@@ -12,11 +12,10 @@ from .core import (
     RuntimeAgent,
     SkillInvocation,
 )
-from .dispatcher import AgentDispatcher, AgentDispatchResult, AgentDispatchTarget
+from .dispatcher import AgentDispatchResult, AgentDispatchTarget, RunCoordinator
 
 __all__ = [
     "AgentDescriptor",
-    "AgentDispatcher",
     "AgentDispatchResult",
     "AgentDispatchTarget",
     "AgentOutput",
@@ -27,5 +26,6 @@ __all__ = [
     "CapabilityAgent",
     "ManagedAgent",
     "RuntimeAgent",
+    "RunCoordinator",
     "SkillInvocation",
 ]

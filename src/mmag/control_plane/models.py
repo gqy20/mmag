@@ -247,6 +247,7 @@ class AgentRunRecord:
     parent_run_id: str = ""
     parent_tool_call_id: str = ""
     skill_ref: str = ""
+    result_envelope: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

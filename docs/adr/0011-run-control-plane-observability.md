@@ -10,12 +10,12 @@ AuditEvent、结构化日志、Artifact 和 Outbox。专业请求既可以由应
 也可以由默认 `mmchat` 通过 `delegate_*` Capability 同步调用子 Agent。
 
 当前 delegation 已不再传递截断自由文本，并能解析固定 Agent/Skill、继承可信 actor/scope、返回结构化
-结果及记录父子审计关系；但它仍直接 `await agent.run()`，子 run ID 不是重放稳定键，也没有独立生命周期、
-父 checkpoint 等待状态或跨 Agent 审批恢复。因此它只能作为过渡实现，不能视为完整多 Agent 调度。
+结果及记录父子审计关系。`RunCoordinator` 已接入持久化子 AgentRun、稳定重放键、`waiting_child` 和跨
+Agent 审批恢复；它当前仍同步协调一个子 Run，尚未扩展为显式多阶段 Product Workflow。
 
 日志侧已经有 `log_event()`、`LogContext`、Deep Agents Callback 和独立 AuditEvent，但关联字段、事件名称、
-状态词汇和 details Schema 尚未统一。当前诊断主要按一个 `trace_id` 平铺日志与审计，不能可靠还原父子 Run、
-CapabilityCall、Approval、Artifact 和 Delivery 的因果图。
+状态词汇和 details Schema 尚未统一。当前诊断可以从多个运行实体重建安全因果投影，但生命周期迁移、
+AuditEvent 和各业务实体尚未在同一事务中原子记录。
 
 ## 决策方向
 
@@ -47,9 +47,9 @@ Channel Adapter
 经由 `mmchat → delegate_* → 专业 Agent` 形成第二套路由。跨 Agent 只用于真实多阶段 Workflow，目标
 Agent/Skill 由服务端注册定义，模型不能用自由文本指定任意 Package 或扩大权限。
 
-### 3. 用 RunCoordinator 取代同步 AgentDispatcher
+### 3. 以 RunCoordinator 统一子运行协调
 
-目标实现使用应用层 `RunCoordinator`（名称以实现时现有模块边界为准）统一启动和恢复主/子 AgentRun。
+当前使用应用层 `RunCoordinator` 统一启动和恢复主/子 AgentRun。
 模型侧可以看到一个薄的 Workflow/Delegation Tool，但该 Tool 只提交受治理命令，不直接同步拥有子 Agent
 生命周期。
 
@@ -126,18 +126,22 @@ error_code 等低基数标签。
 - 单 AgentRun 的稳定 LangGraph `thread_id`、checkpoint 和审批恢复；
 - Agent/Skill Capability 精确投影与二次强制收窄；
 - delegation 的固定目标、可信 actor/scope 继承、结构化结果和父子审计字段；
+- 独立持久化子 AgentRun、稳定 delegation `execution_key` 与不可变 Package/Skill snapshot；
+- 父 Run 的 `waiting_child` 状态，以及先恢复子 `thread_id`、子终态后恢复父 checkpoint 的一层委派审批链；
+- 可按 trace、父/子 Run、CapabilityCall、审批、Artifact 或 Delivery ID 重建内容无关的运行因果投影，
+  并检查父子、等待审批与交付引用状态矛盾；
+- `RunCoordinator` 是唯一子运行生命周期协调入口，旧 Dispatcher 类型和兼容别名已删除；
 - 内容无关 Runtime Callback、结构化日志、AuditEvent 和按 trace/run 查询。
 
 尚未实现：
 
-- 独立持久化子 AgentRun 与稳定 delegation `execution_key`；
-- `waiting_child`、子审批完成后自动恢复父图；
+- 在现有 `RunCoordinator` 之上实现显式、可异步恢复的多阶段 Product Workflow；
 - 原子生命周期/审计事件记录器；
 - 完整事件目录与 attributes Schema；
-- 父子运行图诊断、Metrics 和 OpenTelemetry exporter。
+- Metrics 和 OpenTelemetry exporter。
 
-迁移采用单向替换：当 RunCoordinator 覆盖现有行为并通过崩溃/重放/越权测试后，删除过渡
-`AgentDispatcher`，不保留两套调度路径或兼容转发层。
+协调器迁移已经单向完成，不保留旧类型或兼容转发层。未来 Product Workflow 必须复用现有
+`RunCoordinator` 与 `AgentRunService`，不能新增第二套子运行生命周期。
 
 ## 验收条件
 

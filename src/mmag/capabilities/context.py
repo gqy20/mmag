@@ -34,6 +34,7 @@ class CapabilityContext:
     execution_key: str = ""
     parent_run_id: str = ""
     workflow_id: str = ""
+    lifecycle_run_id: str = ""
 
 
 _CURRENT_CONTEXT: ContextVar[CapabilityContext | None] = ContextVar(

@@ -43,6 +43,14 @@ class AgentRunConflictError(RuntimeError):
     """A run identifier or replay key was reused with different trusted identity."""
 
 
+class AgentRunInProgressError(RuntimeError):
+    """A replay reached a child AgentRun that is already executing."""
+
+
+class AgentRunTerminalError(RuntimeError):
+    """A failed or cancelled child AgentRun cannot be executed again."""
+
+
 class AgentRunStore:
     def __init__(self, connection: Any, lock: Any) -> None:
         self._connection = connection
@@ -100,6 +108,7 @@ class AgentRunStore:
         trace_id: str,
         intent: str,
         capabilities: tuple[str, ...],
+        workflow_id: str = "",
     ) -> None:
         with self._lock:
             try:
@@ -116,6 +125,7 @@ class AgentRunStore:
                         "snapshot": snapshot,
                         "actor_id": actor_id,
                         "trace_id": trace_id,
+                        "workflow_id": workflow_id or entity_id,
                         "intent": intent,
                         "capabilities": list(capabilities),
                     }
@@ -268,6 +278,7 @@ class AgentRunStore:
             parent_run_id=str(payload.get("parent_run_id") or ""),
             parent_tool_call_id=str(payload.get("parent_tool_call_id") or ""),
             skill_ref=str(payload.get("skill_ref") or ""),
+            result_envelope=dict(payload.get("dispatch_result") or {}),
         )
 
 
@@ -289,6 +300,9 @@ class AgentRunService:
     def create_or_get(self, spec: AgentRunSpec) -> tuple[AgentRunRecord, bool]:
         return self.store.runs.create_or_get(spec)
 
+    def get(self, run_id: str) -> AgentRunRecord:
+        return self.store.runs.get(run_id)
+
     def transition(
         self,
         run_id: str,
@@ -299,6 +313,7 @@ class AgentRunService:
         reason: str = "",
         actor_id: str = "",
         trace_id: str = "",
+        payload_patch: dict[str, Any] | None = None,
     ) -> AgentRunRecord:
         self.lifecycle.transition(
             EntityType.AGENT_RUN,
@@ -309,5 +324,52 @@ class AgentRunService:
             reason=reason,
             actor_id=actor_id,
             trace_id=trace_id,
+            payload_patch=payload_patch,
         )
         return self.store.runs.get(run_id)
+
+    def finish(
+        self,
+        run_id: str,
+        state: AgentRunState,
+        *,
+        result_envelope: dict[str, Any],
+        command_id: str,
+        expected_version: int,
+        actor_id: str,
+        trace_id: str,
+    ) -> AgentRunRecord:
+        if state not in {AgentRunState.SUCCEEDED, AgentRunState.EXHAUSTED}:
+            raise ValueError("AgentRun finish requires a successful terminal state")
+        return self.transition(
+            run_id,
+            state,
+            command_id=command_id,
+            expected_version=expected_version,
+            actor_id=actor_id,
+            trace_id=trace_id,
+            payload_patch={
+                "runtime_status": state.value,
+                "dispatch_result": result_envelope,
+            },
+        )
+
+    def fail(
+        self,
+        run_id: str,
+        *,
+        error_code: str,
+        command_id: str,
+        expected_version: int,
+        actor_id: str,
+        trace_id: str,
+    ) -> AgentRunRecord:
+        return self.transition(
+            run_id,
+            AgentRunState.FAILED,
+            command_id=command_id,
+            expected_version=expected_version,
+            actor_id=actor_id,
+            trace_id=trace_id,
+            payload_patch={"runtime_status": "failed", "error_code": error_code},
+        )

@@ -24,7 +24,7 @@ help:
 	@echo "  make debug-reply   回复 Bugs 频道指定帖子 (用法: make debug-reply POST_ID=xxx MSG=xxx)"
 	@echo "  make debug-test    发测试消息到 mmag-test 并追踪日志/审计 (用法: make debug-test MSG=xxx [WAIT=120])"
 	@echo "  make debug-status  查看 bot 进程、已加载能力和最近运行"
-	@echo "  make debug-trace   按 trace/run ID 查看路由到交付时间线 (用法: make debug-trace ID=xxx)"
+	@echo "  make debug-trace   按 trace/run/call/approval/artifact/delivery ID 查看因果图"
 	@echo ""
 	@echo "环境:"
 	@echo "  .env            主配置 (默认加载)"
@@ -128,6 +128,6 @@ debug-status:
 
 debug-trace:
 	@if [ -z "$(ID)" ]; then \
-		echo "用法: make debug-trace ID=<trace-id|run-id>"; exit 1; \
+		echo "用法: make debug-trace ID=<trace-id|run-id|call-id|approval-id|artifact-id|delivery-id>"; exit 1; \
 	fi
 	uv run python -m scripts.debug trace "$(ID)" $(if $(JSON),--json,)

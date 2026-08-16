@@ -25,13 +25,14 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 from pydantic import SecretStr
 
 from ..capabilities import (
     AuthorizationDecision,
     CapabilityResult,
     CapabilityStatus,
+    CapabilitySuspension,
     bind_capability_context,
     get_capability_context,
 )
@@ -436,6 +437,8 @@ class DeepAgentRuntime:
                         preauthorized=True,
                     )
             payload = result.to_payload()
+            if isinstance(payload, CapabilitySuspension):
+                interrupt(dict(payload.value))
             calls.append(
                 {
                     "name": name,
@@ -810,6 +813,35 @@ def _interrupt_payload(
         if governance is not None
         else {}
     )
+    delegated_child = (
+        {
+            "run_id": str(value.get("child_run_id") or ""),
+            "interrupt_id": str(value.get("child_interrupt_id") or ""),
+            "resume": dict(value.get("child_resume") or {}),
+        }
+        if value.get("kind") == "delegated_agent_approval"
+        else {}
+    )
+    capability_snapshot = (
+        {
+            "trace_id": capability.trace_id,
+            "conversation_id": capability.conversation_id,
+            "message_id": capability.message_id,
+            "message": capability.message,
+            "run_id": capability.run_id,
+            "parent_run_id": capability.parent_run_id,
+            "workflow_id": capability.workflow_id,
+            "lifecycle_run_id": capability.lifecycle_run_id,
+            "installation_id": capability.installation_id,
+            "tenant_id": capability.tenant_id,
+            "scope_kind": capability.scope_kind,
+            "owner_id": capability.owner_id,
+            "team_id": capability.team_id,
+            "channel_type": capability.channel_type,
+        }
+        if capability is not None
+        else {}
+    )
     return {
         "id": str(getattr(interruption, "id", "")),
         "value": {
@@ -823,6 +855,8 @@ def _interrupt_payload(
                 sorted(capability.allowed_execution_profiles) if capability is not None else []
             ),
             "skill_context": skill.to_state() if skill is not None else {},
+            **({"capability_context": capability_snapshot} if capability_snapshot else {}),
+            **({"delegated_child": delegated_child} if delegated_child else {}),
         },
     }
 
