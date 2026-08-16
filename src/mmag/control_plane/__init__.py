@@ -11,6 +11,7 @@ from .approval_policy import (
     MattermostApprovalAuthorizer,
     StaticApprovalAuthorizer,
 )
+from .capability_calls import CapabilityCallConflictError, CapabilityCallService
 from .context import (
     AssembledContext,
     ContextAssembler,
@@ -35,6 +36,8 @@ from .models import (
     ApprovalRequestState,
     Artifact,
     AuditEvent,
+    CapabilityCallRecord,
+    CapabilityCallSpec,
     CapabilityCallState,
     DeliveryRecord,
     DeliveryState,
@@ -99,6 +102,10 @@ __all__ = [
     "ApprovalRequestState",
     "AssembledContext",
     "CapabilityCallState",
+    "CapabilityCallConflictError",
+    "CapabilityCallRecord",
+    "CapabilityCallService",
+    "CapabilityCallSpec",
     "ContextAssembler",
     "DeliveryRecord",
     "DeliveryState",

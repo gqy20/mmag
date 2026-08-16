@@ -50,15 +50,15 @@ def test_control_plane_ready_requires_expected_task_and_capabilities():
         actor="requester",
         message="create task",
         expected={
-            "control_plane": {"agent_name": "mmchat", "delivery_states_all": ["delivered"]},
-            "capabilities": {"contains_all": ["delegate_project", "create_task"]},
+            "control_plane": {"agent_name": "project", "delivery_states_all": ["delivered"]},
+            "capabilities": {"contains_all": ["create_task"]},
             "tasks": {"minimum_created": 1},
         },
     )
     incomplete = EvaluationObservation(
         root_post_id="post-1",
         run_id="mattermost:post-1",
-        control_plane=ControlPlaneObservation(agent_name="mmchat"),
+        control_plane=ControlPlaneObservation(agent_name="project"),
     )
 
     assert not MattermostEvaluationDriver._control_plane_ready(scenario, incomplete)

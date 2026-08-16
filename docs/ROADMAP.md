@@ -50,7 +50,7 @@
 - [x] Prompt/Schema/eval/Policy/Model Policy 进入 Package Hash 和 provenance；
 - [x] Agent Manifest 绑定 Skill 精确版本，Skill Set Hash 进入 Agent 快照；
 - [x] 运行时能力收窄为 Agent、Skill 与 Policy 的交集；
-- [x] `web-research@1.2.1` 作为可复用 Skill，由 `mmchat@2.2.2` 激活；
+- [x] `web-research@1.2.1` 作为可复用 Skill，由 `mmchat@2.3.0` 激活；
 - [x] 选中 Skill 投影到 StateBackend，由 Deep Agents SkillsMiddleware 原生渐进披露并随 checkpoint 恢复；
 - [x] strict Prompt render、输入/输出/Artifact Schema 和预算强制；
 - [x] Model Policy Registry 严格加载并校验 route。
@@ -288,7 +288,7 @@
 3. 审计闭环（P1）：
    - [ ] 为 Agent 成功/失败/超时、Runtime、每次 CapabilityCall、Policy allow/deny/approval、模型调用、
      Approval、Execution、Artifact、Inbox 和 Delivery 建立统一事件目录与 details Schema；
-   - [ ] 当前 LangGraph Callback 已持久记录调用 ID、run/trace、能力名、Policy 决策、状态、耗时和安全输入摘要；后续将分阶段 AuditEvent 收敛为具有状态约束的 `CapabilityCall` 实体生命周期；
+   - [x] LangGraph 工具调用已收敛为具有稳定 execution key、严格状态约束和审批关联的持久 `CapabilityCall`；Callback/AuditEvent 仅作为内容无关观测投影；
    - [ ] 所有审计事件记录 `schema_version`、`created_at`、actor/scope/trace/run 和 Package/Prompt/Skill/
      Policy/Model Policy provenance；失败分支与恢复分支不得漏记终态；
    - [ ] 扩展审计查询，支持 trace/run/actor/scope/event/time/status、游标分页和企业导出；定义保留、归档、
@@ -296,8 +296,8 @@
    - [ ] 审计写入失败必须产生可告警的降级事件；高风险副作用按策略决定 fail-close，不能统一静默继续。
 
 4. Metrics、Trace 与日志运维（P1）：
-   - [ ] 输出 Agent/Skill/Capability/Approval/Delivery 的 duration、status、error code、queue depth、retry、
-     token 和 cost 指标，限制 actor、run、trace 等高基数字段进入 metrics label；
+   - [x] 内置 Metrics 已输出 Lifecycle、CapabilityCall 和 Artifact 的 status、error code 与 duration 聚合，并通过 label allowlist 拒绝 actor、run、trace 等高基数字段；
+   - [ ] 继续补齐 Agent/Skill/Approval/Delivery queue depth、retry、token、cost 指标及目标平台 exporter；
    - [ ] 可选接入 OpenTelemetry，复用统一 trace/run 上下文；默认不采集 Prompt、消息正文、工具参数、
      stdout/stderr 或 Artifact 内容；
    - [ ] 容器部署默认写 stdout 交给平台采集；本地文件模式修复禁用语义，并实现安全轮转、UTC 时区、
@@ -418,7 +418,7 @@ Agent / Skill
 - [x] MCP Server、启停状态和平台工具清单统一由根目录 `.mcp.json` 管理；Agent YAML 只分配已注册的
   `mcp_<server>_<tool>` Capability，Skill 只能进一步缩小；
 - [x] 内置知识与消息 Capability 已经过统一 `CapabilityExecutor` 和当前 conversation 资源约束；
-- [ ] 定义平台无关的 `KnowledgeQuery` / `KnowledgeResult` / `SourceRef` 契约，至少包含来源系统、资源 ID、
+- [x] 定义平台无关的 `KnowledgeQuery` / `KnowledgeResult` / `SourceRef` 契约，包含来源系统、资源 ID、
   版本、标题、片段、更新时间、可见 Scope 和内容 Hash；模型只消费有界结果，不接触 Provider Token；
 - [ ] 先接入一个真实企业知识源验证完整链路，可通过 MCP 或窄口 REST Capability 适配；候选包括
   Confluence、SharePoint、Notion、Google Drive、企业 Wiki 或已有向量检索服务；
@@ -473,21 +473,23 @@ Mattermost 身份；增加 Bot 不改变数据隔离语义，停用、轮换、�
 
 ## 下一步 15：Run Control Plane 与统一可观测模型
 
-优先级：P0，目标设计见 [ADR-0011](adr/0011-run-control-plane-observability.md)（Proposed）。
+优先级：P0，接受的目标设计见 [ADR-0011](adr/0011-run-control-plane-observability.md)。
 
 - [x] 选中 Skill 后同时收窄模型 Tool Schema、CapabilityContext 与 Runtime Request；
 - [x] 过渡 delegation 使用固定 Agent/Skill、可信 actor/scope、结构化结果与父子审计字段；
 - [x] 第一批传播 `workflow_id/parent_run_id/capability_call_id/execution_key/approval_id`，为运行日志生成 `event_id`；
 - [x] 在 Control Plane 中持久化严格 `AgentRunSpec/AgentRunRecord`，按父 Run、父 Tool call、Agent/Skill 和 Package snapshot 生成唯一 `execution_key`；`RunCoordinator` 已接入幂等子 Run，结构化结果与终态原子提交，重放不重复执行已完成或失败的子 Agent；
-- [ ] 收敛 Router 与 `delegate_*` 的双重路由，单一专业请求由 Router 直达，多阶段任务由显式 Workflow 编排；
+- [x] 单一专业请求由 Router 直达；`mmchat@2.3.0` 不再分配 `delegate_*`，旧能力虽保留注册但不会投影给任何生产 Agent；
+- [ ] 在现有 RunCoordinator 之上为真实多阶段任务实现显式 Workflow 编排；
 - [x] 使用稳定 `execution_key` 持久化父子 AgentRun 和不可变 Package/Skill/Policy snapshot；
 - [x] 父 Run 在子执行期间进入 `waiting_child`；子审批只恢复原子 `thread_id`，结构化子终态提交后再恢复父 Run 与父 LangGraph checkpoint；
 - [ ] 定义统一事件 Envelope、状态词汇、事件目录和 attributes Schema；
 - [x] AgentRun、Approval、Delivery 和通用 Lifecycle 的创建/迁移与内容无关 AuditEvent 在控制面原子提交；普通日志继续作为事务后投影；
 - [x] Approval 决策投影、Delivery 认领/结果/重试/恢复与对应 Lifecycle、transition、AuditEvent 在同一事务提交；
-- [ ] 将 CapabilityCall 从内容无关 Audit 投影提升为独立持久化生命周期，再投影 Metrics/Trace；
+- [x] 将 CapabilityCall 从内容无关 Audit 投影提升为独立持久化生命周期，并投影低基数 Metrics；审批等待、拒绝、恢复和重放使用同一调用事实；
 - [x] `debug-trace` 可按 trace、父/子 Run、CapabilityCall、Approval、Artifact 或 Delivery ID 输出安全的 AgentRun、Capability、Approval、Artifact、Delivery 因果投影与状态矛盾；
-- [ ] 接入低基数 Metrics 与可选 OpenTelemetry，默认不采集正文和完整参数。
+- [x] 接入进程内低基数 Metrics，并提供默认关闭、属性 allowlist 的 Trace exporter 边界；
+- [ ] 接入和验收实际 OpenTelemetry/LangSmith exporter，默认不采集正文和完整参数。
 
 退出标准：崩溃、checkpoint 重放和重复审批不会创建重复子 Run 或副作用；任意请求可从
 可信标识重建完整运行因果树；日志、审计、指标和 Trace 共享关联契约但不混淆事实存储。

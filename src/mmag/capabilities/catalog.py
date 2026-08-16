@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 
 from ..client import channel_type_label
 from ..logger import get_logger
 from .base import CapabilityEffect, CapabilitySpec, SourcePolicy
+from .context import get_capability_context
+from .knowledge import KnowledgeQuery, KnowledgeResult, SourceRef
 
 log = get_logger(__name__)
 
@@ -158,26 +161,45 @@ def create_search_knowledge_capability(memory) -> CapabilitySpec:
         query: str,
         limit: int = SEARCH_KNOWLEDGE_DEFAULT_LIMIT,
     ) -> dict:
+        context = get_capability_context()
+        scope_id = context.scope if context is not None else channel_id
+        bounded_limit = min(limit, SEARCH_KNOWLEDGE_MAX_LIMIT)
+        KnowledgeQuery(query, scope_id, bounded_limit)
         results = await asyncio.to_thread(
             memory.get_relevant_knowledge,
             channel_id,
             query,
-            min(limit, SEARCH_KNOWLEDGE_MAX_LIMIT),
+            bounded_limit,
         )
         if not results:
-            return {"count": 0, "items": [], "note": "未找到相关知识"}
-
-        return {
-            "count": len(results),
-            "items": [
+            return {**KnowledgeResult((), ()).to_dict(), "note": "未找到相关知识"}
+        items: list[dict] = []
+        sources: list[SourceRef] = []
+        for result in results:
+            key = str(result["key"])
+            value = str(result["value"])
+            updated_at = float(result.get("updated_at") or 0)
+            resource_id = str(result.get("id") or hashlib.sha256(key.encode()).hexdigest())
+            items.append(
                 {
-                    "key": result["key"],
-                    "value": result["value"],
+                    "key": key,
+                    "value": value,
                     "confidence": result.get("_score", result.get("confidence", 0)),
                 }
-                for result in results
-            ],
-        }
+            )
+            sources.append(
+                SourceRef.from_content(
+                    source_system="mmag.team_knowledge",
+                    resource_id=resource_id,
+                    version=str(updated_at or result.get("mentioned_count") or "1"),
+                    title=key,
+                    snippet=value[:500],
+                    updated_at=updated_at,
+                    visible_scope_id=scope_id,
+                    content=f"{key}\n{value}",
+                )
+            )
+        return KnowledgeResult(tuple(items), tuple(sources)).to_dict()
 
     return CapabilitySpec(
         name="search_knowledge",
@@ -208,7 +230,7 @@ def create_search_knowledge_capability(memory) -> CapabilitySpec:
         effect=CapabilityEffect.READ,
         permission="memory:knowledge:read",
         timeout_seconds=10,
-        source_policy=SourcePolicy.NONE,
+        source_policy=SourcePolicy.AUTO,
     )
 
 
@@ -223,6 +245,8 @@ def create_search_messages_capability(memory) -> CapabilitySpec:
         after_ts: float | None = None,
         limit: int = SEARCH_MESSAGES_DEFAULT_LIMIT,
     ) -> dict:
+        context = get_capability_context()
+        scope_id = context.scope if context is not None else str(channel_id or "team")
         results = await asyncio.to_thread(
             memory.search_messages,
             query=query,
@@ -233,18 +257,54 @@ def create_search_messages_capability(memory) -> CapabilitySpec:
             limit=min(limit, SEARCH_MESSAGES_MAX_LIMIT),
         )
         if not results:
-            return {"count": 0, "messages": [], "note": "未找到匹配消息"}
-        messages = [
-            {
-                "channel_id": result.get("channel_id", ""),
-                "user": result.get("username", "?"),
-                "message": (result.get("message") or "")[:500],
-                "time_ms": int((result.get("create_at") or 0) * 1000),
-                "relevance_score": result.get("_score"),
+            return {
+                "schema_version": "1.0",
+                "count": 0,
+                "messages": [],
+                "sources": [],
+                "partial": False,
+                "error_code": "",
+                "note": "未找到匹配消息",
             }
-            for result in results
-        ]
-        return {"count": len(messages), "messages": messages}
+        messages = []
+        sources = []
+        for result in results:
+            message = str(result.get("message") or "")
+            source_channel = str(result.get("channel_id") or channel_id or "")
+            resource_id = str(result.get("id") or result.get("post_id") or "")
+            if not resource_id:
+                resource_id = hashlib.sha256(
+                    f"{source_channel}\n{result.get('create_at')}\n{message}".encode()
+                ).hexdigest()
+            messages.append(
+                {
+                    "channel_id": result.get("channel_id", ""),
+                    "user": result.get("username", "?"),
+                    "message": message[:500],
+                    "time_ms": int((result.get("create_at") or 0) * 1000),
+                    "relevance_score": result.get("_score"),
+                }
+            )
+            sources.append(
+                SourceRef.from_content(
+                    source_system="mattermost.message",
+                    resource_id=resource_id,
+                    version=str(result.get("update_at") or result.get("create_at") or "1"),
+                    title=f"Mattermost message in {source_channel}",
+                    snippet=message[:500],
+                    updated_at=float(result.get("update_at") or result.get("create_at") or 0),
+                    visible_scope_id=scope_id,
+                    content=message,
+                ).to_dict()
+            )
+        return {
+            "schema_version": "1.0",
+            "count": len(messages),
+            "messages": messages,
+            "sources": sources,
+            "partial": False,
+            "error_code": "",
+        }
 
     return CapabilitySpec(
         name="search_messages",
@@ -293,7 +353,7 @@ def create_search_messages_capability(memory) -> CapabilitySpec:
         effect=CapabilityEffect.READ,
         permission="memory:messages:read",
         timeout_seconds=10,
-        source_policy=SourcePolicy.NONE,
+        source_policy=SourcePolicy.AUTO,
     )
 
 

@@ -31,6 +31,7 @@ from ..config import _log_config_loading, config
 from ..control_plane import (
     AgentRunService,
     ApprovalService,
+    CapabilityCallService,
     LangGraphApprovalCoordinator,
     LifecycleService,
     MattermostAccessGuard,
@@ -180,6 +181,7 @@ class Agent:
             checkpoint_path=config.checkpoint_db_path,
             audit_sink=self.control_store,
             workspace_backend_factory=self.workspace_backend_factory,
+            capability_calls=CapabilityCallService(self.control_store),
         )
         self.runtime = ModelGateway(
             {"default": self.deep_agent_runtime},

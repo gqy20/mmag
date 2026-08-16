@@ -4,6 +4,7 @@ from mmag.control_plane import (
     ApprovalAlreadyDecidedError,
     ApprovalExpiredError,
     ApprovalService,
+    Artifact,
     EntityType,
     InvalidTransitionError,
     LifecycleService,
@@ -242,4 +243,32 @@ def test_expired_approval_cannot_be_approved_or_decided_twice(tmp_path):
     approvals.decide(decided.id, approved=False, actor_id="user-1")
     with pytest.raises(ApprovalAlreadyDecidedError):
         approvals.decide(decided.id, approved=True, actor_id="user-1")
+    store.close()
+
+
+def test_artifact_record_and_safe_audit_are_atomic(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    artifact = Artifact(
+        "artifact-1",
+        "run-1",
+        "scope-1",
+        "research_report",
+        "ab/artifact-1/report.md",
+        {
+            "schema_version": "1.0",
+            "sha256": "a" * 64,
+            "size_bytes": 42,
+            "filename": "sensitive-report.md",
+        },
+    )
+
+    store.create_artifact(artifact)
+
+    audit = store.list_audits(event_type="artifact.created", target=artifact.id)[0]
+    assert audit.scope_id == "scope-1"
+    assert audit.details["kind"] == "research_report"
+    assert "filename" not in audit.details
+    assert store.metrics.value(
+        "mmag_artifacts_total", status="created", event_type="research_report"
+    ) == 1
     store.close()

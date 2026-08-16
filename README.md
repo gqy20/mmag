@@ -84,11 +84,11 @@ Deep Agents 的 `StateBackend` 只保存当前 graph/thread 的小型工作文�
 
 | Agent | 绑定 Skill | 职责 |
 |---|---|---|
-| `mmchat@2.2.2` | `web-research@1.2.1` | 默认 Mattermost 协同入口、个人/共享上下文和网络研究 |
+| `mmchat@2.3.0` | `web-research@1.2.1` | 默认 Mattermost 协同入口、个人/共享上下文和网络研究 |
 | `link@2.0.1` | — | 确定性分析单个 URL，不启动不必要的模型循环 |
 | `report@2.3.0` | `report@1.3.1`、`meeting@1.1.0` | 证据账本式研究报告与可追溯会议总结 |
 | `ppt@3.1.2` | `slides@3.1.1` | 从受治理 Markdown 生成可编辑 PPTX、源文件和 PNG 预览 |
-| `project@2.0.3` | `project@1.2.1` | 项目计划、状态简报、任务拆解和当前 Scope 内的本地任务跟踪 |
+| `project@2.0.4` | `project@1.2.1` | 项目计划、状态简报、任务拆解和当前 Scope 内的本地任务跟踪 |
 
 完整权限和交付边界见[数字员工清单](docs/WORKERS.md)。
 

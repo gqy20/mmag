@@ -102,12 +102,12 @@ Agent/Skill，子运行继承可信 actor 和 scope，Skill Capability 在目标
 
 ## 当前 Package
 
-- `mmchat@2.2.2`：默认 Mattermost 会话 Agent，区分个人/共享 Scope，允许 `web-research@1.2.1` 和 crawl 搜索子集，并通过 `delegate_project` 转交任务管理请求；
+- `mmchat@2.3.0`：默认 Mattermost 会话 Agent，区分个人/共享 Scope，允许 `web-research@1.2.1` 和 crawl 搜索子集；不再分配 `delegate_*`，专业请求由应用 Router 直达对应 Agent；
 - `link@2.0.1`：`direct` 链接分析；
 - `report@2.3.0`：绑定 `report@1.3.1`、`meeting@1.1.0` 和完整 crawl 工具集；会议行动项由模型
   保留时间原文并输出上海本地规范化截止时间，平台负责严格校验；
 - `ppt@3.1.2`：绑定 `slides@3.1.1` 与 `ppt@2.2.0` Execution Profile；
-- `project@2.0.3`：绑定 `project@1.2.1`，独占精确注册的本地任务 CRUD 能力；任务身份、频道和 Scope 来自可信请求上下文，并在每次访问前重新校验。
+- `project@2.0.4`：绑定 `project@1.2.1`，独占精确注册的本地任务 CRUD 能力；任务身份、频道和 Scope 来自可信请求上下文，并在每次访问前重新校验。
 
 ## 新建 Agent
 

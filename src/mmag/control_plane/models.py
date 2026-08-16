@@ -251,6 +251,63 @@ class AgentRunRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class CapabilityCallSpec:
+    """Immutable trusted identity for one runtime capability invocation."""
+
+    call_id: str
+    execution_key: str
+    capability: str
+    actor_id: str
+    scope_id: str
+    trace_id: str
+    run_id: str
+    workflow_id: str
+    tool_call_id: str
+    agent_ref: str = ""
+    skill_ref: str = ""
+    policy_ref: str = ""
+    input_sha256: str = ""
+
+    def __post_init__(self) -> None:
+        required = (
+            self.call_id,
+            self.execution_key,
+            self.capability,
+            self.actor_id,
+            self.scope_id,
+            self.trace_id,
+            self.run_id,
+            self.workflow_id,
+            self.tool_call_id,
+        )
+        if not all(value.strip() for value in required):
+            raise ValueError("CapabilityCall trusted identity is incomplete")
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityCallRecord:
+    call_id: str
+    execution_key: str
+    capability: str
+    actor_id: str
+    scope_id: str
+    trace_id: str
+    run_id: str
+    workflow_id: str
+    tool_call_id: str
+    state: CapabilityCallState
+    version: int
+    agent_ref: str = ""
+    skill_ref: str = ""
+    policy_ref: str = ""
+    input_sha256: str = ""
+    result_payload: Any = None
+    tool_content: str = ""
+    duration_ms: int = 0
+    error_code: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class Scope:
     id: str
     organization_id: str = ""

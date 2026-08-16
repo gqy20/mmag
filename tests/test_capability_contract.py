@@ -18,6 +18,7 @@ from mmag.capabilities import (
     create_get_posts_capability,
     create_save_knowledge_capability,
     create_search_knowledge_capability,
+    create_search_messages_capability,
 )
 
 
@@ -125,7 +126,33 @@ async def test_search_knowledge_applies_schema_default_and_limit():
     )
 
     assert result["count"] == 1
+    assert result["sources"][0]["source_system"] == "mmag.team_knowledge"
+    assert len(result["sources"][0]["content_sha256"]) == 64
     memory.get_relevant_knowledge.assert_called_once_with("channel-1", "deploy", 10)
+
+
+@pytest.mark.asyncio
+async def test_search_messages_returns_bounded_source_refs():
+    memory = MagicMock()
+    memory.search_messages.return_value = [
+        {
+            "id": "post-1",
+            "channel_id": "channel-1",
+            "username": "alice",
+            "message": "已经确认发布窗口",
+            "create_at": 123.0,
+        }
+    ]
+
+    result = await _execute(
+        create_search_messages_capability(memory),
+        query="发布窗口",
+        channel_id="channel-1",
+    )
+
+    assert result["sources"][0]["resource_id"] == "post-1"
+    assert result["sources"][0]["visible_scope_id"] == "channel-1"
+    assert result["sources"][0]["snippet"] == "已经确认发布窗口"
 
 
 @pytest.mark.asyncio

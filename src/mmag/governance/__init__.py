@@ -2,7 +2,15 @@
 
 from .gateway import BudgetExceededError, ModelGateway, QuotaLedger, UsageSnapshot
 from .model_policy import ModelPolicy, ModelPolicyDocumentError, ModelPolicyRegistry
-from .ops import Metrics, atomic_copy, backup_sqlite, purge_expired_rows
+from .ops import (
+    Metrics,
+    MetricSample,
+    SafeTrace,
+    TraceExporter,
+    atomic_copy,
+    backup_sqlite,
+    purge_expired_rows,
+)
 from .policy import (
     GovernanceContext,
     PolicyCapabilityAuthorizer,
@@ -22,6 +30,7 @@ __all__ = [
     "EnvironmentSecretProvider",
     "GovernanceContext",
     "Metrics",
+    "MetricSample",
     "ModelGateway",
     "ModelPolicy",
     "ModelPolicyDocumentError",
@@ -36,6 +45,8 @@ __all__ = [
     "RegistryPolicyAuthorizer",
     "QuotaLedger",
     "SecretValue",
+    "SafeTrace",
+    "TraceExporter",
     "UsageSnapshot",
     "atomic_copy",
     "backup_sqlite",

@@ -37,6 +37,7 @@ from ..capabilities import (
     get_capability_context,
 )
 from ..config import config
+from ..control_plane.models import CapabilityCallSpec, CapabilityCallState
 from ..governance import get_governance_context
 from ..logger import get_logger, log_context, log_event, safe_hash
 from ..model_artifacts import strip_model_artifacts
@@ -74,6 +75,7 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
     from ..capabilities import CapabilityRegistry
+    from ..control_plane.capability_calls import CapabilityCallService
     from ..execution import WorkspaceBackendFactory
 
 
@@ -171,6 +173,7 @@ class DeepAgentRuntime:
         model_factory: ManagedChatModelFactory | None = None,
         audit_sink: AuditSink | None = None,
         workspace_backend_factory: WorkspaceBackendFactory | None = None,
+        capability_calls: CapabilityCallService | None = None,
     ) -> None:
         _register_mmag_profile()
         self.capability_registry = capability_registry
@@ -178,6 +181,7 @@ class DeepAgentRuntime:
         self.model_factory = model_factory or ManagedChatModelFactory()
         self.audit_sink = audit_sink
         self.workspace_backend_factory = workspace_backend_factory
+        self.capability_calls = capability_calls
         self._checkpointer = checkpointer
         self._checkpoint_context: AbstractAsyncContextManager[Any] | None = None
         self._sessions: dict[str, _RunSession] = {}
@@ -338,7 +342,7 @@ class DeepAgentRuntime:
             for schema in request.capabilities
             if workspace_enabled or not str(schema["name"]).startswith("workspace.")
         )
-        interrupt_on = self._interrupt_rules(interrupt_capabilities)
+        interrupt_on = self._interrupt_rules(interrupt_capabilities, request)
         response_format = (
             ToolStrategy(thaw(request.response_schema))
             if request.response_schema is not None
@@ -413,6 +417,58 @@ class DeepAgentRuntime:
                 if current_context is not None
                 else None
             )
+            call = self._prepare_capability_call(
+                request,
+                name=name,
+                arguments=arguments,
+                tool_call_id=tool_call_id,
+                execution_key=execution_key,
+                context=bound_context,
+            )
+            call_service = self.capability_calls
+            if call is not None and call.state is CapabilityCallState.SUCCEEDED:
+                calls.append(
+                    {
+                        "name": name,
+                        "tool_call_id": tool_call_id,
+                        "execution_key_sha256": safe_hash(execution_key),
+                        "arguments": dict(arguments),
+                        "result": call.result_payload,
+                        "status": CapabilityStatus.SUCCESS.value,
+                        "duration_ms": call.duration_ms,
+                        "error_code": "",
+                        "replayed": True,
+                    }
+                )
+                if isinstance(call.result_payload, dict):
+                    artifacts.extend(_mapping_items(call.result_payload.get("artifacts")))
+                    deliveries.extend(_mapping_items(call.result_payload.get("deliveries")))
+                log_event(
+                    log,
+                    "runtime.tool.replayed",
+                    status="succeeded",
+                    capability=name,
+                    capability_call_id=call.call_id,
+                    duration_ms=call.duration_ms,
+                )
+                await self._emit(
+                    request,
+                    RunEventKind.TOOL_COMPLETED,
+                    name=name,
+                    data={"status": CapabilityStatus.SUCCESS.value, "replayed": True},
+                )
+                return call.tool_content
+            if call is not None and call.state is CapabilityCallState.WAITING_APPROVAL:
+                assert call_service is not None
+                call = call_service.transition(
+                    call.call_id,
+                    CapabilityCallState.REQUESTED,
+                    command_id=f"capability:{call.call_id}:resume:v{call.version}",
+                    expected_version=call.version,
+                    actor_id=call.actor_id,
+                    trace_id=call.trace_id,
+                    reason="approved LangGraph tool call resumed",
+                )
             context_manager = (
                 bind_capability_context(bound_context)
                 if bound_context is not None
@@ -431,6 +487,16 @@ class DeepAgentRuntime:
                         message=authorization.reason,
                     )
                 else:
+                    if call is not None:
+                        assert call_service is not None
+                        call = call_service.transition(
+                            call.call_id,
+                            CapabilityCallState.RUNNING,
+                            command_id=f"capability:{call.call_id}:start:v{call.version}",
+                            expected_version=call.version,
+                            actor_id=call.actor_id,
+                            trace_id=call.trace_id,
+                        )
                     result = await self.capability_registry.execute(
                         name,
                         arguments,
@@ -438,7 +504,48 @@ class DeepAgentRuntime:
                     )
             payload = result.to_payload()
             if isinstance(payload, CapabilitySuspension):
+                if call is not None:
+                    assert call_service is not None
+                    call = call_service.transition(
+                        call.call_id,
+                        CapabilityCallState.WAITING_APPROVAL,
+                        command_id=f"capability:{call.call_id}:suspend:v{call.version}",
+                        expected_version=call.version,
+                        actor_id=call.actor_id,
+                        trace_id=call.trace_id,
+                        reason="capability requested suspension",
+                    )
                 interrupt(dict(payload.value))
+            tool_content = _provider_tool_content(payload)
+            if call is not None:
+                assert call_service is not None
+                target = (
+                    CapabilityCallState.SUCCEEDED
+                    if result.status is CapabilityStatus.SUCCESS
+                    else (
+                        CapabilityCallState.REJECTED
+                        if result.status is CapabilityStatus.FORBIDDEN
+                        and call.state is CapabilityCallState.REQUESTED
+                        else CapabilityCallState.FAILED
+                    )
+                )
+                call = call_service.transition(
+                    call.call_id,
+                    target,
+                    command_id=f"capability:{call.call_id}:finish:v{call.version}",
+                    expected_version=call.version,
+                    actor_id=call.actor_id,
+                    trace_id=call.trace_id,
+                    reason=result.message,
+                    payload_patch={
+                        "result_payload": payload,
+                        "tool_content": tool_content,
+                        "duration_ms": result.duration_ms,
+                        "error_code": (
+                            "" if result.status is CapabilityStatus.SUCCESS else result.status.value
+                        ),
+                    },
+                )
             calls.append(
                 {
                     "name": name,
@@ -474,7 +581,7 @@ class DeepAgentRuntime:
                 name=name,
                 data={"status": result.status.value},
             )
-            return _provider_tool_content(payload)
+            return tool_content
 
         return StructuredTool.from_function(
             coroutine=invoke,
@@ -484,7 +591,9 @@ class DeepAgentRuntime:
         )
 
     def _interrupt_rules(
-        self, capabilities: tuple[Mapping[str, Any], ...]
+        self,
+        capabilities: tuple[Mapping[str, Any], ...],
+        request: RunRequest,
     ) -> dict[str, bool | InterruptOnConfig]:
         rules: dict[str, bool | InterruptOnConfig] = {}
         for schema in capabilities:
@@ -502,10 +611,33 @@ class DeepAgentRuntime:
                         capability_name,
                         arguments,
                     )
-                return bool(
+                required = bool(
                     authorization
                     and authorization.decision is AuthorizationDecision.REQUIRE_APPROVAL
                 )
+                if required:
+                    tool_call_id = str(tool_request.tool_call.get("id") or "")
+                    context = get_capability_context()
+                    execution_key = self._execution_key(context, capability_name, tool_call_id)
+                    call = self._prepare_capability_call(
+                        request,
+                        name=capability_name,
+                        arguments=arguments,
+                        tool_call_id=tool_call_id,
+                        execution_key=execution_key,
+                        context=context,
+                    )
+                    if call is not None and call.state is CapabilityCallState.REQUESTED:
+                        self.capability_calls.transition(
+                            call.call_id,
+                            CapabilityCallState.WAITING_APPROVAL,
+                            command_id=f"capability:{call.call_id}:wait:v{call.version}",
+                            expected_version=call.version,
+                            actor_id=call.actor_id,
+                            trace_id=call.trace_id,
+                            reason="policy requires LangGraph approval",
+                        )
+                return required
 
             rules[name] = InterruptOnConfig(
                 allowed_decisions=["approve", "reject"],
@@ -513,6 +645,65 @@ class DeepAgentRuntime:
             )
         rules.update(build_workspace_interrupt_rules(capabilities, self.capability_registry))
         return rules
+
+    @staticmethod
+    def _execution_key(context: Any, name: str, tool_call_id: str) -> str:
+        if context is None or not tool_call_id:
+            return ""
+        identity = "\0".join(
+            (
+                context.installation_id,
+                context.tenant_id,
+                context.scope,
+                context.actor_id,
+                context.run_id or context.trace_id,
+                name,
+                tool_call_id,
+            )
+        )
+        return hashlib.sha256(identity.encode()).hexdigest()
+
+    def _prepare_capability_call(
+        self,
+        request: RunRequest,
+        *,
+        name: str,
+        arguments: Mapping[str, Any],
+        tool_call_id: str,
+        execution_key: str,
+        context: Any,
+    ):
+        if self.capability_calls is None or context is None or not execution_key:
+            return None
+        lifecycle_run_id = context.lifecycle_run_id or context.run_id
+        workflow_id = context.workflow_id or lifecycle_run_id
+        call_id = f"call:{execution_key[:32]}"
+        record, _ = self.capability_calls.create_or_get(
+            CapabilityCallSpec(
+                call_id=call_id,
+                execution_key=execution_key,
+                capability=name,
+                actor_id=context.actor_id,
+                scope_id=context.scope,
+                trace_id=context.trace_id,
+                run_id=lifecycle_run_id,
+                workflow_id=workflow_id,
+                tool_call_id=tool_call_id,
+                agent_ref=str(request.metadata.get("agent_ref") or ""),
+                skill_ref=str(request.metadata.get("skill_ref") or ""),
+                policy_ref=str(request.metadata.get("policy_ref") or ""),
+                input_sha256=hashlib.sha256(
+                    json.dumps(
+                        arguments,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest(),
+            )
+        )
+        return record
 
     async def _invoke(self, graph, state, graph_config, request: RunRequest) -> dict[str, Any]:
         if request.event_sink is None:

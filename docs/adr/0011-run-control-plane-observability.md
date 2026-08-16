@@ -1,6 +1,6 @@
 # ADR-0011：统一 Run Control Plane 与可观测事件模型
 
-- 状态：Proposed
+- 状态：Accepted
 - 日期：2026-08-15
 
 ## 背景
@@ -17,9 +17,9 @@ Agent 审批恢复；它当前仍同步协调一个子 Run，尚未扩展为显�
 状态词汇和 details Schema 尚未统一。当前诊断可以从多个运行实体重建安全因果投影，但生命周期迁移、
 AuditEvent 和各业务实体尚未在同一事务中原子记录。
 
-## 决策方向
+## 决策
 
-本 ADR 在 Accepted 和对应门禁完成前只作为迁移目标，不代表代码已经支持以下能力。
+本 ADR 的分层、身份、生命周期和观测边界已经接受；各能力的实际完成范围以“当前实现与迁移边界”为准。
 
 ### 1. 保持模块化单体，划分六个逻辑层
 
@@ -131,19 +131,30 @@ error_code 等低基数标签。
 - 可按 trace、父/子 Run、CapabilityCall、审批、Artifact 或 Delivery ID 重建内容无关的运行因果投影，
   并检查父子、等待审批与交付引用状态矛盾；
 - `RunCoordinator` 是唯一子运行生命周期协调入口，旧 Dispatcher 类型和兼容别名已删除；
+- `mmchat@2.3.0` 已移除 `delegate_*` Capability 分配；单一专业请求由应用 Router 直达，旧 delegate
+  注册只保留为未投影的过渡实现，不构成第二条生产路由；
 - AgentRun、Approval、Delivery 及通用 Lifecycle 的创建与状态迁移，会在同一 SQLite 事务中写入
   `lifecycle.<entity>.<created|transitioned>` AuditEvent；事件只投影版本、状态、关联 ID 和受信身份，
   不包含业务正文、审批参数、Package snapshot 或错误正文；
 - Approval 的决定人/原因投影，以及 Delivery 的发送状态、attempt、重试时间、错误与 remote ID，和对应
   Lifecycle/transition/AuditEvent 原子提交；重启恢复也使用同一迁移入口，不再先修业务表再修 Lifecycle；
+- `CapabilityCallSpec/Record/Service` 已成为工具调用的持久事实源：稳定 execution key、父 AgentRun
+  身份继承、审批等待/批准恢复/拒绝/终态和结果重放均使用严格状态迁移；普通审计不再是唯一事实来源；
+- Approval 保存关联 `capability_call_ids`，拒绝会把仍在等待的调用迁移为 `rejected`；Deep Agents
+  重放已完成调用时读取已提交的 Tool content，不重复触发 Capability；
+- Artifact 元数据与 `artifact.created` 安全审计在同一 SQLite 事务提交，诊断只暴露 kind、Schema、Hash、
+  大小和因果 ID，不暴露文件名、路径或内容；
+- 内置低基数 Metrics 聚合 lifecycle、CapabilityCall 和 Artifact 状态/耗时，并拒绝 actor、trace、run 等
+  高基数 label；`SafeTrace` 提供默认关闭、字段 allowlist 的可选 exporter 边界；
+- 本地知识与消息检索已使用平台无关 `KnowledgeQuery/KnowledgeResult/SourceRef`，返回来源系统、资源 ID、
+  版本、可见 Scope、更新时间、片段和内容 Hash；
 - 内容无关 Runtime Callback、结构化日志、AuditEvent 和按 trace/run 查询。
 
 尚未实现：
 
 - 在现有 `RunCoordinator` 之上实现显式、可异步恢复的多阶段 Product Workflow；
-- CapabilityCall 的独立持久化生命周期；
 - 完整事件目录与 attributes Schema；
-- Metrics 和 OpenTelemetry exporter。
+- OpenTelemetry/LangSmith exporter、目标平台告警与保留策略验收。
 
 协调器迁移已经单向完成，不保留旧类型或兼容转发层。未来 Product Workflow 必须复用现有
 `RunCoordinator` 与 `AgentRunService`，不能新增第二套子运行生命周期。

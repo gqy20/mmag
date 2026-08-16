@@ -3,14 +3,14 @@ kind: ManagedAgent
 
 metadata:
   name: project
-  version: 2.0.3
+  version: 2.0.4
   description: 将限定范围内的团队上下文整理为可执行的项目计划和状态简报。
 
 spec:
   routing:
     default: false
     priority: 60
-    keywords: [项目助理, 项目计划, 任务拆解, 进度跟踪, 里程碑, 创建任务, 待办, 任务管理, project-plan, milestone, create-task, todo]
+    keywords: [项目助理, 项目计划, 任务拆解, 进度跟踪, 里程碑, 创建任务, 待办, 任务管理, project-plan, milestone, create-task, create task, todo]
     requires_url: false
     scopes: ["mattermost:*"]
 

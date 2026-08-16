@@ -8,8 +8,10 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any, Literal
 
+from ..governance.ops import Metrics
 from ..infrastructure.sqlite import SQLiteDatabase
 from ..logger import get_logger, log_event
+from .capability_calls import CapabilityCallStore
 from .memory_items import MemoryItemStore
 from .models import (
     ApprovalRequest,
@@ -52,9 +54,15 @@ class SQLiteControlPlane:
         self.path = str(path)
         self._connection = SQLiteDatabase(path).connect()
         self._lock = threading.RLock()
+        self.metrics = Metrics()
         self.quota = QuotaStore(self._connection, self._lock)
         self.releases = ReleaseStore(self._connection, self._lock)
         self.runs = AgentRunStore(
+            self._connection,
+            self._lock,
+            self._record_lifecycle_audit,
+        )
+        self.capability_calls = CapabilityCallStore(
             self._connection,
             self._lock,
             self._record_lifecycle_audit,
@@ -461,6 +469,11 @@ class SQLiteControlPlane:
             except Exception:
                 self._connection.rollback()
                 raise
+        self.metrics.increment(
+            "mmag_lifecycle_created_total",
+            entity_type=entity_type.value,
+            status=state,
+        )
         return self.get_lifecycle_entity(entity_type, entity_id)
 
     def get_lifecycle_entity(self, entity_type: EntityType, entity_id: str) -> LifecycleEntity:
@@ -561,6 +574,29 @@ class SQLiteControlPlane:
             except Exception:
                 self._connection.rollback()
                 raise
+        self.metrics.increment(
+            "mmag_lifecycle_transitions_total",
+            entity_type=current.entity_type.value,
+            status=to_state,
+        )
+        if current.entity_type is EntityType.CAPABILITY_CALL and to_state in {
+            "succeeded",
+            "failed",
+            "rejected",
+            "cancelled",
+        }:
+            self.metrics.increment(
+                "mmag_capability_calls_total",
+                capability=str(payload.get("capability") or "unknown"),
+                status=to_state,
+                error_code=str(payload.get("error_code") or ""),
+            )
+            self.metrics.observe(
+                "mmag_capability_duration_ms",
+                float(payload.get("duration_ms") or 0),
+                capability=str(payload.get("capability") or "unknown"),
+                status=to_state,
+            )
         return self.get_lifecycle_entity(current.entity_type, current.entity_id)
 
     def _update_lifecycle_projection(
@@ -834,21 +870,59 @@ class SQLiteControlPlane:
 
     def create_artifact(self, artifact: Artifact) -> None:
         with self._lock:
-            self._connection.execute(
-                """INSERT INTO artifacts
-                (id, run_id, scope_id, kind, content, metadata, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    artifact.id,
-                    artifact.run_id,
-                    artifact.scope_id,
-                    artifact.kind,
-                    artifact.content,
-                    _json(dict(artifact.metadata)),
-                    time.time(),
-                ),
-            )
-            self._connection.commit()
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                now = time.time()
+                self._connection.execute(
+                    """INSERT INTO artifacts
+                    (id, run_id, scope_id, kind, content, metadata, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        artifact.id,
+                        artifact.run_id,
+                        artifact.scope_id,
+                        artifact.kind,
+                        artifact.content,
+                        _json(dict(artifact.metadata)),
+                        now,
+                    ),
+                )
+                run = self._connection.execute(
+                    """SELECT payload FROM lifecycle_entities
+                    WHERE entity_type='agent_run' AND entity_id=?""",
+                    (artifact.run_id,),
+                ).fetchone()
+                run_payload = dict(json.loads(run["payload"])) if run is not None else {}
+                self._insert_audit(
+                    "artifact.created",
+                    actor_id=str(run_payload.get("actor_id") or ""),
+                    scope_id=artifact.scope_id,
+                    trace_id=str(run_payload.get("trace_id") or ""),
+                    target=artifact.id,
+                    decision="created",
+                    details={
+                        "schema_version": "1.0",
+                        "artifact_id": artifact.id,
+                        "run_id": artifact.run_id,
+                        "workflow_id": str(run_payload.get("workflow_id") or ""),
+                        "kind": artifact.kind,
+                        "artifact_schema_version": str(
+                            artifact.metadata.get("schema_version") or ""
+                        ),
+                        "sha256": str(artifact.metadata.get("sha256") or ""),
+                        "size_bytes": int(artifact.metadata.get("size_bytes") or 0),
+                    },
+                    created_at=now,
+                )
+                self._connection.commit()
+            except Exception:
+                self._connection.rollback()
+                raise
+        self.metrics.increment(
+            "mmag_artifacts_total",
+            status="created",
+            event_type=artifact.kind,
+        )
 
     def get_artifact(self, artifact_id: str) -> Artifact:
         row = self._connection.execute(
@@ -938,9 +1012,7 @@ class SQLiteControlPlane:
             for row in rows
         ]
 
-    def create_approval_request(
-        self, request: ApprovalRequest, *, trace_id: str = ""
-    ) -> None:
+    def create_approval_request(self, request: ApprovalRequest, *, trace_id: str = "") -> None:
         now = time.time()
         with self._lock:
             try:
@@ -980,6 +1052,7 @@ class SQLiteControlPlane:
                         now,
                     ),
                 )
+                self._link_capability_calls_to_approval(request, trace_id=trace_id, now=now)
                 self._record_lifecycle_audit(
                     entity_type=EntityType.APPROVAL_REQUEST,
                     entity_id=request.id,
@@ -997,6 +1070,54 @@ class SQLiteControlPlane:
             except Exception:
                 self._connection.rollback()
                 raise
+
+    def _link_capability_calls_to_approval(
+        self,
+        request: ApprovalRequest,
+        *,
+        trace_id: str,
+        now: float,
+    ) -> None:
+        call_ids = request.arguments.get("capability_call_ids", ())
+        if not isinstance(call_ids, (list, tuple)):
+            return
+        for call_id in dict.fromkeys(str(value) for value in call_ids if value):
+            call = self._connection.execute(
+                """SELECT scope_id, state, payload FROM lifecycle_entities
+                WHERE entity_type='capability_call' AND entity_id=?""",
+                (call_id,),
+            ).fetchone()
+            if call is None:
+                raise ValueError("approval references an unknown CapabilityCall")
+            call_payload = dict(json.loads(call["payload"]))
+            if (
+                str(call["scope_id"]) != request.scope_id
+                or str(call["state"]) != "waiting_approval"
+                or str(call_payload.get("actor_id") or "") != request.requested_by
+            ):
+                raise PermissionError("approval and CapabilityCall identity do not match")
+            call_payload["approval_id"] = request.id
+            self._connection.execute(
+                """UPDATE lifecycle_entities SET payload=?, updated_at=?
+                WHERE entity_type='capability_call' AND entity_id=?""",
+                (_json(call_payload), now, call_id),
+            )
+            self._insert_audit(
+                "capability_call.approval_linked",
+                actor_id=request.requested_by,
+                scope_id=request.scope_id,
+                trace_id=trace_id,
+                target=call_id,
+                decision="waiting_approval",
+                details={
+                    "schema_version": "1.0",
+                    "capability_call_id": call_id,
+                    "approval_id": request.id,
+                    "run_id": str(call_payload.get("run_id") or ""),
+                    "workflow_id": str(call_payload.get("workflow_id") or ""),
+                },
+                created_at=now,
+            )
 
     def get_approval_request(self, request_id: str) -> ApprovalRequest:
         row = self._connection.execute(

@@ -754,6 +754,25 @@ def _v024_add_agent_run_identity_indexes(connection: sqlite3.Connection) -> None
     )
 
 
+def _v025_add_capability_call_identity_indexes(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE UNIQUE INDEX idx_capability_calls_execution_key "
+        "ON lifecycle_entities(json_extract(payload, '$.execution_key')) "
+        "WHERE entity_type='capability_call' "
+        "AND coalesce(json_extract(payload, '$.execution_key'), '') <> ''"
+    )
+    connection.execute(
+        "CREATE INDEX idx_capability_calls_run "
+        "ON lifecycle_entities(json_extract(payload, '$.run_id')) "
+        "WHERE entity_type='capability_call'"
+    )
+    connection.execute(
+        "CREATE INDEX idx_capability_calls_workflow "
+        "ON lifecycle_entities(json_extract(payload, '$.workflow_id')) "
+        "WHERE entity_type='capability_call'"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -898,6 +917,12 @@ DEFAULT_MIGRATIONS = (
         name="add durable agent run identity",
         checksum=_checksum("v024-add-durable-agent-run-identity-20260815"),
         upgrade=_v024_add_agent_run_identity_indexes,
+    ),
+    Migration(
+        version=25,
+        name="add durable capability call identity",
+        checksum=_checksum("v025-add-durable-capability-call-identity-20260816"),
+        upgrade=_v025_add_capability_call_identity_indexes,
     ),
 )
 

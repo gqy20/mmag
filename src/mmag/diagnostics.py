@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -95,7 +96,8 @@ class DiagnosticReader:
                 if value
             )
         )
-        capability_calls = self._capability_calls(audits)
+        durable_calls = self._query_capability_calls(trace_id, identifier)
+        capability_calls = durable_calls or self._capability_calls(audits)
         artifacts = self._query_artifacts(run_keys, identifier)
         deliveries = self._query_deliveries(run_keys, identifier)
         run_ids = tuple(sorted(str(item["run_id"]) for item in run_graph))
@@ -312,6 +314,17 @@ class DiagnosticReader:
                         (identifier, identifier, identifier),
                     ).fetchone()
                 if row is None:
+                    row = connection.execute(
+                        """SELECT json_extract(payload, '$.trace_id')
+                        FROM lifecycle_entities
+                        WHERE entity_type='capability_call'
+                          AND (entity_id=?
+                               OR json_extract(payload, '$.tool_call_id')=?
+                               OR json_extract(payload, '$.execution_key')=?)
+                        ORDER BY updated_at DESC LIMIT 1""",
+                        (identifier, identifier, identifier),
+                    ).fetchone()
+                if row is None:
                     approval = connection.execute(
                         "SELECT arguments FROM approval_requests WHERE id=?",
                         (identifier,),
@@ -390,6 +403,50 @@ class DiagnosticReader:
                     "agent_ref": str(payload.get("agent_ref") or ""),
                     "skill_ref": str(payload.get("skill_ref") or ""),
                     "status": str(row["state"]),
+                }
+            )
+        return tuple(result)
+
+    def _query_capability_calls(
+        self, trace_id: str, identifier: str
+    ) -> tuple[dict[str, Any], ...]:
+        if not self.database_path.is_file():
+            return ()
+        try:
+            with self._connect() as connection:
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute(
+                    """SELECT entity_id, state, payload FROM lifecycle_entities
+                    WHERE entity_type='capability_call'
+                      AND ((? <> '' AND json_extract(payload, '$.trace_id')=?)
+                           OR entity_id=?
+                           OR json_extract(payload, '$.run_id')=?
+                           OR json_extract(payload, '$.workflow_id')=?)
+                    ORDER BY created_at ASC""",
+                    (trace_id, trace_id, identifier, identifier, identifier),
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
+        result = []
+        for row in rows:
+            payload = _json_object(row["payload"])
+            result.append(
+                {
+                    "capability_call_id": str(row["entity_id"]),
+                    "run_id": str(payload.get("run_id") or ""),
+                    "workflow_id": str(payload.get("workflow_id") or ""),
+                    "capability": str(payload.get("capability") or ""),
+                    "status": str(row["state"]),
+                    "tool_call_id_sha256": _short_hash(
+                        str(payload.get("tool_call_id") or "")
+                    ),
+                    "execution_key_sha256": _short_hash(
+                        str(payload.get("execution_key") or "")
+                    ),
+                    "input_sha256": str(payload.get("input_sha256") or ""),
+                    "duration_ms": _safe_int(payload.get("duration_ms")),
+                    "error_code": str(payload.get("error_code") or ""),
+                    "approval_id": str(payload.get("approval_id") or ""),
                 }
             )
         return tuple(result)
@@ -507,15 +564,21 @@ class DiagnosticReader:
                 or identifier in {thread_id, child_run_id}
             ):
                 continue
-            result.append(
-                {
-                    "approval_id": str(row["id"]),
-                    "capability": str(row["capability_name"]),
-                    "status": str(row["state"]),
-                    "thread_id": thread_id,
-                    "child_run_id": child_run_id,
-                }
-            )
+            record: dict[str, Any] = {
+                "approval_id": str(row["id"]),
+                "capability": str(row["capability_name"]),
+                "status": str(row["state"]),
+                "thread_id": thread_id,
+                "child_run_id": child_run_id,
+            }
+            call_ids = [
+                str(value)
+                for value in arguments.get("capability_call_ids", ())
+                if isinstance(value, str) and value
+            ]
+            if call_ids:
+                record["capability_call_ids"] = call_ids
+            result.append(record)
         return tuple(result)
 
     def _query_audits(self, trace_id: str) -> tuple[dict[str, Any], ...]:
@@ -616,6 +679,12 @@ def _json_array(value: Any) -> list[Any]:
 
 def _safe_int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _short_hash(value: str) -> str:
+    if not value:
+        return ""
+    return hashlib.sha256(value.encode()).hexdigest()[:16]
 
 
 def _approval_trace(arguments: dict[str, Any]) -> str:

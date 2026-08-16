@@ -29,6 +29,7 @@ from .context import (
 )
 from .delegate import create_delegate_capabilities
 from .file import create_send_file_capability
+from .knowledge import KnowledgeQuery, KnowledgeResult, SourceRef
 from .link import create_analyze_link_capability
 from .mcp import create_mcp_capability
 from .ppt import create_ppt_capabilities
@@ -50,6 +51,9 @@ __all__ = [
     "CapabilityStatus",
     "CapabilitySuspension",
     "SourcePolicy",
+    "KnowledgeQuery",
+    "KnowledgeResult",
+    "SourceRef",
     "bind_langgraph_capability",
     "bind_capability_context",
     "build_builtin_bindings",

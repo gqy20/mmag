@@ -1,5 +1,5 @@
 id: mmchat
-version: 1.4.1
+version: 1.5.0
 default_effect: deny
 
 rules:
@@ -43,12 +43,6 @@ rules:
     actions: [ppt.build]
     permissions: [artifact:generate]
     reason: PPT generation is allowed when the slides Skill is active.
-
-  - id: delegate-subagents
-    effect: allow
-    actions: [delegate_ppt, delegate_report, delegate_project, delegate_link]
-    permissions: [delegate:ppt, delegate:report, delegate:project, delegate:link]
-    reason: MMChat may dispatch tasks to registered sub-agents.
 
   - id: approve-allowlisted-mcp
     effect: require_approval

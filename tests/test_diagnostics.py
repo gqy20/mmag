@@ -6,6 +6,9 @@ from mmag.control_plane import (
     AgentRunState,
     ApprovalService,
     Artifact,
+    CapabilityCallService,
+    CapabilityCallSpec,
+    CapabilityCallState,
     LifecycleService,
     OutboundMessage,
     SQLiteControlPlane,
@@ -232,6 +235,38 @@ def test_diagnostic_reader_restores_control_plane_run_and_approval_graph(tmp_pat
                 **details,
             },
         )
+    calls = CapabilityCallService(store, lifecycle)
+    call, _ = calls.create_or_get(
+        CapabilityCallSpec(
+            call_id="call-1",
+            execution_key="execution-key-1",
+            capability="create_task",
+            actor_id="user-1",
+            scope_id="scope-1",
+            trace_id="trace-1",
+            run_id=child.run_id,
+            workflow_id=child.workflow_id,
+            tool_call_id="tool-1",
+            input_sha256="a" * 64,
+        )
+    )
+    call = calls.transition(
+        call.call_id,
+        CapabilityCallState.RUNNING,
+        command_id="call-running",
+        expected_version=call.version,
+        actor_id="user-1",
+        trace_id="trace-1",
+    )
+    calls.transition(
+        call.call_id,
+        CapabilityCallState.SUCCEEDED,
+        command_id="call-succeeded",
+        expected_version=call.version,
+        actor_id="user-1",
+        trace_id="trace-1",
+        payload_patch={"duration_ms": 12},
+    )
     artifact_id = "a" * 32
     store.create_artifact(
         Artifact(
@@ -304,12 +339,15 @@ def test_diagnostic_reader_restores_control_plane_run_and_approval_graph(tmp_pat
         {
             "capability_call_id": "call-1",
             "run_id": child.run_id,
-            "parent_run_id": parent.run_id,
+            "workflow_id": child.workflow_id,
             "capability": "create_task",
             "status": "succeeded",
-            "parent_capability_call_id": "model-1",
+            "tool_call_id_sha256": "7998d275087ee3f1",
+            "execution_key_sha256": "310fb4ab7b49800e",
+            "input_sha256": "a" * 64,
             "duration_ms": 12,
             "error_code": "",
+            "approval_id": "",
         },
     )
     assert by_child.artifacts == (

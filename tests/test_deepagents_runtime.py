@@ -18,7 +18,14 @@ from mmag.capabilities import (
     bind_langgraph_capability,
     get_capability_context,
 )
-from mmag.control_plane import SQLiteControlPlane
+from mmag.control_plane import (
+    AgentRunService,
+    AgentRunSpec,
+    CapabilityCallService,
+    CapabilityCallState,
+    EntityType,
+    SQLiteControlPlane,
+)
 from mmag.governance import (
     GovernanceContext,
     PolicyCapabilityAuthorizer,
@@ -78,6 +85,7 @@ def _runtime(
     *responses: AIMessage,
     checkpointer=None,
     audit_sink=None,
+    capability_calls=None,
 ) -> DeepAgentRuntime:
     async def publish(value: str):
         calls.append(value)
@@ -112,6 +120,7 @@ def _runtime(
         checkpointer=checkpointer,
         model_factory=ModelFactory(*responses),
         audit_sink=audit_sink,
+        capability_calls=capability_calls,
     )
 
 
@@ -592,6 +601,84 @@ async def test_native_callbacks_write_content_free_model_and_tool_audits(tmp_pat
     assert {item.decision for item in policy_audits} == {"require_approval"}
     assert all("publish" not in str(item.details) for item in model_audits)
     assert all("approved" not in str(item.details) for item in tool_audits)
+
+
+@pytest.mark.asyncio
+async def test_tool_approval_uses_one_durable_capability_call(tmp_path):
+    store = SQLiteControlPlane(str(tmp_path / "capability-call.db"))
+    AgentRunService(store).create_or_get(
+        AgentRunSpec(
+            run_id="run:call-run",
+            workflow_id="call-run",
+            actor_id="user-1",
+            scope_id="scope-1",
+            trace_id="trace-1",
+            thread_id="call-run",
+            agent_ref="example-agent@2.1.0",
+            package_snapshot={"package_hash": "sha256:package"},
+        )
+    )
+    calls: list[str] = []
+    service = CapabilityCallService(store)
+    runtime = _runtime(
+        calls,
+        _tool_call(),
+        AIMessage(content="done"),
+        audit_sink=store,
+        capability_calls=service,
+    )
+    request = _request(runtime, "call-run")
+    request = RunRequest(
+        request.context,
+        request.messages,
+        capabilities=request.capabilities,
+        metadata={
+            "agent_ref": "example-agent@2.1.0",
+            "skill_ref": "example-skill@1.3.0",
+            "policy_ref": "example-policy@1.0.0",
+        },
+    )
+    capability_context = CapabilityContext(
+        trace_id="trace-1",
+        actor_id="user-1",
+        conversation_id="channel-1",
+        message_id="post-1",
+        message="",
+        scope="scope-1",
+        run_id="call-run",
+        lifecycle_run_id="run:call-run",
+        workflow_id="call-run",
+        installation_id="installation-1",
+        tenant_id="tenant-1",
+    )
+    governance_context = GovernanceContext("user-1", "scope-1")
+
+    with (
+        bind_capability_context(capability_context),
+        bind_governance_context(governance_context),
+    ):
+        paused = await runtime.run(request)
+    waiting = store.list_lifecycle_entities_for_scope(EntityType.CAPABILITY_CALL, "scope-1")
+    assert len(waiting) == 1
+    assert waiting[0].state == CapabilityCallState.WAITING_APPROVAL.value
+
+    with (
+        bind_capability_context(capability_context),
+        bind_governance_context(governance_context),
+    ):
+        completed = await runtime.resume(
+            "call-run",
+            {
+                "decisions": [{"type": "approve"}],
+                "runtime_snapshot": paused.interruptions[0]["value"]["runtime_snapshot"],
+                "access_context": {"actor_id": "user-1", "scope": "scope-1"},
+            },
+        )
+
+    final = service.get(waiting[0].entity_id)
+    assert completed.text == "done"
+    assert final.state is CapabilityCallState.SUCCEEDED
+    assert calls == ["approved"]
 
 
 @pytest.mark.asyncio

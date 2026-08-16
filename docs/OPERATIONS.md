@@ -16,7 +16,8 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 
 - `MEMORY_DB_PATH` 保存业务/control-plane 状态，`CHECKPOINT_DB_PATH` 只保存 LangGraph checkpoint；
 - schema v24 在 `lifecycle_entities` 上为 AgentRun 的 `execution_key` 建立唯一索引，并为
-  `parent_run_id/workflow_id` 建立查询索引；迁移失败时必须保持服务未就绪，不能绕过唯一性门禁启动；
+  `parent_run_id/workflow_id` 建立查询索引；schema v25 对 CapabilityCall 建立唯一 execution key 与
+  run/workflow 查询索引；迁移失败时必须保持服务未就绪，不能绕过唯一性门禁启动；
 - delegation 通过持久化 AgentRun 执行：子执行期间父 Run 为 `waiting_child`；`running` 重放失败关闭，
   `succeeded/exhausted` 重放读取已提交的结构化结果，`failed/cancelled` 不自动重试；子审批只恢复原子
   `thread_id`，子终态提交后才恢复父 LangGraph checkpoint；
@@ -116,9 +117,10 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 独立 `event_id`；`debug-trace` 可从 trace、父/子 Run、CapabilityCall、审批、Artifact 或 Delivery ID
 读取 Control Plane，输出机器可读的安全因果投影与状态矛盾告警，不依赖普通日志完整保留。模型和工具调用已把 LangChain 原生
 `run_id/parent_run_id` 投影为 `span_id/parent_span_id`。`artifact_id` 的全链传播、
-AgentRun、Approval、Delivery 与通用 Lifecycle 的创建/迁移已和内容无关 AuditEvent 在同一 SQLite 事务
-提交；Approval 决策投影以及 Delivery 的认领、结果、重试和重启恢复也与 Lifecycle 原子提交。尚未独立
-生命周期化的 CapabilityCall、Metrics 和 OpenTelemetry 仍未实现，部署不得依赖这些 Proposed 能力。
+AgentRun、CapabilityCall、Approval、Delivery 与通用 Lifecycle 的创建/迁移已和内容无关 AuditEvent 在同一 SQLite 事务
+提交；Approval 决策投影以及 Delivery 的认领、结果、重试和重启恢复也与 Lifecycle 原子提交。Artifact
+元数据与安全创建审计同事务提交。进程内 Metrics 只接受低基数 label；实际 OpenTelemetry exporter、
+告警和目标平台保留策略仍未部署验收。
 
 Deep Agents 通过 LangChain 原生 `AsyncCallbackHandler` 记录 `runtime.model.*` 和 `runtime.tool.*`，并通过 LangGraph 原生 `GraphCallbackHandler` 记录 `runtime.graph.interrupted|resumed`。Graph 事件只投影 checkpoint ID、namespace Hash/深度、状态和 interrupt 数量；不记录 interrupt payload、checkpoint state 或节点名称。模型/工具事件只投影 `langgraph_node`、`langgraph_step`、Provider、模型名、token、耗时、工具名及输入 Hash；正文不会进入日志或 AuditEvent。业务 `CapabilityExecutor` 使用独立的 `capability.*` 事件，避免把框架 Tool transport 成功误认为业务 Capability 成功。RunnableConfig 同时携带低基数 tags、动态 run name 和由可信 Context 覆盖的受控 metadata，可供后续 LangSmith/OpenTelemetry exporter 复用；生产环境不得启用会输出完整状态的 `debug/tasks/checkpoints` stream。
 

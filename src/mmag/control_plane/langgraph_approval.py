@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from contextlib import nullcontext
 from dataclasses import replace
@@ -13,7 +15,7 @@ from ..logger import log_context
 from ..runtimes import RuntimeStatus
 from ..skill_packages import SkillContext, bind_skill_context
 from .context import scope_resource_id
-from .models import EntityType
+from .models import CapabilityCallState, EntityType
 
 if TYPE_CHECKING:
     from ..governance import ModelGateway
@@ -95,6 +97,7 @@ class LangGraphApprovalCoordinator:
             if isinstance(approval_context, dict)
             else ""
         )
+        capability_call_ids = self._capability_call_ids(payload, tool_calls)
         approval = self.approvals.request(
             names or "langgraph_tool_batch",
             {
@@ -106,6 +109,7 @@ class LangGraphApprovalCoordinator:
                 "governance_context": payload.get("governance_context", {}),
                 "skill_context": payload.get("skill_context", {}),
                 "execution_profiles": payload.get("execution_profiles", []),
+                "capability_call_ids": capability_call_ids,
                 **(
                     {"delegated_child": payload["delegated_child"]}
                     if isinstance(payload.get("delegated_child"), dict)
@@ -183,6 +187,8 @@ class LangGraphApprovalCoordinator:
         request = self.approvals.decide(
             request_id, approved=approved, actor_id=actor_id, reason=reason
         )
+        if not approved:
+            self._reject_capability_calls(request, actor_id=actor_id, trace_id=trace_id)
         self.store.append_audit(
             "approval.decided",
             actor_id=actor_id,
@@ -371,6 +377,66 @@ class LangGraphApprovalCoordinator:
                     },
                 )
         return result
+
+    def _capability_call_ids(
+        self,
+        payload: dict[str, Any],
+        tool_calls: list[Any],
+    ) -> list[str]:
+        context = payload.get("capability_context")
+        if not isinstance(context, dict):
+            return []
+        run_id = str(context.get("lifecycle_run_id") or context.get("run_id") or "")
+        call_ids: list[str] = []
+        for item in tool_calls:
+            if not isinstance(item, dict):
+                continue
+            arguments = item.get("arguments")
+            if not isinstance(arguments, dict):
+                arguments = {}
+            input_sha256 = hashlib.sha256(
+                json.dumps(
+                    arguments,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            call = self.store.capability_calls.find_waiting(
+                run_id=run_id,
+                capability=str(item.get("capability") or ""),
+                input_sha256=input_sha256,
+            )
+            if call is not None:
+                call_ids.append(call.call_id)
+        return call_ids
+
+    def _reject_capability_calls(
+        self,
+        request: ApprovalRequest,
+        *,
+        actor_id: str,
+        trace_id: str,
+    ) -> None:
+        call_ids = request.arguments.get("capability_call_ids", ())
+        if not isinstance(call_ids, (list, tuple)):
+            return
+        for call_id in call_ids:
+            call = self.store.capability_calls.get(str(call_id))
+            if call.state is not CapabilityCallState.WAITING_APPROVAL:
+                continue
+            self.lifecycle.transition(
+                EntityType.CAPABILITY_CALL,
+                call.call_id,
+                CapabilityCallState.REJECTED.value,
+                command_id=f"approval:{request.id}:reject:{call.call_id}",
+                expected_version=call.version,
+                actor_id=actor_id,
+                trace_id=trace_id,
+                reason="approval rejected",
+                payload_patch={"approval_id": request.id, "error_code": "rejected"},
+            )
 
     async def _complete_delegated_resume(
         self,

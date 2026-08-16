@@ -194,6 +194,10 @@ Document / Meeting / Conversation
 MMAG 不新增一套与当前 Task 平行的“会议 Todo 系统”。会议纪要或文档只能生成候选工作项；负责人、时间、
 目标或影响不明确时，先由用户确认，再调用现有正式 Task/OKR 能力。
 
+当前已实现本地团队知识与 Mattermost 消息检索的统一 `KnowledgeQuery/KnowledgeResult/SourceRef`，以及
+会议行动项 → 人物候选 → 用户确认 → 正式 Task 的闭环。Lark 文档/会议 SourceRef、外部 OKR 映射和
+Reminder 调度仍是后续 Provider/业务状态能力，不能把本地契约写成已经接通外部系统。
+
 ### 9.2 Capability Catalog 与执行 Provider
 
 模型可见的是严格、稳定的业务 Capability，而不是任意 CLI：

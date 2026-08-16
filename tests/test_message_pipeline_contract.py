@@ -135,7 +135,8 @@ async def test_my_skills_dm_is_handled_without_invoking_agent(tmp_path):
     event = _posted_event()
     event["data"]["post"]["message"] = "我的 Skills"
 
-    await handler.process_posted_event(event)
+    with patch.multiple(config, mm_channel_id="", mm_team_id=""):
+        await handler.process_posted_event(event)
 
     runtime.run.assert_not_awaited()
     sent = handler.mm.send_post_async.await_args.kwargs

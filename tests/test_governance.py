@@ -8,6 +8,7 @@ from mmag.governance import (
     BudgetExceededError,
     EnvironmentSecretProvider,
     GovernanceContext,
+    Metrics,
     ModelGateway,
     PolicyEffect,
     PolicyEngine,
@@ -24,6 +25,26 @@ ROOT = Path(__file__).resolve().parents[1]
 MMCHAT_POLICY_REF = yaml.safe_load(
     (ROOT / "agents" / "mmchat" / "agent.yml").read_text(encoding="utf-8")
 )["spec"]["policy_ref"]
+
+
+def test_metrics_reject_high_cardinality_labels_and_keep_aggregates():
+    metrics = Metrics()
+    metrics.increment("mmag_capability_calls_total", capability="create_task", status="success")
+    metrics.observe(
+        "mmag_capability_duration_ms", 12, capability="create_task", status="success"
+    )
+    metrics.observe(
+        "mmag_capability_duration_ms", 8, capability="create_task", status="success"
+    )
+
+    assert metrics.value(
+        "mmag_capability_calls_total", capability="create_task", status="success"
+    ) == 1
+    histogram = next(item for item in metrics.snapshot() if item.kind == "histogram")
+    assert histogram.value == 20
+    assert histogram.count == 2
+    with pytest.raises(ValueError, match="high-cardinality"):
+        metrics.increment("unsafe", trace_id="trace-1")
 
 
 def _write_spec() -> CapabilitySpec:

@@ -1,3 +1,5 @@
+import hashlib
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,6 +10,9 @@ from mmag.control_plane import (
     AgentRunState,
     ApprovalRequest,
     ApprovalService,
+    CapabilityCallService,
+    CapabilityCallSpec,
+    CapabilityCallState,
     EntityType,
     LangGraphApprovalCoordinator,
     LifecycleService,
@@ -28,6 +33,109 @@ def _request(requested_by: str = "requester-1") -> ApprovalRequest:
         requested_by,
         "mattermost:install-1:tenant-1:chn:channel-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_rejected_approval_closes_associated_capability_call(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "rejected-capability.db")
+    lifecycle = LifecycleService(store)
+    runs = AgentRunService(store, lifecycle)
+    run, _ = runs.create_or_get(
+        AgentRunSpec(
+            run_id="run:event-1",
+            workflow_id="workflow-1",
+            actor_id="user-1",
+            scope_id="scope-1",
+            trace_id="trace-1",
+            thread_id="thread-1",
+            agent_ref="core@1.0.0",
+            package_snapshot={"package_hash": "sha256:package"},
+        )
+    )
+    runs.transition(
+        run.run_id,
+        AgentRunState.RUNNING,
+        command_id="run:start",
+        expected_version=run.version,
+        actor_id="user-1",
+        trace_id="trace-1",
+    )
+    arguments = {"title": "发布周报"}
+    input_sha256 = hashlib.sha256(
+        json.dumps(
+            arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    calls = CapabilityCallService(store, lifecycle)
+    call, _ = calls.create_or_get(
+        CapabilityCallSpec(
+            call_id="call:one",
+            execution_key="execution-key-one",
+            capability="create_task",
+            actor_id="user-1",
+            scope_id="scope-1",
+            trace_id="trace-1",
+            run_id="run:event-1",
+            workflow_id="workflow-1",
+            tool_call_id="tool-call-1",
+            input_sha256=input_sha256,
+        )
+    )
+    calls.transition(
+        call.call_id,
+        CapabilityCallState.WAITING_APPROVAL,
+        command_id="call:wait",
+        expected_version=call.version,
+        actor_id="user-1",
+        trace_id="trace-1",
+    )
+    paused = AgentResult(
+        "",
+        "deepagents",
+        status=RuntimeStatus.WAITING_APPROVAL,
+        interruptions=(
+            {
+                "id": "interrupt-1",
+                "value": {
+                    "runtime": "deepagents",
+                    "thread_id": "thread-1",
+                    "tool_calls": [
+                        {"capability": "create_task", "arguments": arguments}
+                    ],
+                    "runtime_snapshot": {},
+                    "capability_context": {
+                        "trace_id": "trace-1",
+                        "run_id": "thread-1",
+                        "workflow_id": "workflow-1",
+                        "lifecycle_run_id": "run:event-1",
+                    },
+                },
+            },
+        ),
+    )
+    coordinator = LangGraphApprovalCoordinator(
+        store,
+        lifecycle,
+        ApprovalService(store, lifecycle),
+        MagicMock(resume=AsyncMock(return_value=AgentResult("rejected", "deepagents"))),
+        authorizer=StaticApprovalAuthorizer(frozenset({"user-1"})),
+        access_guard=MagicMock(require=AsyncMock()),
+        skill_registry=MagicMock(),
+    )
+
+    approval = coordinator.register(paused, requested_by="user-1", scope_id="scope-1")
+    await coordinator.resume(
+        approval.id,
+        approved=False,
+        actor_id="user-1",
+        scope_id="scope-1",
+        trace_id="trace-1",
+    )
+
+    assert calls.get(call.call_id).state is CapabilityCallState.REJECTED
+    assert store.get_lifecycle_entity(
+        EntityType.CAPABILITY_CALL, call.call_id
+    ).payload["approval_id"] == approval.id
 
 
 @pytest.mark.asyncio

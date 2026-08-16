@@ -13,7 +13,7 @@ from mmag.agent_packages import (
     ManifestValidationError,
 )
 from mmag.agent_packages.runtime import _package_capability_context
-from mmag.agent_system import AgentRegistry, AgentRequest, SkillInvocation
+from mmag.agent_system import AgentRegistry, AgentRequest, AgentRouter, SkillInvocation
 from mmag.capabilities import (
     CapabilityContext,
     CapabilityExecutor,
@@ -307,3 +307,15 @@ def test_factory_constructs_every_manifest_without_provider_registry():
     }
     assert task_capabilities <= set(registry.get("project").descriptor.capabilities)
     assert task_capabilities.isdisjoint(registry.get("mmchat").descriptor.capabilities)
+    assert not any(
+        name.startswith("delegate_")
+        for name in registry.get("mmchat").descriptor.capabilities
+    )
+    selection = AgentRouter(registry).route(
+        AgentRequest(
+            "mention",
+            "please create task for the release",
+            scope="mattermost:team/channel",
+        )
+    )
+    assert selection.agent.descriptor.name == "project"
