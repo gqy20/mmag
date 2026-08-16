@@ -320,7 +320,10 @@ class MCPClientBridge:
         return registered
 
     async def close_all(self) -> None:
-        for name, conn in list(self._sessions.items()):
+        # AnyIO transports install cancel scopes in the task that enters them.
+        # Multiple long-lived connections must therefore leave in strict LIFO
+        # order or shutdown fails with a cancel-scope RuntimeError.
+        for name, conn in reversed(list(self._sessions.items())):
             await self._close_conn(name, conn.transport, conn.session)
             removed = self.registry.unregister_prefix(f"mcp_{name}_")
             for capability_name in tuple(self._capabilities):

@@ -118,7 +118,7 @@ result Schema。运行 provenance 包含 Skill name/version、Package Hash、SKI
 当前 Skill：
 
 - `web-research@1.2.1`；
-- `project@1.2.1`；
+- `project@1.4.0`；
 - `report@1.3.1`；
 - `meeting@1.1.0`；
 - `slides@3.1.1`；

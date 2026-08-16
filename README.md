@@ -88,7 +88,7 @@ Deep Agents 的 `StateBackend` 只保存当前 graph/thread 的小型工作文�
 | `link@2.0.1` | — | 确定性分析单个 URL，不启动不必要的模型循环 |
 | `report@2.3.0` | `report@1.3.1`、`meeting@1.1.0` | 证据账本式研究报告与可追溯会议总结 |
 | `ppt@3.1.2` | `slides@3.1.1` | 从受治理 Markdown 生成可编辑 PPTX、源文件和 PNG 预览 |
-| `project@2.0.4` | `project@1.2.1` | 项目计划、状态简报、任务拆解和当前 Scope 内的本地任务跟踪 |
+| `project@2.2.0` | `project@1.4.0` | 简化 Goal、项目计划、本地任务跟踪，以及受治理的飞书文档/任务入口 |
 
 完整权限和交付边界见[数字员工清单](docs/WORKERS.md)。
 
@@ -165,6 +165,8 @@ Skill Package 位于 `skills/<name>/`，包含 `skill.yml`、`SKILL.md`、输入
 根目录 [`.mcp.json`](.mcp.json) 是 MCP Server、启停状态和平台工具清单的唯一配置源。Agent 在各自 YAML
 中分配 `mcp_<server>_<tool>` 或受控通配模式，Skill 只能缩小。连接 Secret 必须使用环境变量引用，不能
 写进 Agent、Skill、Policy 或 Prompt。
+当前 `lark` stdio Server 只暴露文档读取、我的任务列表、任务创建和提醒设置四个精确工具；
+运行前需在宿主机安装并完成 `lark-cli` 用户授权，外部写入会进入人工审批。
 
 详细规则见 [Agent Package 指南](docs/AGENT_PACKAGES.md) 和
 [Skill Package 指南](docs/SKILL_PACKAGES.md)。

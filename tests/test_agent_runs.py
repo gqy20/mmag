@@ -169,3 +169,38 @@ def test_agent_run_result_and_terminal_state_commit_together(tmp_path):
         "dispatch_result"
     ] == completed.result_envelope
     store.close()
+
+
+def test_bind_snapshot_claims_precreated_agent_run_scope_once(tmp_path):
+    store = SQLiteControlPlane(tmp_path / "control.db")
+    store.create_lifecycle_entity(
+        EntityType.AGENT_RUN, "run:event-1", "queued", "channel-1", {}
+    )
+
+    store.runs.bind_snapshot(
+        "run:event-1",
+        snapshot={"package_hash": "hash-1"},
+        actor_id="user-1",
+        scope_id="mattermost:tenant/channel",
+        conversation_id="channel-1",
+        trace_id="trace-1",
+        intent="project",
+        capabilities=("mcp_lark_list_my_tasks",),
+        workflow_id="mattermost:event-1",
+    )
+
+    entity = store.get_lifecycle_entity(EntityType.AGENT_RUN, "run:event-1")
+    assert entity.scope_id == "mattermost:tenant/channel"
+    with pytest.raises(PermissionError, match="scope is immutable"):
+        store.runs.bind_snapshot(
+            "run:event-1",
+            snapshot={"package_hash": "hash-1"},
+            actor_id="user-1",
+            scope_id="mattermost:other/channel",
+            conversation_id="other-channel",
+            trace_id="trace-1",
+            intent="project",
+            capabilities=("mcp_lark_list_my_tasks",),
+            workflow_id="mattermost:event-1",
+        )
+    store.close()

@@ -28,7 +28,7 @@ MMAG 优先解决以下问题：
 2. 工作上下文分散在私聊、频道、Thread、项目资料和历史结果中，重复说明成本高；
 3. 聊天回答与真实业务动作脱节，用户无法确认任务是否真的创建、文件是否真的交付；
 4. 个人信息和群聊信息边界模糊，用户不知道系统记住了什么、会在哪里使用；
-5. 文档、会议、任务和 OKR 分散在多个协作系统中，信息已经被整理，却没有形成持续推进的工作闭环；
+5. 文档、会议、目标和任务分散在多个协作界面中，信息已经被整理，却没有形成持续推进的工作闭环；
 6. 自动化过程缺乏进度、权限、来源和失败解释，用户难以信任和纠正结果。
 
 ## 3. 目标用户与核心场景
@@ -168,9 +168,8 @@ Bot 数量不决定数据隔离，Agent 数量也不决定用户入口数量。
 
 ## 9. 统一工作对象与工具体系
 
-MMAG 不为每种外部系统另建一套独立产品，也不把 Tool 直接等同于 Agent。Task、Lark 文档、Lark Task、
-Lark OKR 和联系人解析应作为平台统一 Capability Catalog 中的精确能力，继续复用同一套 Schema、Policy、
-审批、幂等、审计和错误契约。
+MMAG 不为每种外部系统另建一套独立产品，也不把 Tool 直接等同于 Agent。Goal、Task、
+Lark 文档、Lark Task 和联系人解析应复用同一套 Schema、Policy、审批、幂等、审计和错误契约。
 
 ### 9.1 正式工作对象
 
@@ -180,25 +179,41 @@ Lark OKR 和联系人解析应作为平台统一 Capability Catalog 中的精确
 ```text
 Document / Meeting / Conversation
   → SourceRef
-  → Objective / Key Result / Decision / Task
+  → Goal / Success Criterion / Decision / Task
   → Reminder / Progress Update / Artifact
 ```
 
-- Objective 与 Key Result 表达目标和衡量结果；
-- Task 表达具体行动，可以关联 KR，也可以直接属于项目；
+- Goal 表达希望达成的结果，Success Criterion 可选地表达可验收条件；
+- Task 表达具体行动，可以关联 Goal，也可以直接属于项目；
 - Decision 表达已经确认的项目结论；
-- Reminder 根据正式 Task/KR 状态确定性调度；
+- Reminder 根据正式 Task 状态确定性调度；
 - SourceRef 保留原始文档、会议、消息、版本和引用位置；
-- Task、OKR、审批、提醒和 Artifact 都是正式业务状态，不存入自由文本记忆。
+- Goal、Task、审批、提醒和 Artifact 都是正式业务状态，不存入自由文本记忆。
 
 MMAG 不新增一套与当前 Task 平行的“会议 Todo 系统”。会议纪要或文档只能生成候选工作项；负责人、时间、
-目标或影响不明确时，先由用户确认，再调用现有正式 Task/OKR 能力。
+目标或影响不明确时，先由用户确认，再调用正式 Goal/Task 能力。
 
 当前已实现本地团队知识与 Mattermost 消息检索的统一 `KnowledgeQuery/KnowledgeResult/SourceRef`，以及
-会议行动项 → 人物候选 → 用户确认 → 正式 Task 的闭环。Lark 文档/会议 SourceRef、外部 OKR 映射和
+会议行动项 → 人物候选 → 用户确认 → 正式 Task 的闭环。Lark 文档/会议 SourceRef、Goal 业务对象和
 Reminder 调度仍是后续 Provider/业务状态能力，不能把本地契约写成已经接通外部系统。
 
-### 9.2 Capability Catalog 与执行 Provider
+### 9.2 简化目标系统（当前已实现）
+
+用户所说的“OKR”当前指向从文档提取目标、行动项并持续跟进，不等同于飞书 OKR 产品或完整的
+Objective/Key Result 管理套件。第一版作为模块化单体内 Product Workflow 的业务对象，不拆独立服务、
+不新增独立 Agent：
+
+| 对象 | 最小契约 |
+|---|---|
+| Goal | ID、标题、Scope、负责人、状态、可选起止时间、SourceRef |
+| SuccessCriterion | Goal ID、可验收描述，可选当前值/目标值/单位 |
+| Task link | 现有 Task 增加可选 `goal_id`，不复制任务状态 |
+
+Goal 只使用 `draft → active → completed/cancelled` 生命周期。第一版不做组织层级对齐、权重、打分、
+复杂周期和级联拆解。文档没有明确目标时直接生成候选 Task，不强制创建 Goal；模型只能提出候选目标和
+验收条件，用户确认后才进入正式状态。
+
+### 9.3 Capability Catalog 与执行 Provider
 
 模型可见的是严格、稳定的业务 Capability，而不是任意 CLI：
 
@@ -215,8 +230,6 @@ lark.document.get_revision
 lark.contact.resolve
 lark.task.create
 lark.task.update
-lark.okr.read
-lark.okr.update
 ```
 
 上述名称表达目标能力，最终实现时以项目 `CapabilitySpec` 命名规范和实际注册结果为准。每项能力必须定义严格
@@ -228,7 +241,7 @@ lark.okr.update
 
 未来由 `lark-cli` 切换到 Lark OpenAPI SDK 时，上层 Capability、Agent 和产品交互契约不应随之改变。
 
-### 9.3 Agent 与 Skill 的能力投影
+### 9.4 Agent 与 Skill 的能力投影
 
 Capability 在平台统一注册，不表示所有 Agent 都可见。运行时工具集合仍是 Agent allowlist、Skill 声明、
 Package Policy 和请求级授权的交集：
@@ -236,25 +249,24 @@ Package Policy 和请求级授权的交集：
 | 执行角色 | 建议能力范围 |
 |---|---|
 | Core Agent | 意图协调、必要查询和严格 handoff，不持有全部 Lark/Task 写能力 |
-| Project Agent | MMAG Task、负责人解析，以及经允许的 Lark Task 投影 |
+| Project Agent | MMAG Goal/Task、负责人解析，以及经允许的 Lark Task 投影 |
 | Report Agent | Lark 文档/妙记读取、来源化总结和候选行动项提取 |
-| OKR Skill/Agent | OKR 查询、目标拆解、进度候选和受控更新 |
-| Reminder Service | Task/KR 状态读取、提醒计划和 Outbox，不依赖模型定时唤醒 |
+| Reminder Service | Task 状态读取、提醒计划和 Outbox，不依赖模型定时唤醒 |
 
-初期 OKR 可以作为 Project Agent 的 Skill；只有当它形成独立周期、对齐关系、审批和权限边界时，再注册独立
-OKR Agent。是否拆 Agent 由领域契约决定，而不是由工具数量决定。
+简化 Goal 由 Project Agent 处理，不单独注册 Goal Agent。只有未来出现独立组织治理、权限和周期边界时，
+才重新评估拆分。
 
-### 9.4 Lark 文档、知识与记忆
+### 9.5 Lark 文档、知识与记忆
 
 Lark 文档已经承担内容整理和协作，MMAG 默认只保存受控引用、版本、来源及必要索引，不复制成另一份长期记忆：
 
 - 文档读取结果形成带 `document_id`、revision、ACL/Scope 和 SourceRef 的上下文快照；
 - 文档普通修改只更新来源索引和版本，不自动改写个人记忆；
-- 明确行动项生成候选 Task，目标指标生成候选 KR，项目结论生成候选 Decision；
+- 明确行动项生成候选 Task，结果目标生成候选 Goal/SuccessCriterion，项目结论生成候选 Decision；
 - 稳定个人偏好只有经用户确认后才能进入个人记忆；
 - 文档删除、权限撤销或来源失效后，相关上下文和派生知识必须停止使用并传播撤销状态。
 
-### 9.5 本地 Task 与 Lark Task
+### 9.6 本地 Task 与 Lark Task
 
 第一阶段保持 MMAG Task 为统一内部工作对象，Lark Task 作为可选外部映射。每个映射至少保存 provider、
 external ID、external revision、同步状态和稳定幂等键。
@@ -262,7 +274,7 @@ external ID、external revision、同步状态和稳定幂等键。
 每个对象必须明确 authoritative source；在冲突策略、身份映射和版本检查完成前，不实现无约束双向同步。
 MMAG 回复“已同步到 Lark”必须以外部写入真实成功为依据，不能把本地 Task 创建成功等同于外部同步成功。
 
-### 9.6 统一用户链路
+### 9.7 统一用户链路
 
 用户说“根据上周项目会议纪要整理研发待办并提醒负责人”时，目标链路是：
 
@@ -326,7 +338,7 @@ Core Agent 不负责：
 - 用户可查看和管理个人记忆；
 - 项目、频道和个人上下文按来源与权限构建；
 - 以精确 Capability 只读接入 Lark 文档/会议来源，保留版本、Scope 和 SourceRef；
-- 从文档提取候选 Task/KR/Decision，经确认后写入正式业务对象；
+- 从文档提取候选 Goal/Task/Decision，经确认后写入正式业务对象；
 - Agent handoff 只传递严格 Envelope、业务对象和 Artifact ref；
 - 编辑、删除、成员退出和权限撤销能够传播到后续检索与执行。
 
@@ -334,7 +346,7 @@ Core Agent 不负责：
 
 - 管理员可为安全域或已发布 Persona 配置独立 Bot；
 - 频道可显式开启受控的主动总结、提醒或工作流；
-- 在确定 authoritative source、身份映射和冲突策略后，支持 Lark Task/OKR 受控写入与同步；
+- 在确定 authoritative source、身份映射和冲突策略后，支持 Lark Task 受控写入与同步；
 - 多 Bot 仍共用一致的 Scope、Policy、审计和业务状态模型。
 
 ## 13. 验收场景
@@ -381,7 +393,7 @@ Core Agent 不负责：
 - 权限安全率：跨用户、跨频道、跨租户和权限撤销后的越权访问次数，目标必须为 0；
 - 可恢复率：等待审批、重启或可重试失败后能够继续完成的比例；
 - 来源覆盖率：由文档、会议或消息形成的正式工作对象中，具有有效 SourceRef 的比例；
-- 同步一致率：声明已同步的外部 Task/OKR 与外部真实状态一致的比例；
+- 同步一致率：声明已同步的外部 Task 与外部真实状态一致的比例；
 - 用户纠正率与重复表达率：衡量系统是否真正理解目标和复用合适上下文。
 
 指标必须结合任务类型、触发方式和 Scope 分析，不能用回复数量或模型调用量代替用户价值。
@@ -394,11 +406,15 @@ Core Agent 不负责：
 - 基于可信 Mattermost Actor、Installation、Tenant、个人/频道 Scope 的隔离；
 - 默认 `mmchat` Agent 与专业 Agent/Skill/Capability 体系；
 - Project Agent 独占任务 CRUD，并可通过受控 delegation 接收任务请求；
+- Project Agent 通过受治理 MCP 窄口读取飞书文档和当前授权用户的任务，并可在人工
+  审批后创建飞书任务或设置提醒；
 - CapabilityExecutor、Policy、审批、Checkpoint、Outbox、Artifact 和结构化日志基础；
 - 个人记忆、Personal Skill、WorkCase 与 Persona 的部分产品链路。
 
-当前基线不包含 Lark Capability、`lark-cli` Provider、OKR 业务对象或跨平台 Task 同步；本节不得将目标
-工具清单理解为已经注册的能力。
+当前 Lark 基线仅包含上述四个精确 Capability 和 `lark-cli` Provider。简化 Goal 已实现 Scope
+隔离的持久化、验收条件、单向生命周期、Task `goal_id` 关联和确定性进展摘要；
+Mattermost/Lark 逐用户身份映射、MMAG Task 与 Lark Task 映射或双向同步，也尚未实现文档到
+候选任务再到正式任务的显式多阶段 Workflow。
 
 仍需作为独立实施需求验证和完善：
 
@@ -406,8 +422,8 @@ Core Agent 不负责：
 - 普通用户错误语言与内部调试信息的分层展示；
 - 群聊普通消息、`@mention`、Thread 和主动模式的完整触发契约；
 - 记忆查看、撤销、跨 Scope 发布和权限变更传播的完整体验；
-- Lark 与 Mattermost 的可信用户映射、文档读取、SourceRef、外部 Task/OKR 映射和同步冲突策略；
-- 基于正式 Task/KR 状态的确定性提醒调度与免打扰策略；
+- Lark 与 Mattermost 的可信用户映射、文档读取、SourceRef、外部 Task 映射和同步冲突策略；
+- 基于正式 Task 状态的确定性提醒调度与免打扰策略；
 - 产品指标埋点、用户反馈与端到端验收集。
 
 具体实现状态以 [Roadmap](ROADMAP.md) 为准；身份与 Scope 的已接受架构边界见
@@ -434,8 +450,8 @@ Core Agent 不负责：
 - 不同频道是否需要不同的主动响应策略和管理员配置；
 - 用户希望以何种方式查看、修改和撤销记忆；
 - 任务创建时项目、负责人、截止时间缺失到什么程度才值得追问；
-- MMAG Task 与 Lark Task/OKR 分别在哪些场景作为 authoritative source；
+- MMAG Task 与 Lark Task 分别在哪些场景作为 authoritative source；
 - Mattermost 用户与 Lark 用户采用用户绑定、企业目录映射还是其他可信关联方式；
-- 文档变化产生候选 Task/KR 时，哪些情况可以自动接受，哪些必须人工确认；
+- 文档变化产生候选 Goal/Task 时，哪些情况可以自动接受，哪些必须人工确认；
 - 哪些 Persona 或部门角色确实需要独立 Bot 身份；
 - 进度反馈采用 Reaction、Thread 更新还是 Ephemeral 时最不打扰用户。

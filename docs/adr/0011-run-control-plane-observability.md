@@ -33,7 +33,7 @@ Channel Adapter
 ```
 
 - Channel Adapter 只接收平台事件并解析可信身份与资源；
-- Product Workflow 管理会议纪要、任务草案、OKR、提醒、数字人和交付等确定性业务状态机；
+- Product Workflow 管理会议纪要、任务草案、目标、提醒、数字人和交付等确定性业务状态机；
 - Run Control Plane 管理 AgentRun、父子关系、幂等、等待、审批恢复和 provenance；
 - Agent Runtime 继续只使用 Agent Package、Skill 和 Deep Agents/LangGraph 完成认知工作；
 - Capability Plane 是 Task、Lark、MCP、Mattermost 和执行入口的唯一动作边界；

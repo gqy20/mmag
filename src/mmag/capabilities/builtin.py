@@ -14,6 +14,7 @@ from .catalog import (
 )
 from .context import CapabilityContext, get_capability_context
 from .file import create_send_file_capability
+from .goals import create_goal_capabilities
 from .link import create_analyze_link_capability
 from .tasks import create_task_capabilities
 from .tencent_meeting import create_tencent_meeting_capabilities
@@ -52,6 +53,12 @@ def create_builtin_capabilities(
         ),
         *create_tencent_meeting_capabilities(),
         *create_task_capabilities(
+            memory,
+            mm_client,
+            context_provider=context_provider,
+            access_guard=access_guard,
+        ),
+        *create_goal_capabilities(
             memory,
             mm_client,
             context_provider=context_provider,

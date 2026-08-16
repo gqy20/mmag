@@ -1,5 +1,5 @@
 id: project
-version: 1.0.1
+version: 1.2.0
 default_effect: deny
 
 rules:
@@ -15,6 +15,27 @@ rules:
     permissions: [task:write, task:read]
     scopes: ["mattermost:*"]
     reason: Project agent may create and track organizational items.
+
+  - id: manage-goals
+    effect: allow
+    actions: [create_goal, list_goals, update_goal, get_goal_overview]
+    permissions: [goal:write, goal:read]
+    scopes: ["mattermost:*"]
+    reason: Project may manage the small internal Goal object in the current trusted scope.
+
+  - id: read-lark-work
+    effect: allow
+    actions: [mcp_lark_fetch_document, mcp_lark_list_my_tasks]
+    permissions: [mcp:lark:fetch_document:invoke, mcp:lark:list_my_tasks:invoke]
+    scopes: ["mattermost:*"]
+    reason: Project may read Lark sources only through the authenticated narrow MCP adapter.
+
+  - id: write-lark-work
+    effect: require_approval
+    actions: [mcp_lark_create_task, mcp_lark_set_task_reminder]
+    permissions: [mcp:lark:create_task:invoke, mcp:lark:set_task_reminder:invoke]
+    scopes: ["mattermost:*"]
+    reason: Creating or reminding a Lark task is an external side effect.
 
   - id: read-current-channel
     effect: allow

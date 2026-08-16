@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from ..control_plane import MattermostAccessGuard
     from ..memory import Memory
 
-_TASK_TYPES = frozenset({"task", "meeting", "okr"})
+_TASK_TYPES = frozenset({"task", "meeting"})
 _TASK_STATUSES = frozenset({"pending", "in_progress", "done", "cancelled"})
 
 
@@ -43,7 +43,7 @@ def _trusted_context(
     return context
 
 
-async def _authorize_context(
+async def authorize_work_context(
     memory: Memory,
     context_provider: Callable[[], CapabilityContext | None],
     access_guard: MattermostAccessGuard | None,
@@ -59,23 +59,28 @@ async def _authorize_context(
     return context
 
 
-async def _authorize_assignee(mm_client: Any, context: CapabilityContext, assignee_id: str) -> None:
-    if not assignee_id or assignee_id == context.actor_id:
+async def authorize_work_owner(mm_client: Any, context: CapabilityContext, owner_id: str) -> None:
+    if not owner_id or owner_id == context.actor_id:
         return
     if mm_client is None:
         raise PermissionError("无法校验任务负责人")
     try:
         member = await mm_client.get_channel_member_async(
             context.conversation_id,
-            assignee_id,
+            owner_id,
         )
     except Exception as error:
         raise PermissionError("任务负责人不属于当前会话") from error
-    if str(member.get("user_id") or "") != assignee_id:
+    if str(member.get("user_id") or "") != owner_id:
         raise PermissionError("任务负责人不属于当前会话")
 
 
-def _execution_key(context: CapabilityContext, arguments: dict[str, Any]) -> str:
+def work_execution_key(
+    context: CapabilityContext,
+    arguments: dict[str, Any],
+    *,
+    capability: str = "create_task",
+) -> str:
     if context.execution_key:
         return context.execution_key
     payload = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -87,7 +92,7 @@ def _execution_key(context: CapabilityContext, arguments: dict[str, Any]) -> str
             context.actor_id,
             context.run_id,
             context.message_id,
-            "create_task",
+            capability,
             payload,
         )
     )
@@ -108,6 +113,7 @@ def create_create_task_capability(
         task_type: str = "task",
         due_time: float = 0,
         priority: int = 1,
+        goal_id: str = "",
     ) -> dict:
         if not title.strip():
             return _error("任务标题不能为空")
@@ -116,10 +122,12 @@ def create_create_task_capability(
         if due_time < 0 or priority not in {0, 1, 2}:
             return _error("截止时间或优先级无效")
         try:
-            context = await _authorize_context(memory, context_provider, access_guard)
-            await _authorize_assignee(mm_client, context, assignee_id)
+            context = await authorize_work_context(memory, context_provider, access_guard)
+            await authorize_work_owner(mm_client, context, assignee_id)
         except PermissionError as error:
             return _error(str(error))
+        if goal_id and memory.repositories.goals.get(goal_id, scope_id=context.scope) is None:
+            return _error(f"目标 {goal_id} 不存在")
         arguments = {
             "title": title,
             "assignee_id": assignee_id,
@@ -127,6 +135,7 @@ def create_create_task_capability(
             "task_type": task_type,
             "due_time": due_time,
             "priority": priority,
+            "goal_id": goal_id,
         }
         task = memory.repositories.tasks.create({
             "title": title.strip(),
@@ -136,9 +145,10 @@ def create_create_task_capability(
             "creator_id": context.actor_id,
             "channel_id": context.conversation_id,
             "scope_id": context.scope,
-            "execution_key": _execution_key(context, arguments),
+            "execution_key": work_execution_key(context, arguments),
             "due_time": due_time,
             "priority": priority,
+            "goal_id": goal_id,
         })
         return {"status": "ok", "task": _format_task(task)}
 
@@ -155,6 +165,7 @@ def create_create_task_capability(
                 "task_type": {"type": "string", "enum": sorted(_TASK_TYPES), "default": "task"},
                 "due_time": {"type": "number", "minimum": 0, "default": 0},
                 "priority": {"type": "integer", "enum": [0, 1, 2], "default": 1},
+                "goal_id": {"type": "string", "description": "同一 Scope 内的可选目标 ID"},
             },
             "required": ["title"],
         },
@@ -176,6 +187,7 @@ def create_list_tasks_capability(
         assignee_id: str = "",
         status: str = "",
         task_type: str = "",
+        goal_id: str = "",
         due_before: float = 0,
         limit: int = 20,
     ) -> dict:
@@ -184,13 +196,14 @@ def create_list_tasks_capability(
         if task_type and task_type not in _TASK_TYPES:
             return _error("任务类型无效")
         try:
-            context = await _authorize_context(memory, context_provider, access_guard)
+            context = await authorize_work_context(memory, context_provider, access_guard)
         except PermissionError as error:
             return _error(str(error))
         tasks = memory.repositories.tasks.list(
             assignee_id=assignee_id,
             status=status,
             task_type=task_type,
+            goal_id=goal_id,
             scope_id=context.scope,
             due_before=max(due_before, 0),
             limit=max(1, min(limit, 50)),
@@ -207,6 +220,7 @@ def create_list_tasks_capability(
                 "assignee_id": {"type": "string"},
                 "status": {"type": "string", "enum": sorted(_TASK_STATUSES)},
                 "task_type": {"type": "string", "enum": sorted(_TASK_TYPES)},
+                "goal_id": {"type": "string"},
                 "due_before": {"type": "number", "minimum": 0},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
             },
@@ -235,6 +249,7 @@ def create_update_task_capability(
         description: str | None = None,
         due_time: float | None = None,
         priority: int | None = None,
+        goal_id: str | None = None,
     ) -> dict:
         if status is not None and status not in _TASK_STATUSES:
             return _error("任务状态无效")
@@ -245,11 +260,16 @@ def create_update_task_capability(
         if priority is not None and priority not in {0, 1, 2}:
             return _error("优先级无效")
         try:
-            context = await _authorize_context(memory, context_provider, access_guard)
+            context = await authorize_work_context(memory, context_provider, access_guard)
             if assignee_id is not None:
-                await _authorize_assignee(mm_client, context, assignee_id)
+                await authorize_work_owner(mm_client, context, assignee_id)
         except PermissionError as error:
             return _error(str(error))
+        if (
+            goal_id
+            and memory.repositories.goals.get(goal_id, scope_id=context.scope) is None
+        ):
+            return _error(f"目标 {goal_id} 不存在")
         updates = {
             key: value
             for key, value in {
@@ -259,6 +279,7 @@ def create_update_task_capability(
                 "description": description,
                 "due_time": due_time,
                 "priority": priority,
+                "goal_id": goal_id,
             }.items()
             if value is not None
         }
@@ -281,6 +302,7 @@ def create_update_task_capability(
                 "description": {"type": "string", "maxLength": 10000},
                 "due_time": {"type": "number", "minimum": 0},
                 "priority": {"type": "integer", "enum": [0, 1, 2]},
+                "goal_id": {"type": "string", "description": "传空字符串可取消关联"},
             },
             "required": ["task_id"],
         },
@@ -300,7 +322,7 @@ def create_get_task_overview_capability(
 ) -> CapabilitySpec:
     async def get_task_overview() -> dict:
         try:
-            context = await _authorize_context(memory, context_provider, access_guard)
+            context = await authorize_work_context(memory, context_provider, access_guard)
         except PermissionError as error:
             return _error(str(error))
         counts = memory.repositories.tasks.overview(scope_id=context.scope)
@@ -341,6 +363,7 @@ def _format_task(task: dict) -> dict:
         "source": task.get("source", "manual"),
         "due_time": task.get("due_time", 0),
         "priority": task.get("priority", 1),
+        "goal_id": task.get("goal_id", ""),
         "created_at": task.get("created_at", 0),
         "updated_at": task.get("updated_at", 0),
     }

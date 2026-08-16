@@ -2,6 +2,21 @@
   "$schema": "./src/mmag/schemas/mcp-config.schema.json",
   "version": 1,
   "mcpServers": {
+    "lark": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "python", "-m", "mmag.lark_cli_server"],
+      "env": {
+        "LARK_CLI_NO_PROXY": "1"
+      },
+      "tools": [
+        "fetch_document",
+        "list_my_tasks",
+        "create_task",
+        "set_task_reminder"
+      ]
+    },
     "tencent_meeting": {
       "enabled": false,
       "type": "streamable-http",

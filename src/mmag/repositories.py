@@ -258,8 +258,9 @@ class TaskRepository:
                 """INSERT INTO tasks
                    (id, installation_id, tenant_id, title, description, type, status,
                     assignee_id, creator_id, channel_id, scope_id, source, external_id,
-                    start_time, due_time, priority, created_at, updated_at, execution_key)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    start_time, due_time, priority, created_at, updated_at, execution_key,
+                    goal_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     task_id, self._iid, self._tid,
                     task["title"], task.get("description", ""),
@@ -269,6 +270,7 @@ class TaskRepository:
                     task.get("source", "manual"), task.get("external_id", ""),
                     task.get("start_time", 0), task.get("due_time", 0),
                     task.get("priority", 1), now, now, execution_key,
+                    task.get("goal_id", ""),
                 ),
             )
         except sqlite3.IntegrityError:
@@ -298,7 +300,8 @@ class TaskRepository:
         return dict(row) if row else None
 
     def list(self, *, assignee_id: str = "", status: str = "", task_type: str = "",
-             scope_id: str, due_before: float = 0, limit: int = 20) -> list[dict]:
+             goal_id: str = "", scope_id: str, due_before: float = 0,
+             limit: int = 20) -> list[dict]:
         sql = "SELECT * FROM tasks WHERE installation_id=? AND tenant_id=? AND scope_id=?"
         params: list = [self._iid, self._tid, scope_id]
         if assignee_id:
@@ -310,6 +313,9 @@ class TaskRepository:
         if task_type:
             sql += " AND type=?"
             params.append(task_type)
+        if goal_id:
+            sql += " AND goal_id=?"
+            params.append(goal_id)
         if due_before:
             sql += " AND due_time > 0 AND due_time <= ?"
             params.append(due_before)
@@ -324,7 +330,7 @@ class TaskRepository:
             return None
         allowed = {
             "title", "description", "type", "status", "assignee_id",
-            "start_time", "due_time", "priority",
+            "start_time", "due_time", "priority", "goal_id",
         }
         sets: list[str] = []
         params: list = []
@@ -354,6 +360,146 @@ class TaskRepository:
         return {dict(row)["status"]: dict(row)["cnt"] for row in rows}
 
 
+class GoalRepository:
+    """Scope-bound persistence for the deliberately small Goal model."""
+
+    def __init__(self, connection: sqlite3.Connection, installation_id: str, tenant_id: str) -> None:
+        self._conn = connection
+        self._iid = installation_id
+        self._tid = tenant_id
+
+    @staticmethod
+    def _decode(row: sqlite3.Row | None) -> dict | None:
+        if row is None:
+            return None
+        value = dict(row)
+        for field in ("success_criteria", "source_refs"):
+            try:
+                decoded = json.loads(value.get(field) or "[]")
+            except json.JSONDecodeError:
+                decoded = []
+            value[field] = decoded if isinstance(decoded, list) else []
+        return value
+
+    def create(self, goal: dict) -> dict:
+        scope_id = str(goal.get("scope_id") or "")
+        if not scope_id:
+            raise ValueError("scope_id is required")
+        execution_key = str(goal.get("execution_key") or "")
+        if execution_key:
+            existing = self.get_by_execution_key(execution_key, scope_id=scope_id)
+            if existing:
+                return existing
+        now = time.time()
+        goal_id = str(goal.get("id") or f"goal_{uuid.uuid4().hex}")
+        try:
+            self._conn.execute(
+                """INSERT INTO goals
+                   (id, installation_id, tenant_id, scope_id, channel_id, title,
+                    description, status, owner_id, creator_id, start_time, due_time,
+                    success_criteria, source_refs, execution_key, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    goal_id,
+                    self._iid,
+                    self._tid,
+                    scope_id,
+                    goal.get("channel_id", ""),
+                    goal["title"],
+                    goal.get("description", ""),
+                    goal.get("status", "active"),
+                    goal.get("owner_id", ""),
+                    goal.get("creator_id", ""),
+                    goal.get("start_time", 0),
+                    goal.get("due_time", 0),
+                    json.dumps(goal.get("success_criteria", []), ensure_ascii=False),
+                    json.dumps(goal.get("source_refs", []), ensure_ascii=False),
+                    execution_key,
+                    now,
+                    now,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            self._conn.rollback()
+            if execution_key:
+                existing = self.get_by_execution_key(execution_key, scope_id=scope_id)
+                if existing:
+                    return existing
+            raise
+        self._conn.commit()
+        return self.get(goal_id, scope_id=scope_id)  # type: ignore[return-value]
+
+    def get(self, goal_id: str, *, scope_id: str) -> dict | None:
+        row = self._conn.execute(
+            """SELECT * FROM goals
+            WHERE installation_id=? AND tenant_id=? AND scope_id=? AND id=?""",
+            (self._iid, self._tid, scope_id, goal_id),
+        ).fetchone()
+        return self._decode(row)
+
+    def get_by_execution_key(self, execution_key: str, *, scope_id: str) -> dict | None:
+        row = self._conn.execute(
+            """SELECT * FROM goals
+            WHERE installation_id=? AND tenant_id=? AND scope_id=? AND execution_key=?""",
+            (self._iid, self._tid, scope_id, execution_key),
+        ).fetchone()
+        return self._decode(row)
+
+    def list(
+        self,
+        *,
+        scope_id: str,
+        status: str = "",
+        owner_id: str = "",
+        limit: int = 20,
+    ) -> list[dict]:
+        sql = "SELECT * FROM goals WHERE installation_id=? AND tenant_id=? AND scope_id=?"
+        params: list = [self._iid, self._tid, scope_id]
+        if status:
+            sql += " AND status=?"
+            params.append(status)
+        if owner_id:
+            sql += " AND owner_id=?"
+            params.append(owner_id)
+        sql += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        return [self._decode(row) or {} for row in self._conn.execute(sql, params).fetchall()]
+
+    def update(self, goal_id: str, updates: dict, *, scope_id: str) -> dict | None:
+        existing = self.get(goal_id, scope_id=scope_id)
+        if not existing:
+            return None
+        allowed = {
+            "title",
+            "description",
+            "status",
+            "owner_id",
+            "start_time",
+            "due_time",
+            "success_criteria",
+        }
+        sets: list[str] = []
+        params: list = []
+        for key, value in updates.items():
+            if key not in allowed or value is None:
+                continue
+            sets.append(f"{key}=?")
+            params.append(
+                json.dumps(value, ensure_ascii=False) if key == "success_criteria" else value
+            )
+        if not sets:
+            return existing
+        sets.append("updated_at=?")
+        params.append(time.time())
+        self._conn.execute(
+            f"UPDATE goals SET {', '.join(sets)} "  # noqa: S608
+            "WHERE installation_id=? AND tenant_id=? AND scope_id=? AND id=?",
+            [*params, self._iid, self._tid, scope_id, goal_id],
+        )
+        self._conn.commit()
+        return self.get(goal_id, scope_id=scope_id)
+
+
 @dataclass(frozen=True, slots=True)
 class MemoryRepositories:
     messages: MessageRepository
@@ -362,6 +508,7 @@ class MemoryRepositories:
     summaries: SummaryRepository
     urls: URLCacheRepository
     tasks: TaskRepository
+    goals: GoalRepository
 
     @classmethod
     def create(
@@ -377,4 +524,5 @@ class MemoryRepositories:
             SummaryRepository(connection, installation_id, tenant_id),
             URLCacheRepository(connection, installation_id, tenant_id),
             TaskRepository(connection, installation_id, tenant_id),
+            GoalRepository(connection, installation_id, tenant_id),
         )

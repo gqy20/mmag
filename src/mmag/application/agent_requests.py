@@ -472,6 +472,8 @@ class AgentRequestHandler:
                 lifecycle_id,
                 snapshot=provenance,
                 actor_id=context.actor_id,
+                scope_id=context.scope,
+                conversation_id=context.conversation_id,
                 trace_id=context.trace_id,
                 intent=request.intent,
                 capabilities=capabilities,

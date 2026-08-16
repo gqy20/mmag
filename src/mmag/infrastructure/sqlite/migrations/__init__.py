@@ -773,6 +773,46 @@ def _v025_add_capability_call_identity_indexes(connection: sqlite3.Connection) -
     )
 
 
+def _v026_add_goals(connection: sqlite3.Connection) -> None:
+    # The former "okr" task type was only a label, not a Goal model. Preserve
+    # those work items while removing the misleading product semantics.
+    connection.execute("UPDATE tasks SET type='task' WHERE type='okr'")
+    connection.execute(
+        """CREATE TABLE goals (
+            id TEXT PRIMARY KEY,
+            installation_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            scope_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            owner_id TEXT NOT NULL DEFAULT '',
+            creator_id TEXT NOT NULL,
+            start_time REAL NOT NULL DEFAULT 0,
+            due_time REAL NOT NULL DEFAULT 0,
+            success_criteria TEXT NOT NULL DEFAULT '[]',
+            source_refs TEXT NOT NULL DEFAULT '[]',
+            execution_key TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )"""
+    )
+    connection.execute(
+        "CREATE UNIQUE INDEX idx_goals_execution_key "
+        "ON goals(installation_id, tenant_id, execution_key) WHERE execution_key <> ''"
+    )
+    connection.execute(
+        "CREATE INDEX idx_goals_scope_status "
+        "ON goals(installation_id, tenant_id, scope_id, status, due_time)"
+    )
+    connection.execute("ALTER TABLE tasks ADD COLUMN goal_id TEXT NOT NULL DEFAULT ''")
+    connection.execute(
+        "CREATE INDEX idx_tasks_goal "
+        "ON tasks(installation_id, tenant_id, scope_id, goal_id, status)"
+    )
+
+
 DEFAULT_MIGRATIONS = (
     Migration(
         version=1,
@@ -923,6 +963,12 @@ DEFAULT_MIGRATIONS = (
         name="add durable capability call identity",
         checksum=_checksum("v025-add-durable-capability-call-identity-20260816"),
         upgrade=_v025_add_capability_call_identity_indexes,
+    ),
+    Migration(
+        version=26,
+        name="add simple goals",
+        checksum=_checksum("v026-add-simple-goals-20260816"),
+        upgrade=_v026_add_goals,
     ),
 )
 

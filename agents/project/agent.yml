@@ -3,14 +3,14 @@ kind: ManagedAgent
 
 metadata:
   name: project
-  version: 2.0.4
+  version: 2.2.0
   description: 将限定范围内的团队上下文整理为可执行的项目计划和状态简报。
 
 spec:
   routing:
     default: false
     priority: 60
-    keywords: [项目助理, 项目计划, 任务拆解, 进度跟踪, 里程碑, 创建任务, 待办, 任务管理, project-plan, milestone, create-task, create task, todo]
+    keywords: [项目助理, 项目计划, 任务拆解, 进度跟踪, 里程碑, 创建任务, 待办, 任务管理, 目标, OKR, 飞书, 飞书任务, 飞书待办, 飞书文档, 我的飞书任务, project-plan, milestone, create-task, create task, todo]
     requires_url: false
     scopes: ["mattermost:*"]
 
@@ -44,18 +44,26 @@ spec:
       - list_tasks
       - update_task
       - get_task_overview
+      - create_goal
+      - list_goals
+      - update_goal
+      - get_goal_overview
+      - mcp_lark_fetch_document
+      - mcp_lark_list_my_tasks
+      - mcp_lark_create_task
+      - mcp_lark_set_task_reminder
     deny: []
 
   skills:
     allow:
-      - project@1.2.1
+      - project@1.4.0
     deny: []
 
   context:
     read_scopes: [conversation, project, organization]
     write_scopes: [task, project]
 
-  policy_ref: project@1.0.1
+  policy_ref: project@1.2.0
   model_policy_ref: reasoning-medium@1.0.0
 
   budget:

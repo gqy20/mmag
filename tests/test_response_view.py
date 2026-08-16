@@ -54,6 +54,18 @@ def test_report_presenter_exposes_readable_contract_not_raw_json():
     assert "#fragment" not in markdown
 
 
+def test_project_presenter_keeps_direct_tool_answer_when_plan_result_is_empty():
+    output = AgentOutput(
+        text="当前共有 0 个未完成的飞书任务。",
+        agent_name="project",
+        result={},
+    )
+
+    view = ResponsePresenter().present(output, run_id="run-1")
+
+    assert view.summary == "当前共有 0 个未完成的飞书任务。"
+
+
 def test_meeting_presenter_labels_owner_as_related_person_without_mentioning():
     output = AgentOutput(
         text="meeting",

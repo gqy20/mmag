@@ -86,6 +86,10 @@ def test_builtin_catalog_has_one_runtime_projection():
         "list_tasks",
         "update_task",
         "get_task_overview",
+        "create_goal",
+        "list_goals",
+        "update_goal",
+        "get_goal_overview",
     ]
 
 

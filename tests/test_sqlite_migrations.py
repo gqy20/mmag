@@ -93,6 +93,7 @@ def test_fresh_database_migrates_to_latest_schema():
         "team_knowledge",
         "url_cache",
         "task_drafts",
+        "goals",
     } <= tables
     inbox_columns = {
         row["name"] for row in conn.execute("PRAGMA table_info(inbox_events)").fetchall()
@@ -109,7 +110,12 @@ def test_fresh_database_migrates_to_latest_schema():
         row["name"] for row in conn.execute("PRAGMA index_list(tasks)").fetchall()
     }
     assert "execution_key" in task_columns
-    assert {"idx_tasks_execution_key", "idx_tasks_scope"} <= task_indexes
+    assert {"idx_tasks_execution_key", "idx_tasks_scope", "idx_tasks_goal"} <= task_indexes
+    assert "goal_id" in task_columns
+    goal_indexes = {
+        row["name"] for row in conn.execute("PRAGMA index_list(goals)").fetchall()
+    }
+    assert {"idx_goals_execution_key", "idx_goals_scope_status"} <= goal_indexes
     run_indexes = {
         row["name"] for row in conn.execute("PRAGMA index_list(lifecycle_entities)")
     }
@@ -167,6 +173,25 @@ def test_migrations_are_idempotent():
     apply_migrations(conn)
 
     assert [tuple(row) for row in _migration_rows(conn)] == first_run
+
+
+def test_goal_migration_preserves_legacy_okr_labeled_tasks_as_tasks():
+    conn = _memory_connection()
+    apply_migrations(conn, DEFAULT_MIGRATIONS[:25])
+    conn.execute(
+        """INSERT INTO tasks
+        (id, installation_id, tenant_id, title, description, type, status,
+         assignee_id, creator_id, channel_id, scope_id, source, external_id,
+         start_time, due_time, priority, created_at, updated_at, execution_key)
+        VALUES ('task-1', 'i', 't', 'legacy', '', 'okr', 'pending', '', '', '',
+                'scope', 'manual', '', 0, 0, 1, 0, 0, '')"""
+    )
+    conn.commit()
+
+    apply_migrations(conn)
+
+    row = conn.execute("SELECT type, goal_id FROM tasks WHERE id='task-1'").fetchone()
+    assert dict(row) == {"type": "task", "goal_id": ""}
 
 
 def test_failed_migration_rolls_back_schema_and_version_record():

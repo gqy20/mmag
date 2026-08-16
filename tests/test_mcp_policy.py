@@ -257,3 +257,23 @@ def test_only_allowlisted_discovered_tools_are_visible():
 
     assert registered == 1
     assert [tool.name for tool in registry.get_all()] == ["mcp_docs_search"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_connections_close_in_reverse_entry_order():
+    registry = CapabilityRegistry()
+    bridge = MCPClientBridge(
+        registry,
+        config=_mcp_config(),
+        executor=_executor(),
+    )
+    bridge._sessions = {
+        "first": SimpleNamespace(transport="first-transport", session="first-session"),
+        "second": SimpleNamespace(transport="second-transport", session="second-session"),
+    }
+    close_conn = AsyncMock()
+    bridge._close_conn = close_conn
+
+    await bridge.close_all()
+
+    assert [call.args[0] for call in close_conn.await_args_list] == ["second", "first"]

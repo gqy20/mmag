@@ -420,8 +420,7 @@ Agent / Skill
 - [x] 内置知识与消息 Capability 已经过统一 `CapabilityExecutor` 和当前 conversation 资源约束；
 - [x] 定义平台无关的 `KnowledgeQuery` / `KnowledgeResult` / `SourceRef` 契约，包含来源系统、资源 ID、
   版本、标题、片段、更新时间、可见 Scope 和内容 Hash；模型只消费有界结果，不接触 Provider Token；
-- [ ] 先接入一个真实企业知识源验证完整链路，可通过 MCP 或窄口 REST Capability 适配；候选包括
-  Confluence、SharePoint、Notion、Google Drive、企业 Wiki 或已有向量检索服务；
+- [x] 以受治理 `lark-cli` 窄口接入真实飞书文档读取，返回来源资源、版本和内容 Hash；
 - [ ] 每次外部查询携带可信 actor、tenant、conversation 和目标资源，优先使用用户委托身份或服务端
   ACL 过滤；禁止先跨库召回全部内容，再仅靠 Prompt 或结果后过滤实现权限；
 - [ ] 将外部知识 Tool 纳入 Agent/Skill allowlist、动态资源级 Policy、超时、配额、审批和结构化审计；
@@ -481,6 +480,8 @@ Mattermost 身份；增加 Bot 不改变数据隔离语义，停用、轮换、�
 - [x] 在 Control Plane 中持久化严格 `AgentRunSpec/AgentRunRecord`，按父 Run、父 Tool call、Agent/Skill 和 Package snapshot 生成唯一 `execution_key`；`RunCoordinator` 已接入幂等子 Run，结构化结果与终态原子提交，重放不重复执行已完成或失败的子 Agent；
 - [x] 单一专业请求由 Router 直达；`mmchat@2.3.0` 不再分配 `delegate_*`，旧能力虽保留注册但不会投影给任何生产 Agent；
 - [ ] 在现有 RunCoordinator 之上为真实多阶段任务实现显式 Workflow 编排；
+- [x] 在 Product Workflow 中实现最小 `Goal/SuccessCriterion`、Task `goal_id` 关联和
+  `draft → active → completed/cancelled` 生命周期；不接入飞书 OKR，不引入独立 Agent 或微服务；
 - [x] 使用稳定 `execution_key` 持久化父子 AgentRun 和不可变 Package/Skill/Policy snapshot；
 - [x] 父 Run 在子执行期间进入 `waiting_child`；子审批只恢复原子 `thread_id`，结构化子终态提交后再恢复父 Run 与父 LangGraph checkpoint；
 - [ ] 定义统一事件 Envelope、状态词汇、事件目录和 attributes Schema；

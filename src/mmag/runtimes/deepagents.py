@@ -83,6 +83,14 @@ _PROFILE_REGISTERED = False
 log = get_logger(__name__)
 
 
+class _SequentialToolChatAnthropic(ChatAnthropic):
+    """Keep dependent capability writes and reads in deterministic model turns."""
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("parallel_tool_calls", False)
+        return super().bind_tools(tools, **kwargs)
+
+
 def _register_mmag_profile() -> None:
     global _PROFILE_REGISTERED  # noqa: PLW0603
     if _PROFILE_REGISTERED:
@@ -135,7 +143,7 @@ class ManagedChatModelFactory:
         key = (model_name, max_tokens, temperature)
         model = self._models.get(key)
         if model is None:
-            model = ChatAnthropic(
+            model = _SequentialToolChatAnthropic(
                 model_name=model_name,
                 api_key=SecretStr(config.anthropic_api_key),
                 base_url=config.anthropic_base_url,

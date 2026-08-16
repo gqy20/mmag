@@ -94,7 +94,14 @@ class ResponsePresenter:
         if output.agent_name == "ppt":
             return self._ppt(result, run_id, status, artifacts, warnings)
         if output.agent_name == "project":
-            return self._project(result, run_id, status, artifacts, warnings)
+            return self._project(
+                result,
+                run_id,
+                status,
+                artifacts,
+                warnings,
+                fallback_text=output.text,
+            )
         return self._generic(output, result, run_id, status, artifacts, warnings)
 
     @staticmethod
@@ -317,9 +324,12 @@ class ResponsePresenter:
         status: RunStatus,
         artifacts: tuple[ResponseArtifact, ...],
         warnings: tuple[str, ...],
+        *,
+        fallback_text: str = "",
     ) -> ResponseView:
         sections: list[ResponseSection] = []
         for key, title in (
+            ("goals", "目标"),
             ("milestones", "里程碑"),
             ("tasks", "任务"),
             ("risks", "风险"),
@@ -334,7 +344,7 @@ class ResponsePresenter:
         return ResponseView(
             kind=ResponseKind.RESULT,
             title=self._text(result.get("name")) or "项目计划",
-            summary=self._text(result.get("summary")) or "计划已生成。",
+            summary=self._text(result.get("summary")) or self._text(fallback_text) or "计划已生成。",
             status=status,
             run_id=run_id,
             sections=tuple(sections),

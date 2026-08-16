@@ -1,6 +1,6 @@
 # 数字员工与 Skill 清单
 
-> 更新时间：2026-08-02
+> 更新时间：2026-08-16
 
 当前实现对应“企业 AI Native 协同架构”示意图中的协同中枢和四类数字员工。所有数字员工通过
 `agents/*/agent.yml` 自动注册，LangGraph 是默认模型执行框架；Skill 通过 Agent 白名单选择，
@@ -14,7 +14,7 @@ Capability 调用再由当前 Package Policy 动态裁决。
 | `link@2.0.1` | — | 单 URL 解析 | 确定性 `analyze_link`，无模型循环 | `link_analysis` |
 | `report@2.3.0` | `report@1.3.1`、`meeting@1.1.0` | 研报、行业/竞品研究、会议总结 | 当前频道知识/消息、公开链接与完整 crawl 工具集 | 证据账本式研究报告或会议纪要 |
 | `ppt@3.1.2` | `slides@3.1.1` | PPT、幻灯片、路演结构与文件生成 | 当前频道知识、受控 Markdown/主题、可编辑 PPTX/PNG 预览、受治理 Workspace、审批后 Artifact 交付 | Presentation Bundle 与 Artifact refs |
-| `project@2.0.4` | `project@1.2.1` | 项目计划、状态、任务拆解和本地任务跟踪 | 当前频道消息/知识、当前可信 Scope 内的任务 CRUD、审批后写入共享知识 | project brief |
+| `project@2.2.0` | `project@1.4.0` | 简化 Goal、项目计划、本地与飞书任务入口 | 可信 Scope 内的 Goal/Task CRUD 与关联进展、飞书文档/任务读取、审批后创建飞书任务或提醒 | project brief |
 
 `link` 直接执行确定性 Capability，因为单 URL 提取不需要模型和 Skill；输入、输出与版本
 provenance 由 Agent Package 契约负责。

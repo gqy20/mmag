@@ -17,7 +17,8 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
 - `MEMORY_DB_PATH` 保存业务/control-plane 状态，`CHECKPOINT_DB_PATH` 只保存 LangGraph checkpoint；
 - schema v24 在 `lifecycle_entities` 上为 AgentRun 的 `execution_key` 建立唯一索引，并为
   `parent_run_id/workflow_id` 建立查询索引；schema v25 对 CapabilityCall 建立唯一 execution key 与
-  run/workflow 查询索引；迁移失败时必须保持服务未就绪，不能绕过唯一性门禁启动；
+  run/workflow 查询索引；schema v26 增加 Scope 隔离的 Goal、验收条件和 Task `goal_id`，
+  并将旧 `okr` 任务标签保留为普通 Task；迁移失败时必须保持服务未就绪；
 - delegation 通过持久化 AgentRun 执行：子执行期间父 Run 为 `waiting_child`；`running` 重放失败关闭，
   `succeeded/exhausted` 重放读取已提交的结构化结果，`failed/cancelled` 不自动重试；子审批只恢复原子
   `thread_id`，子终态提交后才恢复父 LangGraph checkpoint；
@@ -36,8 +37,13 @@ Mattermost ── WebSocket/REST ── mmag instance ── Model Gateway ─�
   `link`、`report`、`ppt` 和 `project` 均使用各自版本化 Policy，默认效果为 `deny`。
   `resource_arguments` 将 Capability 参数映射到可信请求资源；缺参数、缺可信资源或值不一致都会拒绝。
 - 当前频道资源来自已认证 Mattermost 事件，而不是 Prompt。`get_posts`、消息/知识检索和知识写入不能跨到模型自行提供的其他频道；画像默认只允许读取当前 actor。
-- 文件外发和所有外部 MCP 调用默认进入 LangGraph 审批。审批恢复会还原原始 CapabilityContext，副作用前的用户意图与频道目标不会被审批消息覆盖。
+- 文件外发和外部 MCP 写操作默认进入 LangGraph 审批；外部读取只能由 Package Policy
+  按精确 Capability 显式放行。审批恢复会还原原始 CapabilityContext，副作用前的用户意图与频道目标
+  不会被审批消息覆盖。
 - MCP stdio 子进程仅继承 `PATH`、语言、临时目录、Home 和 Windows 启动必需变量；其他值必须在 `.mcp.json` 的 Server `env` 中显式声明。环境隔离不是进程沙箱，高风险 Server 仍应放入容器并限制文件系统与网络。
+- `lark` MCP 由项目内的窄口 Provider 调用已安装的 `lark-cli`，不接收 Token 参数；运维需先完成
+  `lark-cli auth login --as user`，并定期检查授权过期时间。当前只注册文档与任务四个精确
+  Capability，不接入或要求飞书 OKR 产品权限。
 - URL 分析禁用自动重定向与环境代理；初始 URL 和最多五个重定向目标均重新做协议、DNS 和公网 IP 校验。出站防火墙仍是最终网络边界。
 - 受控 Python/CLI 要求 Linux、Bubblewrap namespace 权限和锁定的 `EXECUTION_RUNTIME_ROOT`；PDF 还要求 LibreOffice。启动时会协调 Run 工作区和 Artifact 中断提交，依赖或隔离不可用时能力失败关闭。完整门禁见 [受控执行平面](EXECUTION.md)。
 
@@ -123,6 +129,8 @@ AgentRun、CapabilityCall、Approval、Delivery 与通用 Lifecycle 的创建/�
 告警和目标平台保留策略仍未部署验收。
 
 Deep Agents 通过 LangChain 原生 `AsyncCallbackHandler` 记录 `runtime.model.*` 和 `runtime.tool.*`，并通过 LangGraph 原生 `GraphCallbackHandler` 记录 `runtime.graph.interrupted|resumed`。Graph 事件只投影 checkpoint ID、namespace Hash/深度、状态和 interrupt 数量；不记录 interrupt payload、checkpoint state 或节点名称。模型/工具事件只投影 `langgraph_node`、`langgraph_step`、Provider、模型名、token、耗时、工具名及输入 Hash；正文不会进入日志或 AuditEvent。业务 `CapabilityExecutor` 使用独立的 `capability.*` 事件，避免把框架 Tool transport 成功误认为业务 Capability 成功。RunnableConfig 同时携带低基数 tags、动态 run name 和由可信 Context 覆盖的受控 metadata，可供后续 LangSmith/OpenTelemetry exporter 复用；生产环境不得启用会输出完整状态的 `debug/tasks/checkpoints` stream。
+
+托管模型关闭同一模型轮次内的并行工具调用。这样会牺牲少量互不相关读取的并发，但能让“先写入、再读取聚合结果”由 LangGraph 分成确定性工具轮次，避免任务更新与目标进度查询竞态。
 
 Agent 编排依次记录 `agent.route.selected`、`skill.route.selected|skipped` 和 `agent.tools.projected`，其中工具名来自受信 Catalog，不记录 Prompt。Policy 记录规则、permission、decision 和 `interrupt_check|tool_execute` 阶段。Outbox/Delivery 记录 enqueue、attempt、retry、终态、message kind 和幂等键 Hash，不记录消息正文、文件名或远端异常正文。
 

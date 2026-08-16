@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 import pytest
+from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -37,6 +38,7 @@ from mmag.governance import (
 from mmag.logger import log_context
 from mmag.runtimes import (
     DeepAgentRuntime,
+    ManagedChatModelFactory,
     RunContext,
     RunEventKind,
     RunRequest,
@@ -78,6 +80,23 @@ class ModelFactory:
     def create(self, **kwargs):
         del kwargs
         return self.model
+
+
+def test_managed_model_disables_same_turn_parallel_tools(monkeypatch):
+    captured = {}
+
+    def bind_tools(self, tools, **kwargs):
+        del self, tools
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(ChatAnthropic, "bind_tools", bind_tools)
+    factory = ManagedChatModelFactory({"low-reasoning": "test-model"})
+    model = factory.create(model_class="low-reasoning", max_tokens=100, temperature=0)
+
+    model.bind_tools([])
+
+    assert captured["parallel_tool_calls"] is False
 
 
 def _runtime(

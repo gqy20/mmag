@@ -3,7 +3,7 @@ kind: Skill
 
 metadata:
   name: project
-  version: 1.2.1
+  version: 1.4.0
   description: 将限定范围内的团队证据整理为项目计划或状态简报。
 
 spec:
@@ -23,6 +23,14 @@ spec:
     - search_messages
     - search_knowledge
     - save_knowledge
+    - mcp_lark_fetch_document
+    - mcp_lark_list_my_tasks
+    - mcp_lark_create_task
+    - mcp_lark_set_task_reminder
+    - create_goal
+    - list_goals
+    - update_goal
+    - get_goal_overview
 
   resources:
     templates:

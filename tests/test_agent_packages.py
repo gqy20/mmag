@@ -288,7 +288,16 @@ def test_factory_constructs_every_manifest_without_provider_registry():
             ModelGateway({"default": StubRuntime()}),
             capabilities,
             model_policies,
-            additional_capabilities=("delegate_ppt", "delegate_report", "delegate_project", "delegate_link"),
+            additional_capabilities=(
+                "delegate_ppt",
+                "delegate_report",
+                "delegate_project",
+                "delegate_link",
+                "mcp_lark_fetch_document",
+                "mcp_lark_list_my_tasks",
+                "mcp_lark_create_task",
+                "mcp_lark_set_task_reminder",
+            ),
         ),
         DirectAgentProvider(capabilities, executor),
     )
@@ -305,7 +314,14 @@ def test_factory_constructs_every_manifest_without_provider_registry():
         "update_task",
         "get_task_overview",
     }
+    goal_capabilities = {
+        "create_goal",
+        "list_goals",
+        "update_goal",
+        "get_goal_overview",
+    }
     assert task_capabilities <= set(registry.get("project").descriptor.capabilities)
+    assert goal_capabilities <= set(registry.get("project").descriptor.capabilities)
     assert task_capabilities.isdisjoint(registry.get("mmchat").descriptor.capabilities)
     assert not any(
         name.startswith("delegate_")
@@ -319,3 +335,30 @@ def test_factory_constructs_every_manifest_without_provider_registry():
         )
     )
     assert selection.agent.descriptor.name == "project"
+
+    lark_selection = AgentRouter(registry).route(
+        AgentRequest(
+            "chat",
+            "请列出我的飞书任务",
+            scope="mattermost:team/channel",
+        )
+    )
+    assert lark_selection.agent.descriptor.name == "project"
+
+    lark_write_selection = AgentRouter(registry).route(
+        AgentRequest(
+            "mention",
+            "请创建一个飞书测试任务",
+            scope="mattermost:team/channel",
+        )
+    )
+    assert lark_write_selection.agent.descriptor.name == "project"
+
+    goal_selection = AgentRouter(registry).route(
+        AgentRequest(
+            "mention",
+            "创建一个本季度产品目标",
+            scope="mattermost:team/channel",
+        )
+    )
+    assert goal_selection.agent.descriptor.name == "project"

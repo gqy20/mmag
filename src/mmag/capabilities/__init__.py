@@ -29,6 +29,7 @@ from .context import (
 )
 from .delegate import create_delegate_capabilities
 from .file import create_send_file_capability
+from .goals import create_goal_capabilities
 from .knowledge import KnowledgeQuery, KnowledgeResult, SourceRef
 from .link import create_analyze_link_capability
 from .mcp import create_mcp_capability
@@ -62,6 +63,7 @@ __all__ = [
     "create_get_channel_info_capability",
     "create_get_posts_capability",
     "create_get_user_profile_capability",
+    "create_goal_capabilities",
     "create_mcp_capability",
     "create_ppt_capabilities",
     "create_search_knowledge_capability",

@@ -144,6 +144,8 @@ class AgentRunStore:
         *,
         snapshot: dict[str, Any],
         actor_id: str,
+        scope_id: str = "",
+        conversation_id: str = "",
         trace_id: str,
         intent: str,
         capabilities: tuple[str, ...],
@@ -152,6 +154,22 @@ class AgentRunStore:
         with self._lock:
             try:
                 self._connection.execute("BEGIN IMMEDIATE")
+                row = self._find_row(run_id=entity_id)
+                if row is None:
+                    raise KeyError(f"agent_run:{entity_id}")
+                current_scope = str(row["scope_id"] or "")
+                if (
+                    scope_id
+                    and current_scope
+                    and current_scope != scope_id
+                    and current_scope != conversation_id
+                ):
+                    raise PermissionError("agent run scope is immutable")
+                if scope_id and current_scope != scope_id:
+                    self._connection.execute(
+                        "UPDATE lifecycle_entities SET scope_id=? WHERE entity_type='agent_run' AND entity_id=?",
+                        (scope_id, entity_id),
+                    )
                 payload = self._payload(entity_id)
                 required = payload.get("required_snapshot")
                 existing = payload.get("snapshot")
