@@ -56,6 +56,7 @@ class AgentRequestHandler:
         personal_ui: PersonalWorkspaceUI | None,
         action_tokens,
         task_drafts=None,
+        goal_ui=None,
     ) -> None:
         self.capability_registry = capability_registry
         self.agent_router = agent_router
@@ -68,6 +69,7 @@ class AgentRequestHandler:
         self.personal_ui = personal_ui
         self.action_tokens = action_tokens
         self.task_drafts = task_drafts
+        self.goal_ui = goal_ui
         self.presenter = ResponsePresenter()
 
     async def decide_and_respond(self, post: dict) -> str:
@@ -192,6 +194,8 @@ class AgentRequestHandler:
                 )
             if self.task_drafts is not None and runtime_result.status is RuntimeStatus.COMPLETED:
                 response = await self.task_drafts.attach(post, output, response)
+            if self.goal_ui is not None and runtime_result.status is RuntimeStatus.COMPLETED:
+                response = self.goal_ui.attach(post, output, response)
         except (AgentPackageError, AgentRuntimeError, SkillPackageError) as error:
             log_event(
                 log,

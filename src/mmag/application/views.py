@@ -74,6 +74,7 @@ class ResponseView:
     warnings: tuple[str, ...] = ()
     artifacts: tuple[ResponseArtifact, ...] = ()
     actions: tuple[ResponseAction, ...] = ()
+    status_icon: str = ""
 
 
 class ResponsePresenter:

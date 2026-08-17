@@ -99,12 +99,12 @@ class MattermostStream:
 
     def _message(self) -> str:
         content = MattermostRenderer.clean(self._buffer, self.max_chars)
-        return f"### ✨ 正在生成\n\n{content}\n\n_Run：`{self.run_id}`_"
+        return f"### ✨ 正在生成\n\n{content}"
 
-    @staticmethod
-    def _props() -> dict[str, str]:
+    def _props(self) -> dict[str, str]:
         return {
             PROP_FROM_BOT: PROP_TRUE,
             "mmag_kind": "stream",
             "mmag_status": "running",
+            "mmag_run_id": self.run_id,
         }

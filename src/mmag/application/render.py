@@ -47,12 +47,17 @@ class MattermostRenderer:
         if view.run_id:
             props["mmag_run_id"] = self.clean(view.run_id, 256)
         if actions:
-            props["attachments"] = [
-                {
-                    "text": "请选择操作；如果按钮不可用，可使用上方文本命令。",
-                    "actions": list(actions),
-                }
-            ]
+            attachment: dict[str, Any] = {"actions": list(actions)}
+            fallbacks = tuple(
+                dict.fromkeys(
+                    self.clean(item.fallback)
+                    for item in view.actions
+                    if item.fallback
+                )
+            )
+            if fallbacks:
+                attachment["text"] = "按钮不可用时：" + " 或 ".join(fallbacks)
+            props["attachments"] = [attachment]
         return RenderedResponse(
             chunks=split_markdown(markdown, self.max_chars),
             props=props,
@@ -61,7 +66,7 @@ class MattermostRenderer:
         )
 
     def _markdown(self, view: ResponseView) -> str:
-        status_icon = {
+        status_icon = self.clean(view.status_icon, 16) or {
             RunStatus.RUNNING: "⏳",
             RunStatus.WAITING_APPROVAL: "⏸️",
             RunStatus.SUCCEEDED: "✅",
@@ -72,9 +77,13 @@ class MattermostRenderer:
         for section in view.sections:
             if not section.body and not section.items:
                 continue
-            lines.extend(("", f"#### {self.clean(section.title)}"))
+            lines.append("")
+            if section.title:
+                lines.append(f"#### {self.clean(section.title)}")
             if section.body:
-                lines.extend(("", self.clean(section.body)))
+                if section.title:
+                    lines.append("")
+                lines.append(self.clean(section.body))
             for item in section.items:
                 lines.append(f"- {self.clean(item)}")
         if view.sources:
@@ -95,12 +104,10 @@ class MattermostRenderer:
         if view.warnings:
             lines.extend(("", "#### 注意"))
             lines.extend(f"- ⚠️ {self.clean(item)}" for item in view.warnings)
-        if view.actions:
+        if view.actions and not self.action_callback_url:
             fallbacks = [self.clean(item.fallback) for item in view.actions if item.fallback]
             if fallbacks:
                 lines.extend(("", "#### 可用操作", *dict.fromkeys(fallbacks)))
-        if view.run_id:
-            lines.extend(("", f"Run：`{self.clean(view.run_id, 256)}`"))
         return "\n".join(lines).strip()
 
     def _actions(self, actions: tuple[ResponseAction, ...]) -> tuple[dict[str, Any], ...]:

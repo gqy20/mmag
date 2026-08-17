@@ -23,6 +23,7 @@ from ..runtimes import (
 from .action_responses import load_action_post, preserve_action_post
 from .agent_requests import AgentRequestHandler
 from .delivery import OUTBOUND_COLLECTOR, MattermostDelivery
+from .goal_ui import GoalWorkspaceUI
 from .persona_replies import PersonaReplyCoordinator
 from .persona_ui import PersonaWorkspaceUI
 from .personal_ui import PersonalWorkspaceUI
@@ -66,6 +67,8 @@ class MessageHandler:
         persona_replies=None,
         task_drafts=None,
         access_guard=None,
+        goal_policy_ref: str = "",
+        goal_allowed_capabilities: tuple[str, ...] = (),
     ) -> None:
         self.mm = mm_client
         self.memory = memory
@@ -126,6 +129,20 @@ class MessageHandler:
             if task_drafts is not None and access_guard is not None
             else None
         )
+        self.goal_ui = (
+            GoalWorkspaceUI(
+                mm_client=mm_client,
+                capability_registry=capability_registry,
+                access_guard=access_guard,
+                scope_resolver=self.scope_resolver,
+                action_tokens=action_tokens,
+                audit_store=audit_store,
+                policy_ref=goal_policy_ref,
+                allowed_capabilities=goal_allowed_capabilities,
+            )
+            if access_guard is not None and goal_policy_ref
+            else None
+        )
         self.agent_requests = AgentRequestHandler(
             capability_registry=capability_registry,
             agent_router=agent_router,
@@ -138,6 +155,7 @@ class MessageHandler:
             personal_ui=self.personal_ui,
             action_tokens=action_tokens,
             task_drafts=self.task_drafts,
+            goal_ui=self.goal_ui,
         )
         self.persona_replies = (
             PersonaReplyCoordinator(
@@ -535,6 +553,35 @@ class MessageHandler:
         scope_id = self.post_scope({"channel_id": channel_id, "user_id": actor_id})
         if scope_id != claims.scope_id:
             raise PermissionError("action belongs to another scope")
+        if claims.action.startswith("goal_"):
+            if self.goal_ui is None:
+                raise RuntimeError("Goal workspace is not configured")
+            await load_action_post(
+                self.mm,
+                payload,
+                channel_id=channel_id,
+                bot_user_id=self.identity.user_id,
+            )
+            claims = self.action_tokens.consume(str(token), actor_id=actor_id)
+            scope = self.scope_resolver.resolve_post(
+                {"channel_id": channel_id, "user_id": actor_id}
+            )
+            view = await self.goal_ui.handle_action(claims, actor_id=actor_id, scope=scope)
+            rendered = self.delivery.renderer.render(view)
+            log_event(
+                log,
+                "mattermost.action_completed",
+                status="completed",
+                action=claims.action,
+                action_jti=claims.jti,
+            )
+            return {
+                "update": {
+                    "message": rendered.chunks[0],
+                    "props": rendered.props,
+                },
+                "skip_slack_parsing": True,
+            }
         if claims.action.startswith("persona_reply_"):
             if self.persona_replies is None:
                 raise RuntimeError("persona reply approval is not configured")

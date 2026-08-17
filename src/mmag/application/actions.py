@@ -57,6 +57,11 @@ _ALLOWED_ACTIONS = frozenset(
         "persona_policy_submit",
         "task_draft_commit",
         "task_draft_reject",
+        "goal_view",
+        "goal_complete",
+        "goal_complete_confirm",
+        "goal_cancel",
+        "goal_cancel_confirm",
     }
 )
 _MAX_TOKEN_BYTES = 8_192

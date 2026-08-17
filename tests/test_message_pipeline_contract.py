@@ -266,7 +266,8 @@ async def test_runtime_failure_delivers_user_visible_error():
     sent = handler.mm.send_post_async.await_args.kwargs
     assert sent["root_id"] == "post-1"
     assert "外部服务不可用" in sent["message"]
-    assert "mattermost:post-1" in sent["message"]
+    assert "mattermost:post-1" not in sent["message"]
+    assert sent["props"]["mmag_run_id"] == "mattermost:post-1"
 
 
 @pytest.mark.asyncio

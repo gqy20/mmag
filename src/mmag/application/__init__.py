@@ -10,6 +10,7 @@ from .context import (
     is_text_attachment,
 )
 from .delivery import MattermostDelivery
+from .goal_ui import GoalWorkspaceUI
 from .message_handler import MessageHandler
 from .probe import MattermostCapabilities, MattermostCapabilityProbe
 from .render import MattermostRenderer, RenderedResponse, split_markdown
@@ -36,6 +37,7 @@ __all__ = [
     "BotIdentity",
     "ContextBuilder",
     "MattermostDelivery",
+    "GoalWorkspaceUI",
     "MattermostCapabilities",
     "MattermostCapabilityProbe",
     "MessageHandler",

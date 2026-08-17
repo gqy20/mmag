@@ -28,4 +28,6 @@ async def test_mattermost_stream_creates_then_updates_one_post_per_round():
     final_message = mm.update_post_async.await_args_list[-1].args[1]
     assert "Final" in final_message
     assert "Hello" not in final_message
+    assert "run-1" not in final_message
+    assert mm.update_post_async.await_args_list[-1].kwargs["props"]["mmag_run_id"] == "run-1"
     assert stream.post_id == "stream-1"

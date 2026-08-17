@@ -175,6 +175,33 @@ def test_renderer_maps_internal_action_names_to_mattermost_route_ids():
     assert actions[0]["integration"]["context"] == {"token": "one"}
 
 
+def test_renderer_only_shows_real_text_fallback_beside_native_actions():
+    renderer = MattermostRenderer(action_callback_url="https://mmag.example.com/actions")
+    view = ResponseView(
+        kind=ResponseKind.APPROVAL,
+        title="审批",
+        summary="需要确认",
+        status=RunStatus.WAITING_APPROVAL,
+        actions=(
+            ResponseAction(
+                "approve",
+                "批准",
+                "approve",
+                "approval-1",
+                fallback="`批准 approval-1`",
+                token="one",
+            ),
+        ),
+    )
+
+    rendered = renderer.render(view)
+
+    assert "可用操作" not in rendered.chunks[0]
+    assert rendered.props["attachments"][0]["text"] == (
+        "按钮不可用时：`批准 approval-1`"
+    )
+
+
 def test_action_token_is_signed_short_lived_and_one_time(tmp_path):
     store = SQLiteControlPlane(str(tmp_path / "control.db"))
     service = ActionTokenService("s" * 32, store, ttl_seconds=60, owner_id="bot:i:t:u1")

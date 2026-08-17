@@ -81,6 +81,7 @@ replay 不会把原记录从 `failed` 改回 `accepted`：它克隆出一个新�
 - 可选交互按钮要求同时配置 `MM_ACTION_CALLBACK_URL` 与至少 32 bytes 的 `MM_ACTION_SIGNING_SECRET`。公网 callback 只接受 HTTPS；进程默认监听 `127.0.0.1:8787`，由受信反向代理转发 callback path。
 - `/mmag` 命令复用同一 callback gateway 的 `/integrations/commands`。`agents/skills/status` 在回调内只读 Registry 或当前 actor/channel 的 Lifecycle；`summary` 经持久 Inbox/Pipeline 异步执行并由 Outbox 交付。每次请求重新校验 Mattermost 成员关系，Thread 总结还会校验 root Post 的频道归属。将 Mattermost 生成的 Slash Token 作为 `MM_SLASH_COMMAND_TOKEN` 注入；Token 轮换后必须同步更新 Secret 并重启实例。
 - Action token 使用 HMAC、最长 10 分钟有效期和 SQLite 原子一次性消费；Callback 在消费前后都重新校验 actor、频道、Scope、审批状态和 Mattermost 管理角色。按钮不可用时继续支持 `批准 <id>` / `拒绝 <id>`。
+- Goal 完成/取消不依赖客户端私有确认字段：第一次 Action 仅返回原生确认卡，第二次签名 Action 才执行 WRITE；Goal 与普通响应的 Run ID 只保留在 `props.mmag_run_id` 和日志关联字段中，默认正文不展示。
 
 启动时会执行 Mattermost 能力探测并记录 `mattermost.capabilities` 审计，包括 Server 版本、Edition、文件、插件和交互开关。认证级探测在非本机明文 HTTP 上直接跳过，不发送 Bot Token。
 

@@ -213,6 +213,12 @@ Goal 只使用 `draft → active → completed/cancelled` 生命周期。第一�
 复杂周期和级联拆解。文档没有明确目标时直接生成候选 Task，不强制创建 Goal；模型只能提出候选目标和
 验收条件，用户确认后才进入正式状态。
 
+Mattermost 当前将 Goal 能力结果呈现为紧凑目标卡，默认以单行元数据展示业务标题、状态、负责人、截止时间、
+成功标准和关联任务进度，不在正文暴露 Goal ID 或 Run ID。进行中目标提供“查看进度 / 标记完成 / 取消目标”按钮；
+完成和取消采用两步原生确认卡，第二次点击才通过签名一次性 Action token、Project Policy 和统一
+CapabilityExecutor 执行状态变更。Action 区只展示真实可用的按钮或文本降级命令，卡片更新本身作为成功反馈，
+不再重复发送 Ephemeral 状态文案。
+
 ### 9.3 Capability Catalog 与执行 Provider
 
 模型可见的是严格、稳定的业务 Capability，而不是任意 CLI：

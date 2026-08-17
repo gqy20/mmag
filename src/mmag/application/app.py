@@ -321,6 +321,7 @@ class Agent:
             memory_items=self.control_store.memory_items,
             personas=self.control_store.personas,
         )
+        project_package = self.agent_package_registry.get("project")
         self.message_handler = MessageHandler(
             mm_client=self.mm,
             memory=self.memory,
@@ -347,6 +348,8 @@ class Agent:
             persona_replies=self.control_store.persona_replies,
             task_drafts=self.control_store.task_drafts,
             access_guard=self.access_guard,
+            goal_policy_ref=project_package.manifest.policy_ref,
+            goal_allowed_capabilities=project_package.manifest.capabilities.allow,
         )
         self.capability_probe = MattermostCapabilityProbe(self.mm)
         callback_path = (
